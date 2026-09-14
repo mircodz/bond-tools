@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       VERSION_FILE: version
-      OUT_DIR: artifacts/nupkg
+      OUT_DIR: out/package/release
       OWNER: ${{ github.repository_owner }}
     steps:
       - name: Checkout
@@ -50,7 +50,7 @@ jobs:
         run: dotnet restore
 
       - name: Pack
-        run: dotnet pack Bond.sln -c Release -o $OUT_DIR /p:Version=${{ steps.version.outputs.VERSION }}
+        run: dotnet pack Bond.sln -c Release /p:Version=${{ steps.version.outputs.VERSION }}
 
       - name: NuGet login
         id: nuget_login

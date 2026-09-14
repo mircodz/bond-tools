@@ -1,5 +1,9 @@
 <Project>
   <PropertyGroup>
+    <ArtifactsPath>$(MSBuildThisFileDirectory)out</ArtifactsPath>
+    <VSTestResultsDirectory Condition="'$(VSTestResultsDirectory)' == ''">$(ArtifactsPath)/test-results/$(MSBuildProjectName)</VSTestResultsDirectory>
+    <CoverletOutput Condition="'$(CoverletOutput)' == ''">$(ArtifactsPath)/test-results/$(MSBuildProjectName)/</CoverletOutput>
+
     <!-- Read version from version -->
     <VersionFile>$(MSBuildThisFileDirectory)version</VersionFile>
     <Version>$([System.IO.File]::ReadAllText('$(VersionFile)').Trim())</Version>
@@ -15,6 +19,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.SourceLink.GitHub" Version="8.0.0" PrivateAssets="All"/>
+    <PackageReference Include="Microsoft.SourceLink.GitHub" PrivateAssets="All"/>
   </ItemGroup>
 </Project>

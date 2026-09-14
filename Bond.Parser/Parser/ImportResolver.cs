@@ -20,7 +20,8 @@ public static class DefaultImportResolver
         string importPath)
     {
         var currentDir = Path.GetDirectoryName(currentFile) ?? Directory.GetCurrentDirectory();
-        var absolutePath = Path.GetFullPath(Path.Combine(currentDir, importPath));
+        var relativePath = importPath.Replace('\\', Path.DirectorySeparatorChar).Replace('/', Path.DirectorySeparatorChar);
+        var absolutePath = Path.GetFullPath(Path.Combine(currentDir, relativePath));
 
         if (!File.Exists(absolutePath))
         {

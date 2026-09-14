@@ -18,6 +18,11 @@ public static class Program
 
     static async Task<int> Main(string[] args)
     {
+        if (args.Length > 0 && args[0].Equals("generate", StringComparison.OrdinalIgnoreCase))
+        {
+            return await GenerateCommand.RunAsync(args[1..], Console.Out, Console.Error);
+        }
+
         if (args.Length == 0 || args.Contains("--help") || args.Contains("-h"))
         {
             ShowHelp();
@@ -506,11 +511,13 @@ public static class Program
         Console.WriteLine("  bond parse <file.bond> [options]");
         Console.WriteLine("  bond breaking <file.bond> --against <reference> [options]");
         Console.WriteLine("  bond format <file.bond> [options]   (alias: bond fmt)");
+        Console.WriteLine("  bond generate csharp <file.bond>... -o <output-dir> [options]");
         Console.WriteLine();
         Console.WriteLine("Commands:");
         Console.WriteLine("  parse       Parse and validate a Bond schema file");
         Console.WriteLine("  breaking    Check for breaking changes against a reference schema");
         Console.WriteLine("  format      Format a Bond schema file (alias: fmt)");
+        Console.WriteLine("  generate    Generate C# models (run bond generate csharp --help)");
         Console.WriteLine();
         Console.WriteLine("Parse Options:");
         Console.WriteLine("  -v, --verbose              Show detailed AST output");
@@ -530,6 +537,7 @@ public static class Program
         Console.WriteLine("  bond breaking schema.bond --against schema_v1.bond");
         Console.WriteLine("  bond breaking schema.bond --against .git#branch=main --error-format=json");
         Console.WriteLine("  bond format schema.bond");
+        Console.WriteLine("  bond generate csharp schemas/order.bond -o out/generated");
         Console.WriteLine();
         Console.WriteLine("Global Options:");
         Console.WriteLine("  -h, --help                 Show this help message");

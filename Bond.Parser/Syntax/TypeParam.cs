@@ -3,7 +3,7 @@ namespace Bond.Parser.Syntax;
 public enum TypeConstraint
 {
     None,
-    Value  // primitives only
+    Value
 }
 
 public record TypeParam(

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 
 namespace Bond.Parser.Syntax;
@@ -231,20 +232,61 @@ public abstract record BondType
 
 public static class BondTypeExtensions
 {
+    /// <summary>Expands outer aliases, substituting arguments into each alias template.</summary>
+    public static BondType ResolveAliases(this BondType type)
+    {
+        if (type is not BondType.TypeReference { Declaration: AliasDeclaration })
+            return type;
+        var visited = new HashSet<BondType.TypeReference>();
+        while (type is BondType.TypeReference { Declaration: AliasDeclaration alias } reference)
+        {
+            if (!visited.Add(reference))
+                throw new InvalidOperationException($"Cyclic type alias '{alias.Name}'.");
+            type = alias.AliasedType.SubstituteTypeParameters(alias.TypeParameters, reference.TypeArguments);
+        }
+        return type;
+    }
+
+    /// <summary>Substitutes parameters in a type expression without changing referenced declaration templates.</summary>
+    public static BondType SubstituteTypeParameters(this BondType type, TypeParam[] parameters, BondType[] arguments)
+    {
+        if (parameters.Length != arguments.Length)
+            throw new ArgumentException("The number of type arguments must match the number of type parameters.");
+
+        BondType Substitute(BondType value) => value switch
+        {
+            BondType.TypeParameter parameter => Array.FindIndex(parameters, p => p == parameter.Param) is var index && index >= 0
+                ? arguments[index] : value,
+            BondType.List list => new BondType.List(Substitute(list.ElementType)),
+            BondType.Vector vector => new BondType.Vector(Substitute(vector.ElementType)),
+            BondType.Set set => new BondType.Set(Substitute(set.KeyType)),
+            BondType.Map map => new BondType.Map(Substitute(map.KeyType), Substitute(map.ValueType)),
+            BondType.Nullable nullable => new BondType.Nullable(Substitute(nullable.ElementType)),
+            BondType.Maybe maybe => new BondType.Maybe(Substitute(maybe.ElementType)),
+            BondType.Bonded bonded => new BondType.Bonded(Substitute(bonded.StructType)),
+            BondType.TypeReference reference => reference with { TypeArguments = reference.TypeArguments.Select(Substitute).ToArray() },
+            BondType.UnresolvedType unresolved => unresolved with { TypeArguments = unresolved.TypeArguments.Select(Substitute).ToArray() },
+            _ => value
+        };
+        return Substitute(type);
+    }
+
     public static bool IsScalar(this BondType type) =>
-        type is BondType.Int8 or BondType.Int16 or BondType.Int32 or BondType.Int64
+        type.ResolveAliases() is BondType.Int8 or BondType.Int16 or BondType.Int32 or BondType.Int64
             or BondType.UInt8 or BondType.UInt16 or BondType.UInt32 or BondType.UInt64
-            or BondType.Float or BondType.Double or BondType.Bool;
+            or BondType.Float or BondType.Double or BondType.Bool
+            or BondType.TypeParameter { Param.Constraint: TypeConstraint.Value }
+            or BondType.TypeReference { Declaration: EnumDeclaration };
 
     public static bool IsString(this BondType type) =>
-        type is BondType.String or BondType.WString;
+        type.ResolveAliases() is BondType.String or BondType.WString;
 
     public static bool IsEnum(this BondType type) =>
-        type is BondType.TypeReference { Declaration: EnumDeclaration };
+        type.ResolveAliases() is BondType.TypeReference { Declaration: EnumDeclaration };
 
     public static bool IsStruct(this BondType type) =>
-        type is BondType.TypeReference { Declaration: StructDeclaration or ForwardDeclaration };
+        type.ResolveAliases() is BondType.TypeReference { Declaration: StructDeclaration or ForwardDeclaration };
 
     public static bool IsValidKeyType(this BondType type) =>
-        type.IsScalar() || type.IsString() || type.IsEnum() || type is BondType.TypeParameter;
+        type.IsScalar() || type.IsString() || type.ResolveAliases() is BondType.TypeParameter;
 }

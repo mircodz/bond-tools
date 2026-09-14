@@ -2,7 +2,8 @@
 
 # Variables
 VERSION := $(shell cat version)
-NUPKG_DIR := ./nupkgs
+OUT_DIR := ./out
+NUPKG_DIR := $(OUT_DIR)/package/release
 TOOL_NAME := bond
 PKG_ID := bond-tools
 
@@ -28,11 +29,11 @@ coverage: ## Run tests with coverage report
 
 clean: ## Clean build artifacts
 	dotnet clean Bond.sln || true
-	rm -rf $(NUPKG_DIR)
+	rm -rf $(OUT_DIR)
 	rm -rf */bin */obj
 
 pack: clean build-release ## Pack the CLI tool as a NuGet package
-	dotnet pack Bond.Parser.CLI/Bond.Parser.CLI.csproj -c Release -o $(NUPKG_DIR) /p:Version=$(VERSION)
+	dotnet pack Bond.Parser.CLI/Bond.Parser.CLI.csproj -c Release /p:Version=$(VERSION)
 	@echo ""
 	@echo "Package created: $(NUPKG_DIR)/$(PKG_ID).$(VERSION).nupkg"
 
@@ -56,21 +57,5 @@ reinstall: uninstall install ## Reinstall the tool (clean install)
 setup: ## Initial setup (restore packages)
 	./scripts/setup-hooks.sh
 	dotnet restore
-
-# Release
-bump-major: ## Bump major version (1.0.0 -> 2.0.0)
-	@echo "Current version: $(VERSION)"
-	@echo $(VERSION) | awk -F. '{print $$1+1".0.0"}' > version
-	@echo "New version: $$(cat version)"
-
-bump-minor: ## Bump minor version (1.0.0 -> 1.1.0)
-	@echo "Current version: $(VERSION)"
-	@echo $(VERSION) | awk -F. '{print $$1"."$$2+1".0"}' > version
-	@echo "New version: $$(cat version)"
-
-bump-patch: ## Bump patch version (1.0.0 -> 1.0.1)
-	@echo "Current version: $(VERSION)"
-	@echo $(VERSION) | awk -F. '{print $$1"."$$2"."$$3+1}' > version
-	@echo "New version: $$(cat version)"
 
 all: clean build test ## Clean, build, and test
