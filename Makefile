@@ -33,6 +33,7 @@ clean: ## Clean build artifacts
 	rm -rf */bin */obj
 
 pack: clean build-release ## Pack the CLI tool as a NuGet package
+	dotnet pack Bond.Models/Bond.Models.csproj -c Release /p:Version=$(VERSION)
 	dotnet pack Bond.Parser.CLI/Bond.Parser.CLI.csproj -c Release /p:Version=$(VERSION)
 	@echo ""
 	@echo "Package created: $(NUPKG_DIR)/$(PKG_ID).$(VERSION).nupkg"

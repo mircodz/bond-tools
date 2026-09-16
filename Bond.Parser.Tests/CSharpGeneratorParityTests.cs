@@ -32,7 +32,9 @@ public sealed class CSharpGeneratorParityTests
         var (generatedAssembly, referenceAssembly) = await CompileFixture(fixture);
         var referenceTypes = referenceAssembly.GetTypes().OrderBy(type => type.FullName).ToArray();
         Assert.Equal(referenceTypes.Select(type => type.FullName),
-            generatedAssembly.GetTypes().OrderBy(type => type.FullName).Select(type => type.FullName));
+            generatedAssembly.GetTypes()
+                .Where(type => type.IsEnum || type.GetCustomAttribute<global::Bond.SchemaAttribute>() != null)
+                .OrderBy(type => type.FullName).Select(type => type.FullName));
 
         foreach (var reference in referenceTypes)
         {

@@ -67,7 +67,9 @@ public static class GenerateCommand
                 var directories = new[] { Path.GetDirectoryName(currentFile)! }.Concat(importDirectories);
                 foreach (var directory in directories)
                 {
-                    var candidate = Path.GetFullPath(Path.Combine(directory, importPath));
+                    var normalizedImport = importPath.Replace('\\', Path.DirectorySeparatorChar)
+                        .Replace('/', Path.DirectorySeparatorChar);
+                    var candidate = Path.GetFullPath(Path.Combine(directory, normalizedImport));
                     string content;
                     try
                     {
@@ -97,7 +99,12 @@ public static class GenerateCommand
                     }
                     continue;
                 }
-                var result = CSharpGenerator.Generate(parsed.Ast!, input);
+                var result = CSharpGenerator.Generate(parsed.Ast!, input, new CSharpGenerationOptions
+                {
+                    NamespaceMappings = options.NamespaceMappings,
+                    TypeMappings = options.TypeMappings,
+                    GenerateModelFeatures = options.GenerateModelFeatures
+                });
                 if (!result.Success)
                 {
                     errors.AddRange(result.Errors);
@@ -217,6 +224,9 @@ public static class GenerateCommand
         public List<string> Inputs { get; } = [];
         public string? OutputDirectory { get; set; }
         public List<string> ImportDirectories { get; } = [];
+        public List<string> NamespaceMappings { get; } = [];
+        public List<string> TypeMappings { get; } = [];
+        public bool GenerateModelFeatures { get; set; } = true;
         public string ErrorFormat { get; set; } = "text";
         public bool Help { get; set; }
         public List<ParseError> Errors { get; } = [];
@@ -228,6 +238,7 @@ public static class GenerateCommand
         var positionalOnly = false;
         var seenOutput = false;
         var seenFormat = false;
+        var seenFeatures = false;
         void Error(string message) => options.Errors.Add(new ParseError(message, "bond", 0, 0));
 
         for (var i = 0; i < args.Length; i++)
@@ -247,7 +258,8 @@ public static class GenerateCommand
             {
                 var equals = argument.IndexOf('=');
                 var name = equals < 0 ? argument : argument[..equals];
-                if (name is not ("-o" or "--output-dir" or "-I" or "--import-dir" or "--error-format"))
+                if (name is not ("-o" or "--output-dir" or "-I" or "--import-dir" or "--error-format"
+                    or "-n" or "--namespace" or "-u" or "--using" or "--type-map" or "--model-features"))
                 {
                     Error($"Unknown option '{name}'.");
                     continue;
@@ -281,6 +293,18 @@ public static class GenerateCommand
                     case "-I" or "--import-dir":
                         options.ImportDirectories.Add(value);
                         break;
+                    case "-n" or "--namespace":
+                        options.NamespaceMappings.Add(value);
+                        break;
+                    case "-u" or "--using" or "--type-map":
+                        options.TypeMappings.Add(value);
+                        break;
+                    case "--model-features":
+                        if (seenFeatures) Error("Option '--model-features' may only be specified once.");
+                        seenFeatures = true;
+                        if (value is "all" or "none") options.GenerateModelFeatures = value == "all";
+                        else Error($"Unsupported model features '{value}'; expected 'all' or 'none'.");
+                        break;
                     case "--error-format":
                         if (seenFormat) Error("Option '--error-format' may only be specified once.");
                         seenFormat = true;
@@ -309,20 +333,24 @@ public static class GenerateCommand
     private const string GenerateHelp = """
         Usage: bond generate csharp <file.bond>... -o <output-dir> [options]
 
-        Generate model-only C# code requiring Bond.Runtime.CSharp. Only csharp is supported.
+        Generate model-only C# code requiring Bond.Runtime.CSharp and BondTools.Models.
+        Only csharp is supported.
         Run bond generate csharp --help for options and limitations.
         """;
 
     private const string CSharpHelp = """
         Usage: bond generate csharp <file.bond>... -o <output-dir> [options]
 
-        Generate model-only C# code requiring Bond.Runtime.CSharp.
+        Generate model-only C# code requiring Bond.Runtime.CSharp and BondTools.Models.
         One <input-basename>.g.cs is generated per explicit input; imports are resolved
         but are not generated unless explicitly selected.
 
         Options:
           -o, --output-dir <directory>  Required output directory
           -I, --import-dir <directory>  Import search directory (repeatable, searched in order)
+          -n, --namespace <from=to>     Map an exact C# namespace (repeatable)
+          --type-map <alias=CLR-type>  Map an IDL alias to a CLR type (repeatable; aliases: -u, --using)
+          --model-features <all|none>  Metadata, cloning, equality, and debugger support (default: all)
           --error-format <text|json>    Diagnostics on stderr (default: text)
           -h, --help                   Show this help
           --                           Treat remaining arguments as positional inputs
@@ -332,6 +360,11 @@ public static class GenerateCommand
         Generates structs and enums, including generics, inheritance, views, aliases,
         and bond_meta fields. Services produce no C# RPC types, matching gbc.
         No protocol selection or serializer code is generated.
+        --model-features=none preserves plain model output and does not require BondTools.Models.
+        Type mappings use qualified IDL alias names (or a local alias name) and qualified CLR
+        types. Generic templates use {0}, {1}, etc. Supply BondTypeAliasConverter.Convert
+        overloads in each consuming model namespace for conversions in both directions.
+        Custom mapped defaults are converted explicitly; mappings do not change wire types.
 
         Example:
           bond generate csharp schemas/order.bond -o out/generated

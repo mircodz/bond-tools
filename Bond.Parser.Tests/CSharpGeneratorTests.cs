@@ -299,7 +299,8 @@ public sealed class CSharpGeneratorTests
             .Concat([
                 typeof(global::Bond.SchemaAttribute).Assembly.Location,
                 typeof(global::Bond.Serializer<>).Assembly.Location,
-                typeof(SimpleJsonWriter).Assembly.Location
+                typeof(SimpleJsonWriter).Assembly.Location,
+                typeof(global::BondTools.Models.SchemaDescriptor).Assembly.Location
             ]).Distinct(StringComparer.Ordinal);
         var compilation = CSharpCompilation.Create(
             "GeneratedContracts_" + Guid.NewGuid().ToString("N"),
