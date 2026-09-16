@@ -11,6 +11,7 @@ public static partial class CSharpGenerator
     private sealed partial class Emitter
     {
         private const string MetadataNamespace = "global::BondTools.Models.";
+        // Alias identity is file-local, even when qualified names and target types match.
         private readonly Dictionary<Declaration, int> _metadataIndices = new(ReferenceEqualityComparer.Instance);
         private readonly List<Declaration> _metadataDeclarations = [];
 
@@ -96,6 +97,9 @@ public static partial class CSharpGenerator
         private string MetadataCatalogName()
         {
             var reserved = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var ns in ast.Namespaces)
+                foreach (var part in ns.Name.Concat(MapNamespace(ns.Name)))
+                    reserved.Add(part);
             foreach (var declaration in _metadataDeclarations)
             {
                 reserved.Add(declaration.Name);
@@ -113,11 +117,10 @@ public static partial class CSharpGenerator
         {
             Line(1, $"private static {MetadataNamespace}SchemaDescriptor Create{MetadataIndex(declaration)}() =>");
             Line(2, $"new {MetadataNamespace}SchemaDescriptor(");
-            Line(3, $"name: {Literal(declaration.Name)},");
-            Line(3, $"@namespace: {Literal(string.Join(".", IdlNamespace(declaration)))},");
+            Line(3, $"{Literal(declaration.Name)}, {Literal(string.Join(".", IdlNamespace(declaration)))},");
             var arguments = declaration.TypeParameters.Select(parameter => (BondType)new BondType.TypeParameter(parameter)).ToArray();
-            var clrName = MapType(new BondType.TypeReference(declaration, arguments), declaration.Location).Name;
-            Line(3, $"clrName: {Literal(clrName)},");
+            var clrName = MetadataClrName(new BondType.TypeReference(declaration, arguments), declaration.Location);
+            Line(3, $"clrName: {(clrName == null ? "null" : Literal(clrName))},");
             Line(3, $"kind: {MetadataNamespace}SchemaKind.{MetadataKind(declaration)},");
             Line(3, $"typeParameters: {MetadataArray("TypeParameterDescriptor", declaration.TypeParameters.Select(parameter =>
                 $"new {MetadataNamespace}TypeParameterDescriptor({Literal(parameter.Name)}, {MetadataNamespace}SchemaTypeConstraint.{parameter.Constraint})"))},");
@@ -133,10 +136,97 @@ public static partial class CSharpGenerator
                     Line(3, $"aliasedType: {MetadataType(alias.AliasedType, alias)});");
                     break;
                 case ForwardDeclaration:
-                    Line(3, $"fields: {MetadataArray("FieldDescriptor", [])});");
+                    Line(3, "isForward: true);");
                     break;
             }
             Line(0);
+        }
+
+        private string? MetadataClrName(BondType type, SourceLocation location)
+        {
+            string? Container(string name, params BondType[] arguments)
+            {
+                var names = arguments.Select(argument => MetadataClrName(argument, location)).ToArray();
+                return names.Any(name => name == null) ? null : name + "<" + string.Join(", ", names) + ">";
+            }
+
+            string? Optional(BondType element)
+            {
+                var name = MetadataClrName(element, location);
+                return name == null ? null : name + (UnwrapAlias(element, location).IsScalar() ? "?" : "");
+            }
+
+            switch (type)
+            {
+                case BondType.IntTypeArg:
+                    return null;
+                case BondType.TypeParameter parameter:
+                    return Identifier(parameter.Param.Name, location, typeName: true);
+                case BondType.TypeReference reference:
+                {
+                    var declaration = Canonical(reference.Declaration);
+                    if (declaration is not AliasDeclaration alias)
+                        return reference.TypeArguments.Length == 0 ? QualifiedName(declaration)
+                            : Container(QualifiedName(declaration), reference.TypeArguments);
+                    ValidateAlias(alias);
+                    var identity = IdlFullName(alias);
+                    if (_typeMappings.TryGetValue(identity, out var template)
+                        || ast.Declarations.Any(root => ReferenceEquals(root, alias))
+                        && _typeMappings.TryGetValue(alias.Name, out template))
+                        return MetadataMappedAliasName(alias, reference.TypeArguments, template, location);
+                    return MetadataClrName(Substitute(alias.AliasedType, alias, reference.TypeArguments), location);
+                }
+                case BondType.List list:
+                    return Container("global::System.Collections.Generic.LinkedList", list.ElementType);
+                case BondType.Vector vector:
+                    return Container("global::System.Collections.Generic.List", vector.ElementType);
+                case BondType.Set set:
+                    return Container("global::System.Collections.Generic.HashSet", set.KeyType);
+                case BondType.Map map:
+                    return Container("global::System.Collections.Generic.Dictionary", map.KeyType, map.ValueType);
+                case BondType.Nullable nullable:
+                    return Optional(nullable.ElementType);
+                case BondType.Maybe maybe:
+                    return Optional(maybe.ElementType);
+                case BondType.Bonded bonded:
+                    return Container("global::Bond.IBonded", bonded.StructType);
+                default:
+                    return MapType(type, location).Name;
+            }
+        }
+
+        private string? MetadataMappedAliasName(AliasDeclaration alias, BondType[] arguments, string template,
+            SourceLocation location)
+        {
+            // Metadata needs only a name: neither erased arguments nor the alias's wire representation need CLR types.
+            var parameters = new HashSet<string>(StringComparer.Ordinal);
+            var representable = true;
+            var hasIntegerArgument = false;
+            var expanded = ExpandTemplate(template, index =>
+            {
+                if (index >= arguments.Length)
+                    throw new GenerationException($"Type mapping for '{IdlFullName(alias)}' references missing argument {{{index}}}.", location);
+                var argument = arguments[index];
+                CollectParameters(argument, parameters);
+                if (argument is BondType.IntTypeArg integer)
+                {
+                    hasIntegerArgument = true;
+                    return integer.Value.ToString(CultureInfo.InvariantCulture);
+                }
+                var name = MetadataClrName(argument, location);
+                representable &= name != null;
+                return name ?? "";
+            });
+            if (!representable)
+                return null;
+            try
+            {
+                return new ClrTypeParser(expanded, parameters, location).Parse();
+            }
+            catch (GenerationException) when (hasIntegerArgument)
+            {
+                return null;
+            }
         }
 
         private void EmitStructMetadata(StructDeclaration structure, int indent)

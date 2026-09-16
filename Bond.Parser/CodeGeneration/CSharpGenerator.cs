@@ -84,7 +84,7 @@ public static partial class CSharpGenerator
                     {
                         case StructDeclaration structure:
                             EmitStruct((StructDeclaration)Canonical(structure));
-                            if (options.GenerateModelFeatures)
+                            if (options.GenerateCloning || options.GenerateEquality)
                                 EmitModelCompanions((StructDeclaration)Canonical(structure));
                             break;
                         case EnumDeclaration enumeration:
@@ -105,7 +105,7 @@ public static partial class CSharpGenerator
                 }
             }
 
-            if (options.GenerateModelFeatures && _errors.Count == 0)
+            if (options.GenerateDescriptors && _errors.Count == 0)
             {
                 try
                 {
@@ -138,7 +138,7 @@ public static partial class CSharpGenerator
             BeginNamespace(structure);
             EmitAttributes(structure.Attributes, 1);
             EmitNamespaceAttribute(structure);
-            if (options.GenerateModelFeatures)
+            if (options.GenerateDebuggerSupport)
                 EmitModelAttributes(structure);
             Line(1, "[global::Bond.Schema]");
             Line(1, $"public partial class {name}{parameters}{baseType}");
@@ -475,6 +475,9 @@ public static partial class CSharpGenerator
                 if (declaration.TypeParameters[index].Constraint != TypeConstraint.Value)
                     continue;
                 var argument = MapType(arguments[index], location);
+                // The consuming compiler resolves constraints on externally supplied CLR types.
+                if (!annotated && argument.IsCustom)
+                    continue;
                 if (!(annotated ? argument.IsSchemaValueType : argument.IsValueType))
                 {
                     var kind = annotated ? "schema annotation" : "type argument";

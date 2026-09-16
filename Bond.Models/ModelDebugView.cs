@@ -25,7 +25,7 @@ public sealed class GeneratedModelDebugView
     public GeneratedModelDebugView(object model)
     {
         ArgumentNullException.ThrowIfNull(model);
-        Fields = ((IGeneratedModel)model).GetDebugFields();
+        Fields = ((IGeneratedDebugView)model).GetDebugFields();
     }
 
     /// <summary>The immediate field snapshots, including inherited fields.</summary>

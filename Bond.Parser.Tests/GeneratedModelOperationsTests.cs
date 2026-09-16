@@ -161,6 +161,7 @@ public sealed class GeneratedModelOperationsTests
             struct Box<T> { 0: T value; 1: vector<T> values; }
             struct Derived<T> : Box<vector<T>> { 0: T value; }
             struct Scalar<T : value> { 0: nullable<T> value; }
+            struct ContainerRoot { 0: Box<vector<Leaf>> wrapped; 1: Box<Box<vector<Leaf>>> nested; }
             """, """
             var integers = new Models.Box<int> { value = 42 };
             integers.values.Add(9);
@@ -180,6 +181,16 @@ public sealed class GeneratedModelOperationsTests
             Require(ReferenceEquals(baseCopy.value[0], derivedCopy.value), "substituted hidden base field lost shared value");
             Require(ReferenceEquals(baseCopy.value, baseCopy.values[0]), "nested substituted generic containers lost sharing");
             Require(derived.Equals(derivedCopy) && derived.GetHashCode() == derivedCopy.GetHashCode(), "generic derived operations disagreed");
+            var containers = new Models.ContainerRoot();
+            containers.wrapped.value = new List<Models.Leaf> { leaf };
+            containers.nested.value = containers.wrapped;
+            var containersCopy = containers.Clone();
+            Require(!ReferenceEquals(containersCopy.wrapped.value, containers.wrapped.value), "generic container was shallow copied");
+            Require(ReferenceEquals(containersCopy.wrapped, containersCopy.nested.value), "nested generic sharing was lost");
+            Require(containers.Equals(containersCopy) && containers.GetHashCode() == containersCopy.GetHashCode(), "generic container operations disagreed");
+            var blobs = new Models.Box<ArraySegment<byte>> { value = new ArraySegment<byte>(new byte[] { 1, 2 }) };
+            var blobsCopy = blobs.Clone();
+            Require(!ReferenceEquals(blobs.value.Array, blobsCopy.value.Array) && blobs.Equals(blobsCopy), "generic blob did not deep clone");
             """);
     }
 
@@ -323,7 +334,9 @@ public sealed class GeneratedModelOperationsTests
                 MemberwiseClone = 8, GetType = 9, GetDebugFields = 10 };
             var copy = Models.AwkwardOperations_.Clone(source);
             Require(!ReferenceEquals(source, copy) && copy.Clone == 3 && copy.MemberwiseClone == 8, "colliding clone was not available");
-            Require(((IEquatable<Models.Awkward>)source).Equals(copy), "explicit equatable was not available");
+            Require(((IGeneratedEquatable)source).ValueEquals(copy, new EqualityContext()), "explicit value equality was not available");
+            Require(!EqualityComparer<Models.Awkward>.Default.Equals(source, copy),
+                "default equality changed without a matching overridable hash method");
             Require(Models.AwkwardOperations_.Equals(source, copy), "companion equality was not available");
             Require(Models.AwkwardOperations_.GetHashCode(source) == Models.AwkwardOperations_.GetHashCode(copy), "companion hash was not available");
             Require(((IGeneratedModel)source).Descriptor.Name == "Awkward", "descriptor collision was not handled");
@@ -350,6 +363,7 @@ public sealed class GeneratedModelOperationsTests
         Assert.True(parsed.Success);
         var generated = CSharpGenerator.Generate(parsed.Ast!, "operations.bond", new CSharpGenerationOptions
         {
+            ModelFeatures = CSharpModelFeatures.All,
             TypeMappings = ["Models.ExternalValue=global::External"]
         });
         Assert.True(generated.Success, string.Join("\n", generated.Errors.Select(error => error.Message)));

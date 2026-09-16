@@ -7,6 +7,7 @@ namespace BondTools.Models;
 /// <summary>Identity-based graph state shared by one clone operation.</summary>
 public sealed class CloneContext
 {
+    internal ModelAdapterFrame? Adapters { get; set; }
     private readonly Dictionary<object, object> _clones = new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<object, Action<object>> _reservations = new(ReferenceEqualityComparer.Instance);
     private readonly HashSet<object> _materializing = new(ReferenceEqualityComparer.Instance);
@@ -88,6 +89,7 @@ public sealed class CloneContext
 /// <summary>Coinductive equality state. Forks isolate unsuccessful unordered collection matches.</summary>
 public sealed class EqualityContext
 {
+    internal ModelAdapterFrame? Adapters { get; set; }
     private HashSet<ReferencePair> _pairs = new(ReferencePairComparer.Instance);
     private readonly MaterializationCache _payloads;
 
@@ -112,7 +114,7 @@ public sealed class EqualityContext
     }
 
     /// <summary>Creates an isolated branch for a tentative match.</summary>
-    public EqualityContext Fork() => new(_payloads) { _pairs = new(_pairs, ReferencePairComparer.Instance) };
+    public EqualityContext Fork() => new(_payloads) { _pairs = new(_pairs, ReferencePairComparer.Instance), Adapters = Adapters };
 
     /// <summary>Accepts a successful branch's comparisons.</summary>
     public void Accept(EqualityContext branch) => _pairs.UnionWith(branch._pairs);
@@ -134,6 +136,7 @@ public sealed class EqualityContext
 /// <summary>A bounded structural hash context. Identity is used only to cache materialization, never in the hash.</summary>
 public sealed class HashContext
 {
+    internal ModelAdapterFrame? Adapters { get; set; }
     private readonly MaterializationCache _payloads;
     private readonly Dictionary<object, Dictionary<int, int>> _hashes;
 
@@ -148,7 +151,7 @@ public sealed class HashContext
         (RemainingDepth, _payloads, _hashes) = (depth, payloads, hashes);
 
     /// <summary>Returns a context for a child edge while sharing materialization state.</summary>
-    public HashContext Descend() => new(Math.Max(0, RemainingDepth - 1), _payloads, _hashes);
+    public HashContext Descend() => new(Math.Max(0, RemainingDepth - 1), _payloads, _hashes) { Adapters = Adapters };
 
     /// <summary>Combines ordered field or element hashes.</summary>
     public static int Combine(int hash, int value) => unchecked(hash * 31 + value);

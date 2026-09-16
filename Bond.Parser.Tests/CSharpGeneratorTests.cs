@@ -4,6 +4,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.Loader;
 using System.Text;
 using System.Threading.Tasks;
 using System.Xml;
@@ -267,7 +268,8 @@ public sealed class CSharpGeneratorTests
     {
         var parsed = await ParserFacade.ParseStringAsync("namespace Example\n" + declaration);
         Assert.True(parsed.Success, string.Join("\n", parsed.Errors.Select(error => error.Message)));
-        var result = CSharpGenerator.Generate(parsed.Ast!, "input.bond");
+        var result = CSharpGenerator.Generate(parsed.Ast!, "input.bond",
+            new CSharpGenerationOptions { ModelFeatures = CSharpModelFeatures.All });
         Assert.False(result.Success);
         Assert.Null(result.Code);
         Assert.Contains(result.Errors, error => error.Message.Contains(message, StringComparison.OrdinalIgnoreCase));
@@ -288,7 +290,8 @@ public sealed class CSharpGeneratorTests
     {
         var parsed = await ParserFacade.ParseStringAsync(schema);
         Assert.True(parsed.Success, string.Join("\n", parsed.Errors.Select(error => error.Message)));
-        var result = CSharpGenerator.Generate(parsed.Ast!, "input.bond");
+        var result = CSharpGenerator.Generate(parsed.Ast!, "input.bond",
+            new CSharpGenerationOptions { ModelFeatures = CSharpModelFeatures.All });
         Assert.True(result.Success, string.Join("\n", result.Errors.Select(error => error.Message)));
         return result.Code!;
     }
@@ -304,13 +307,15 @@ public sealed class CSharpGeneratorTests
             ]).Distinct(StringComparer.Ordinal);
         var compilation = CSharpCompilation.Create(
             "GeneratedContracts_" + Guid.NewGuid().ToString("N"),
-            sources.Select(source => CSharpSyntaxTree.ParseText(source)),
+            sources.Select((source, index) => CSharpSyntaxTree.ParseText(source, path: $"generated_{index}.cs")),
             paths.Select(path => MetadataReference.CreateFromFile(path)),
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
         using var output = new MemoryStream();
         var result = compilation.Emit(output);
         Assert.True(result.Success, string.Join("\n", result.Diagnostics));
-        return Assembly.Load(output.ToArray());
+        // Bond resolves alias converters by assembly-qualified name in the default context.
+        output.Position = 0;
+        return AssemblyLoadContext.Default.LoadFromStream(output);
     }
 
     private static async Task<(Type Generated, Type Reference)> CreateModels(bool includeBonded)

@@ -13,6 +13,14 @@ public static class ModelAdapters
     /// <summary>Uses .NET equality and identity cloning for a type explicitly known to be immutable.</summary>
     public static IModelAdapter<T> Immutable<T>() => ImmutableAdapter<T>.Instance;
 
+    /// <summary>Supplies statically known generic argument operations for one model traversal.</summary>
+    public static IModelAdapter<T> WithArguments<T>(IModelAdapter<T> value, params ModelAdapterArgument[] arguments)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        ArgumentNullException.ThrowIfNull(arguments);
+        return new ArgumentModelAdapter<T>(value, arguments);
+    }
+
     /// <summary>Preserves nullable value semantics.</summary>
     public static IModelAdapter<T?> Nullable<T>(IModelAdapter<T> element) where T : struct =>
         new ModelAdapter<T?>(
@@ -42,6 +50,9 @@ public static class ModelAdapters
     /// <summary>Copies owned backing storage, preserving shared buffers and segment offsets.</summary>
     public static IModelAdapter<ArraySegment<byte>> Blob { get; } = new BlobAdapter();
 
+    /// <summary>Copies byte-array storage and compares byte contents.</summary>
+    public static IModelAdapter<byte[]> ByteArray { get; } = new ByteArrayAdapter();
+
     /// <summary>
     /// Compares and clones actual lazy payload values. Reading a payload crosses into the original runtime,
     /// which may use reflection or deserialize. Each wrapper is materialized at most once per operation.
@@ -60,8 +71,14 @@ public static class ModelAdapters
                 return value;
             if (ModelOperations.Registered<T>() is { } adapter)
                 return adapter.Clone(value, context);
-            if (value is IGeneratedModel model)
+            if (context.Adapters?.Find<T>() is { } contextual && !ReferenceEquals(contextual, this))
+                return contextual.Clone(value, context);
+            if (value is IGeneratedCloneable model)
                 return (T)model.Clone(context);
+            if (value is byte[] bytes)
+                return (T)(object)ByteArray.Clone(bytes, context);
+            if (value is ArraySegment<byte> blob)
+                return (T)(object)Blob.Clone(blob, context);
             if (ModelOperations.IsKnownImmutable(value))
                 return value;
             throw ModelOperations.MissingAdapter(typeof(T));
@@ -75,9 +92,15 @@ public static class ModelAdapters
                 return false;
             if (ModelOperations.Registered<T>() is { } adapter)
                 return adapter.Equals(left, right, context);
-            if (left is IGeneratedModel model)
-                return right is IGeneratedModel other && left.GetType() == right.GetType() &&
+            if (context.Adapters?.Find<T>() is { } contextual && !ReferenceEquals(contextual, this))
+                return contextual.Equals(left, right, context);
+            if (left is IGeneratedEquatable model)
+                return right is IGeneratedEquatable other && left.GetType() == right.GetType() &&
                     context.CompareReferences(left, right, () => model.ValueEquals(other, context));
+            if (left is byte[] bytes)
+                return right is byte[] otherBytes && ByteArray.Equals(bytes, otherBytes, context);
+            if (left is ArraySegment<byte> blob)
+                return right is ArraySegment<byte> otherBlob && Blob.Equals(blob, otherBlob, context);
             if (ModelOperations.IsKnownImmutable(left))
                 return EqualityComparer<T>.Default.Equals(left, right);
             throw ModelOperations.MissingAdapter(typeof(T));
@@ -89,8 +112,14 @@ public static class ModelAdapters
                 return 0;
             if (ModelOperations.Registered<T>() is { } adapter)
                 return adapter.GetHashCode(value, context);
-            if (value is IGeneratedModel model)
+            if (context.Adapters?.Find<T>() is { } contextual && !ReferenceEquals(contextual, this))
+                return contextual.GetHashCode(value, context);
+            if (value is IGeneratedEquatable model)
                 return context.HashReference(model, () => model.ValueHashCode(context));
+            if (value is byte[] bytes)
+                return ByteArray.GetHashCode(bytes, context);
+            if (value is ArraySegment<byte> blob)
+                return Blob.GetHashCode(blob, context);
             if (ModelOperations.IsKnownImmutable(value))
                 return EqualityComparer<T>.Default.GetHashCode(value);
             throw ModelOperations.MissingAdapter(typeof(T));
@@ -193,6 +222,26 @@ public static class ModelAdapters
                 return HashContext.Combine(hash, source.Count);
             });
         }
+    }
+
+    private sealed class ByteArrayAdapter : IModelAdapter<byte[]>
+    {
+        public byte[] Clone(byte[] value, CloneContext context)
+        {
+            if (value is null)
+                return null!;
+            if (context.TryGetClone<byte[]>(value, out var clone))
+                return clone;
+            clone = (byte[])value.Clone();
+            context.Register(value, clone);
+            return clone;
+        }
+
+        public bool Equals(byte[] left, byte[] right, EqualityContext context) =>
+            ReferenceEquals(left, right) || left is not null && right is not null && left.AsSpan().SequenceEqual(right);
+
+        public int GetHashCode(byte[] value, HashContext context) =>
+            value is null ? 0 : Blob.GetHashCode(new ArraySegment<byte>(value), context);
     }
 
     private sealed class BlobAdapter : IModelAdapter<ArraySegment<byte>>

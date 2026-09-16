@@ -6,22 +6,39 @@ using System.Threading;
 namespace BondTools.Models;
 
 /// <summary>Static, generated operations. This contract is independent of the Bond serialization runtime.</summary>
-public interface IGeneratedModel
+public interface IGeneratedSchemaProvider
 {
     /// <summary>The model's reflection-free schema.</summary>
     SchemaDescriptor Descriptor { get; }
+}
 
+/// <summary>A model with generated graph-cloning support.</summary>
+public interface IGeneratedCloneable
+{
     /// <summary>Clones the model, registering its new instance before cloning fields.</summary>
-    IGeneratedModel Clone(CloneContext context);
+    IGeneratedCloneable Clone(CloneContext context);
+}
 
+/// <summary>A model with generated structural equality and hashing.</summary>
+public interface IGeneratedEquatable
+{
     /// <summary>Compares fields. Call through <see cref="ModelOperations"/> to handle cycles and runtime types.</summary>
-    bool ValueEquals(IGeneratedModel other, EqualityContext context);
+    bool ValueEquals(IGeneratedEquatable other, EqualityContext context);
 
     /// <summary>Hashes fields using the supplied depth budget.</summary>
     int ValueHashCode(HashContext context);
+}
 
+/// <summary>A model with generated immediate-field debugger support.</summary>
+public interface IGeneratedDebugView
+{
     /// <summary>Captures immediate fields without evaluating their contents.</summary>
     ModelDebugField[] GetDebugFields();
+}
+
+/// <summary>A model with all optional generated capabilities.</summary>
+public interface IGeneratedModel : IGeneratedSchemaProvider, IGeneratedCloneable, IGeneratedEquatable, IGeneratedDebugView
+{
 }
 
 /// <summary>Typed operations for external CLR values. Mutable adapters must register clones before recursing.</summary>
@@ -108,5 +125,5 @@ public static class ModelOperations
     internal static bool IsKnownImmutable(object value) => value is
         string or bool or char or sbyte or byte or short or ushort or int or uint or long or ulong
         or float or double or decimal or Enum or DateTime or DateTimeOffset or TimeSpan
-        or DateOnly or TimeOnly or Guid or Uri or Version;
+        or DateOnly or TimeOnly or Guid or Uri or Version or IntPtr or UIntPtr or System.Numerics.BigInteger;
 }

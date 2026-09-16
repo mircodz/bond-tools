@@ -18,6 +18,8 @@ public static partial class CSharpGenerator
 
         private void InitializeMappings()
         {
+            if ((options.ModelFeatures & ~CSharpModelFeatures.All) != 0)
+                Fail("Unknown C# model feature selection.", default);
             foreach (var specification in options.NamespaceMappings)
             {
                 var (source, target) = SplitMapping(specification, "namespace");
@@ -114,9 +116,39 @@ public static partial class CSharpGenerator
         {
             var wire = WithoutTypeMappings(() => MapType(field.Type, field.Location));
             var value = DefaultValue(field, wire) ?? $"default({wire.Name})";
+            if (!HasRuntimeCompatibleMappedDefault(field))
+                Fail($"The Bond runtime cannot preserve the non-zero or non-empty default of custom-mapped field '{field.Name}'. " +
+                    "Keep its wire CLR type, or use a zero, empty, or nothing default.", field.Location);
             var converter = "global::" + string.Join(".", CSharpNamespace(owner)
                 .Select(part => Identifier(part, field.Location))) + ".BondTypeAliasConverter";
             return $"{converter}.Convert({value}, default({mapped.Name}))";
+        }
+
+        private bool HasRuntimeCompatibleMappedDefault(Field field)
+        {
+            switch (field.DefaultValue)
+            {
+                case null or Default.Nothing: return true;
+                case Default.Bool value: return !value.Value;
+                case Default.Integer value: return value.Value.IsZero;
+                case Default.Float value: return BitConverter.DoubleToInt64Bits(value.Value) == 0;
+                case Default.String value: return value.Value.Length == 0;
+                case Default.Enum value:
+                    if (UnwrapAlias(field.Type, field.Location) is BondType.TypeReference
+                        { Declaration: EnumDeclaration declaration })
+                    {
+                        long next = 0;
+                        foreach (var member in declaration.Constants)
+                        {
+                            var number = member.Value is long explicitValue ? unchecked((int)explicitValue) : next;
+                            if (member.Name == value.Identifier)
+                                return number == 0;
+                            next = number + 1;
+                        }
+                    }
+                    return false;
+                default: return false;
+            }
         }
 
         private static void CollectParameters(BondType type, HashSet<string> names)
@@ -179,6 +211,9 @@ public static partial class CSharpGenerator
             "global::System.IntPtr", "global::System.UIntPtr", "global::System.Numerics.BigInteger"
         };
 
+        private static bool IsPrimitiveName(string name) =>
+            PrimitiveNames.Values.Contains(name) || name is "nint" or "nuint";
+
         private sealed class ClrTypeParser(string text, HashSet<string> parameters, SourceLocation location)
         {
             private int _position;
@@ -202,11 +237,13 @@ public static partial class CSharpGenerator
                 while (Take('.'))
                     segments.Add(Segment());
                 var name = string.Join(".", segments);
+                if (global && segments.Count == 1 && IsPrimitiveName(name))
+                    Invalid();
                 if (PrimitiveNames.TryGetValue(name, out var primitive))
                     name = primitive;
                 else if (segments.Count > 1 || global)
                     name = "global::" + name;
-                else if (!PrimitiveNames.Values.Contains(name) && !parameters.Contains(name)
+                else if (!IsPrimitiveName(name) && !parameters.Contains(name.TrimStart('@'))
                     && !name.StartsWith("__BondTypeParameter", StringComparison.Ordinal))
                     throw new GenerationException($"Type mapping '{text}' must use fully qualified CLR type names.", location);
 
@@ -230,7 +267,7 @@ public static partial class CSharpGenerator
                     Invalid();
                 var name = text[start.._position];
                 var identifier = Identifier(name, location, typeName: true);
-                if (!escaped && PrimitiveNames.Values.Contains(name))
+                if (!escaped && IsPrimitiveName(name))
                     identifier = name;
                 if (Take('<'))
                 {

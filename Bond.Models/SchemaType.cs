@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Threading;
 
@@ -74,6 +75,14 @@ public abstract class SchemaType
     /// <summary>The exact IDL type category.</summary>
     public SchemaTypeKind Kind { get; }
 
+    /// <summary>Formats the symbolic IDL type without resolving declaration factories.</summary>
+    public override string ToString() => Kind switch
+    {
+        SchemaTypeKind.MetaName => "bond_meta::name",
+        SchemaTypeKind.MetaFullName => "bond_meta::full_name",
+        _ => Kind.ToString().ToLowerInvariant()
+    };
+
     internal abstract SchemaType Substitute(IReadOnlyList<SchemaType> arguments);
 }
 
@@ -105,6 +114,10 @@ public sealed class UnarySchemaType : SchemaType
     /// <summary>The element, set key, or wrapped type.</summary>
     public SchemaType ElementType { get; }
 
+    /// <inheritdoc />
+    public override string ToString() => Kind == SchemaTypeKind.Maybe
+        ? ElementType + " = nothing" : base.ToString() + "<" + ElementType + ">";
+
     internal override SchemaType Substitute(IReadOnlyList<SchemaType> arguments) =>
         new UnarySchemaType(Kind, ElementType.Substitute(arguments));
 }
@@ -124,6 +137,9 @@ public sealed class MapSchemaType : SchemaType
 
     /// <summary>The map value type.</summary>
     public SchemaType ValueType { get; }
+
+    /// <inheritdoc />
+    public override string ToString() => $"map<{KeyType}, {ValueType}>";
 
     internal override SchemaType Substitute(IReadOnlyList<SchemaType> arguments) =>
         new MapSchemaType(KeyType.Substitute(arguments), ValueType.Substitute(arguments));
@@ -173,6 +189,10 @@ public sealed class NamedSchemaType : SchemaType
     /// <summary>Resolves this reference and binds its explicit arguments, without traversing nested references.</summary>
     public SchemaDescriptor Resolve() => _resolved.Value;
 
+    /// <inheritdoc />
+    public override string ToString() => TypeArguments.Count == 0 ? FullName :
+        FullName + "<" + string.Join(", ", TypeArguments) + ">";
+
     internal override SchemaType Substitute(IReadOnlyList<SchemaType> arguments) =>
         new NamedSchemaType(Kind, Name, Namespace, () => Declaration,
             TypeArguments.Select(argument => argument.Substitute(arguments)));
@@ -195,6 +215,9 @@ public sealed class TypeParameterSchemaType : SchemaType
     /// <summary>The declared parameter name.</summary>
     public string Name { get; }
 
+    /// <inheritdoc />
+    public override string ToString() => Name;
+
     internal override SchemaType Substitute(IReadOnlyList<SchemaType> arguments) =>
         Position < arguments.Count ? arguments[Position]
             : throw new ArgumentException("No argument was supplied for schema parameter " + Name + ".", nameof(arguments));
@@ -208,6 +231,9 @@ public sealed class IntegerArgumentSchemaType : SchemaType
 
     /// <summary>The declared signed integer value.</summary>
     public long Value { get; }
+
+    /// <inheritdoc />
+    public override string ToString() => Value.ToString(CultureInfo.InvariantCulture);
 
     internal override SchemaType Substitute(IReadOnlyList<SchemaType> arguments) => this;
 }

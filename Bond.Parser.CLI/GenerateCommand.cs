@@ -103,7 +103,7 @@ public static class GenerateCommand
                 {
                     NamespaceMappings = options.NamespaceMappings,
                     TypeMappings = options.TypeMappings,
-                    GenerateModelFeatures = options.GenerateModelFeatures
+                    ModelFeatures = options.ModelFeatures
                 });
                 if (!result.Success)
                 {
@@ -226,7 +226,7 @@ public static class GenerateCommand
         public List<string> ImportDirectories { get; } = [];
         public List<string> NamespaceMappings { get; } = [];
         public List<string> TypeMappings { get; } = [];
-        public bool GenerateModelFeatures { get; set; } = true;
+        public CSharpModelFeatures ModelFeatures { get; set; }
         public string ErrorFormat { get; set; } = "text";
         public bool Help { get; set; }
         public List<ParseError> Errors { get; } = [];
@@ -258,6 +258,20 @@ public static class GenerateCommand
             {
                 var equals = argument.IndexOf('=');
                 var name = equals < 0 ? argument : argument[..equals];
+                var feature = name switch
+                {
+                    "--descriptors" => CSharpModelFeatures.Descriptors,
+                    "--clone" or "--clonable" => CSharpModelFeatures.Cloning,
+                    "--equality" or "--default-equals" => CSharpModelFeatures.Equality,
+                    "--debugger" => CSharpModelFeatures.Debugger,
+                    _ => CSharpModelFeatures.None
+                };
+                if (feature != CSharpModelFeatures.None)
+                {
+                    if (equals >= 0) Error($"Flag '{name}' does not take a value.");
+                    else options.ModelFeatures |= feature;
+                    continue;
+                }
                 if (name is not ("-o" or "--output-dir" or "-I" or "--import-dir" or "--error-format"
                     or "-n" or "--namespace" or "-u" or "--using" or "--type-map" or "--model-features"))
                 {
@@ -302,8 +316,8 @@ public static class GenerateCommand
                     case "--model-features":
                         if (seenFeatures) Error("Option '--model-features' may only be specified once.");
                         seenFeatures = true;
-                        if (value is "all" or "none") options.GenerateModelFeatures = value == "all";
-                        else Error($"Unsupported model features '{value}'; expected 'all' or 'none'.");
+                        if (value == "all") options.ModelFeatures |= CSharpModelFeatures.All;
+                        else if (value != "none") Error($"Unsupported model features '{value}'; expected 'all' or 'none'.");
                         break;
                     case "--error-format":
                         if (seenFormat) Error("Option '--error-format' may only be specified once.");
@@ -333,7 +347,7 @@ public static class GenerateCommand
     private const string GenerateHelp = """
         Usage: bond generate csharp <file.bond>... -o <output-dir> [options]
 
-        Generate model-only C# code requiring Bond.Runtime.CSharp and BondTools.Models.
+        Generate model-only C# code requiring Bond.Runtime.CSharp.
         Only csharp is supported.
         Run bond generate csharp --help for options and limitations.
         """;
@@ -341,7 +355,7 @@ public static class GenerateCommand
     private const string CSharpHelp = """
         Usage: bond generate csharp <file.bond>... -o <output-dir> [options]
 
-        Generate model-only C# code requiring Bond.Runtime.CSharp and BondTools.Models.
+        Generate model-only C# code requiring Bond.Runtime.CSharp.
         One <input-basename>.g.cs is generated per explicit input; imports are resolved
         but are not generated unless explicitly selected.
 
@@ -349,22 +363,30 @@ public static class GenerateCommand
           -o, --output-dir <directory>  Required output directory
           -I, --import-dir <directory>  Import search directory (repeatable, searched in order)
           -n, --namespace <from=to>     Map an exact C# namespace (repeatable)
-          --type-map <alias=CLR-type>  Map an IDL alias to a CLR type (repeatable; aliases: -u, --using)
-          --model-features <all|none>  Metadata, cloning, equality, and debugger support (default: all)
+          --type-map <alias=CLR-type>   Map an IDL alias to a CLR type (repeatable; aliases: -u, --using)
+          --descriptors                 Emit reflection-free schema descriptors
+          --clone, --clonable           Emit deep cloning methods
+          --equality, --default-equals  Emit structural equality and hashing
+          --debugger                    Emit safe debugger displays and field views
+          --model-features <all|none>   Enable all features, or keep explicit selections (default: none)
           --error-format <text|json>    Diagnostics on stderr (default: text)
-          -h, --help                   Show this help
-          --                           Treat remaining arguments as positional inputs
+          -h, --help                    Show this help
+          --                            Treat remaining arguments as positional inputs
 
         Imports are searched relative to the importing file before import directories.
         Options accept both --option value and --option=value.
         Generates structs and enums, including generics, inheritance, views, aliases,
         and bond_meta fields. Services produce no C# RPC types, matching gbc.
         No protocol selection or serializer code is generated.
-        --model-features=none preserves plain model output and does not require BondTools.Models.
+        Plain models are the default. Enabling any model feature requires BondTools.Models.
+        Individual feature flags are additive. Cloning and equality may materialize bonded<T>
+        payloads; debugger inspection never does. External CLR types may require typed adapters.
         Type mappings use qualified IDL alias names (or a local alias name) and qualified CLR
         types. Generic templates use {0}, {1}, etc. Supply BondTypeAliasConverter.Convert
         overloads in each consuming model namespace for conversions in both directions.
         Custom mapped defaults are converted explicitly; mappings do not change wire types.
+        The original Bond runtime supports only zero/empty/nothing defaults for custom CLR
+        aliases; other mapped scalar defaults are rejected to avoid changing schema semantics.
 
         Example:
           bond generate csharp schemas/order.bond -o out/generated

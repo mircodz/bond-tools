@@ -98,6 +98,9 @@ public sealed class FieldDescriptor
     public SchemaType Type { get; }
     /// <summary>The source presence modifier.</summary>
     public SchemaFieldModifier Modifier { get; }
+    /// <summary>The wire modifier, including Bond's required_optional rule for metadata-name fields.</summary>
+    public SchemaFieldModifier EffectiveModifier => Type.Kind is SchemaTypeKind.MetaName or SchemaTypeKind.MetaFullName
+        ? SchemaFieldModifier.RequiredOptional : Modifier;
     /// <summary>The declared default; null means no default was written.</summary>
     public SchemaDefault? DefaultValue { get; }
     /// <summary>The source attributes, in declaration order.</summary>
@@ -114,17 +117,18 @@ public sealed class FieldDescriptor
 public sealed class SchemaDescriptor
 {
     /// <summary>Creates a declaration template, copying all supplied collections.</summary>
-    public SchemaDescriptor(string name, string @namespace, string clrName, SchemaKind kind,
+    public SchemaDescriptor(string name, string @namespace, string? clrName, SchemaKind kind,
         IEnumerable<FieldDescriptor>? fields = null, SchemaType? baseType = null,
         IEnumerable<TypeParameterDescriptor>? typeParameters = null,
         IEnumerable<EnumValueDescriptor>? enumValues = null, IEnumerable<SchemaAttribute>? attributes = null,
         SchemaType? aliasedType = null, bool isView = false, IEnumerable<string>? viewTarget = null,
-        IEnumerable<string>? viewFields = null)
+        IEnumerable<string>? viewFields = null, bool isForward = false)
     {
         Name = name ?? throw new ArgumentNullException(nameof(name));
         Namespace = @namespace ?? throw new ArgumentNullException(nameof(@namespace));
-        ClrName = clrName ?? throw new ArgumentNullException(nameof(clrName));
+        ClrName = clrName;
         Kind = kind;
+        IsForward = isForward;
         Fields = SchemaCollections.Freeze(SchemaCollections.Freeze(fields).OrderBy(field => field.Id));
         if (Fields.Select(field => field.Id).Distinct().Count() != Fields.Count)
             throw new ArgumentException("A schema cannot declare duplicate field ordinals.", nameof(fields));
@@ -145,7 +149,7 @@ public sealed class SchemaDescriptor
             definition.Fields.Select(field => field.Substitute(arguments)),
             definition.BaseType?.Substitute(arguments), definition.TypeParameters, definition.EnumValues,
             definition.Attributes, definition.AliasedType?.Substitute(arguments), definition.IsView,
-            definition.ViewTarget, definition.ViewFields)
+            definition.ViewTarget, definition.ViewFields, definition.IsForward)
     {
         Definition = definition;
         TypeArguments = arguments;
@@ -160,11 +164,17 @@ public sealed class SchemaDescriptor
     /// <summary>
     /// The mapped C# representation of the declaration template, including generic parameter names.
     /// Binding preserves this template name; actual schema arguments are available in TypeArguments.
+    /// Null means the symbolic template has no representable CLR type, for example an erased integer argument alias.
     /// </summary>
-    public string ClrName { get; }
+    public string? ClrName { get; }
     /// <summary>The named declaration category.</summary>
     public SchemaKind Kind { get; }
-    /// <summary>Own declared fields sorted by ordinal, excluding inherited fields.</summary>
+    /// <summary>
+    /// True when only a forward declaration is available. Its fields and base layout are unknown,
+    /// not an empty struct definition, and are never discovered by inspecting the CLR type.
+    /// </summary>
+    public bool IsForward { get; }
+    /// <summary>Own declared fields sorted by ordinal, excluding inherited fields; unavailable on forward declarations.</summary>
     public IReadOnlyList<FieldDescriptor> Fields { get; }
     /// <summary>The explicit symbolic base type, if any.</summary>
     public SchemaType? BaseType { get; }
