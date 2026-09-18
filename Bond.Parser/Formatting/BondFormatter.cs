@@ -585,7 +585,8 @@ public static class BondFormatter
         private string FormatTypeArg(BondParser.TypeArgContext ctx)
         {
             if (ctx.type() != null) return FormatType(ctx.type());
-            return ctx.INTEGER_LITERAL().GetText();
+            var sign = ctx.MINUS() != null ? "-" : ctx.PLUS() != null ? "+" : "";
+            return sign + ctx.INTEGER_LITERAL().GetText();
         }
 
         private string FormatTypeParameters(BondParser.TypeParametersContext ctx) =>

@@ -30,8 +30,8 @@ public class SymbolTable
             _forwards.Add(forward);
     }
 
-    internal IReadOnlyList<AliasDeclaration> GetAliases(Declaration declaration) =>
-        _contexts.TryGetValue(declaration, out var context) ? context.Aliases : [];
+    internal IReadOnlyList<AliasDeclaration>? GetAliases(Declaration declaration) =>
+        _contexts.TryGetValue(declaration, out var context) ? context.Aliases : null;
 
     internal string? GetSourceFile(Declaration declaration) =>
         _contexts.TryGetValue(declaration, out var context) ? context.File : null;

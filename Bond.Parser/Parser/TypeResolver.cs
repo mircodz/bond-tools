@@ -141,7 +141,7 @@ public static class TypeResolver
         private Declaration? FindSymbol(string[] name, Declaration owner)
         {
             var localAliases = symbols.GetAliases(owner);
-            return symbols.FindSymbol(name, owner.Namespaces, localAliases.Count == 0 ? aliases : localAliases);
+            return symbols.FindSymbol(name, owner.Namespaces, localAliases ?? aliases);
         }
 
         private BondType ResolveReference(Declaration declaration, BondType[] arguments, Declaration owner, SourceLocation location)
