@@ -12,6 +12,29 @@ namespace Bond.Parser.Tests;
 public sealed class MsBuildGenerationTests(MsBuildPackageFixture packages) : IClassFixture<MsBuildPackageFixture>
 {
     [Fact]
+    public async Task DemoUsesThePackagedBuildIntegration()
+    {
+        var project = packages.CreateConsumer();
+        project.Write("Demo.bond", packages.ReadExample("Demo.bond"));
+        project.Write("Demo.Shared.bond", packages.ReadExample("Demo.Shared.bond"));
+        project.Write("Program.cs", packages.ReadExample("Demo/Program.cs"));
+        project.Write("BondTypeAliasConverter.cs", packages.ReadExample("Demo/BondTypeAliasConverter.cs"));
+        project.Configure(
+            new XElement("Bond", new XAttribute("Include", "Demo*.bond"),
+                new XAttribute("Descriptors", "true"), new XAttribute("Clone", "true"),
+                new XAttribute("Equality", "true"), new XAttribute("Debugger", "true")),
+            new XElement("BondNamespaceMapping", new XAttribute("Include", "Demo.Contracts=Demo.Generated")),
+            new XElement("BondTypeMapping", new XAttribute("Include", "demo.Timestamp=System.DateTime")),
+            new XElement("BondUsing", new XAttribute("Include", "System.Collections.Generic")));
+        (await project.Build()).AssertSuccess();
+        Assert.Equal(2, project.GeneratedFiles().Length);
+        var run = await project.Run();
+        run.AssertSuccess();
+        Assert.Contains("demo.OrderCreated", run.Output);
+        Assert.Contains("Debugger fields: 15", run.Output);
+    }
+
+    [Fact]
     public async Task PackagedBuildGeneratesDocumentedRichModelsAndSkipsUnchangedInputs()
     {
         var project = packages.CreateConsumer();
@@ -260,6 +283,7 @@ public sealed class MsBuildPackageFixture : IAsyncLifetime
     }
 
     public Consumer CreateConsumer() => new(this, _version, _runtimeVersion);
+    public string ReadExample(string path) => File.ReadAllText(Path.Combine(_repository, "examples", path));
 
     public sealed class Consumer
     {
@@ -350,6 +374,9 @@ public sealed class MsBuildPackageFixture : IAsyncLifetime
         };
         foreach (var argument in arguments)
             start.ArgumentList.Add(argument);
+        start.Environment["MSBUILDDISABLENODEREUSE"] = "1";
+        start.Environment["DOTNET_CLI_USE_MSBUILD_SERVER"] = "0";
+        start.Environment["UseSharedCompilation"] = "false";
         if (packages != null)
             start.Environment["NUGET_PACKAGES"] = packages;
         using var process = Process.Start(start) ?? throw new InvalidOperationException("Could not start dotnet.");

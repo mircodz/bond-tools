@@ -13,18 +13,21 @@
   </ItemDefinitionGroup>
 
   <UsingTask TaskName="BondTools.Build.GenerateBond"
-             AssemblyFile="$(MSBuildThisFileDirectory)../tasks/netstandard2.0/BondTools.Build.dll" />
+             AssemblyFile="$(MSBuildThisFileDirectory)../tasks/net8.0/Bond.Build.dll"
+             Condition="'$(MSBuildRuntimeType)' == 'Core'" />
 
   <Target Name="BondGenerateCSharp" BeforeTargets="BeforeCompile;CoreCompile;CompileDesignTime"
           Condition="'$(IsCrossTargetingBuild)' != 'true'">
     <PropertyGroup>
       <_BondOutputDirectory>$([System.IO.Path]::Combine('$(MSBuildProjectDirectory)', '$(IntermediateOutputPath)', 'bond'))</_BondOutputDirectory>
+      <_BondUnsupportedSdk Condition="'$(NETCoreSdkVersion)' != ''">$([MSBuild]::VersionLessThan('$(NETCoreSdkVersion)', '8.0'))</_BondUnsupportedSdk>
     </PropertyGroup>
-    <GenerateBond Condition="'@(Bond)' != '' or Exists('$(_BondOutputDirectory)/manifest.json')"
+    <Error Condition="('@(Bond)' != '' or Exists('$(_BondOutputDirectory)/manifest.json')) and ('$(MSBuildRuntimeType)' != 'Core' or '$(_BondUnsupportedSdk)' == 'true')"
+           Code="BOND1001"
+           Text="BondTools.Build requires .NET 8 or newer SDK MSBuild. Use 'dotnet build' with a .NET 8+ SDK instead of legacy Full MSBuild." />
+    <GenerateBond Condition="'$(MSBuildRuntimeType)' == 'Core' and ('@(Bond)' != '' or Exists('$(_BondOutputDirectory)/manifest.json'))"
                   ProjectFile="$(MSBuildProjectFullPath)"
                   OutputDirectory="$(_BondOutputDirectory)"
-                  CompilerPath="$(MSBuildThisFileDirectory)../tools/net8.0/any/Bond.Parser.CLI.dll"
-                  DotNetHostPath="$(DotNetHostPath)"
                   Sources="@(Bond)"
                   ImportDirectories="@(BondImportDirectory)"
                   Usings="@(BondUsing)"

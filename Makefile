@@ -30,7 +30,7 @@ clean: ## Clean build artifacts
 	rm -rf $(OUT_DIR)
 	rm -rf */bin */obj
 
-pack: build-release ## Pack the tool, parser, and model-support libraries
+pack: build-release ## Pack the tool, parser, model support, and build integration
 	dotnet pack Bond.sln -c Release --no-build --no-restore /p:Version=$(VERSION)
 	@echo ""
 	@echo "Packages created in $(NUPKG_DIR)"

@@ -199,7 +199,7 @@ public class FormatterTests
 
             enum Color {
                 red,
-                green
+                green,
             }
             """);
 
@@ -225,7 +225,7 @@ public class FormatterTests
                 One,
                 Three = 3,
                 Four,
-                Six = 6
+                Six = 6,
             }
             """);
 
@@ -328,5 +328,93 @@ public class FormatterTests
 
         result.Success.Should().BeTrue();
         result.FormattedText.Should().Be(expected);
+    }
+
+    [Fact]
+    public void Format_PreservesFieldAndEnumTrailingComments()
+    {
+        var input = """
+            namespace Test
+            struct Item{
+            0:int32 id; // identifier
+            1:string name; /* display */ /* label */
+            2:int32 value /* before separator */; // after separator
+            }
+            enum State{
+            First=1; // first
+            Second /* inline */, /* second */
+            Third=3 // last
+            }
+            """;
+        var expected = TrimEol("""
+            namespace Test
+
+            struct Item {
+                0: int32 id; // identifier
+                1: string name; /* display */ /* label */
+                2: int32 value; /* before separator */ // after separator
+            }
+
+            enum State {
+                First = 1, // first
+                Second, /* inline */ /* second */
+                Third = 3, // last
+            }
+            """);
+        var result = BondFormatter.Format(input, "<inline>");
+        result.Success.Should().BeTrue(string.Join("; ", result.Errors));
+        result.FormattedText.Should().Be(expected);
+        var repeated = BondFormatter.Format(result.FormattedText!, "<inline>");
+        repeated.Success.Should().BeTrue();
+        repeated.FormattedText.Should().Be(expected);
+    }
+
+    [Fact]
+    public void Format_PreservesOpeningClosingAndEndOfFileComments()
+    {
+        var input = """
+            namespace Test // namespace
+            struct Item { // opening
+                0: int32 id; // field
+                // before closing
+            }; // closing
+            enum State { // enum opening
+                First, // enum member
+                // enum closing
+            }; // enum end
+            // end of file
+            """;
+        var result = BondFormatter.Format(input, "<inline>");
+        result.Success.Should().BeTrue(string.Join("; ", result.Errors));
+        result.FormattedText.Should().Contain("0: int32 id; // field");
+        result.FormattedText.Should().Contain("First, // enum member");
+        result.FormattedText.Should().Contain("// before closing");
+        result.FormattedText.Should().EndWith("// end of file");
+        var repeated = BondFormatter.Format(result.FormattedText!, "<inline>");
+        repeated.Success.Should().BeTrue(string.Join("; ", repeated.Errors));
+        repeated.FormattedText.Should().Be(result.FormattedText);
+    }
+
+    [Theory]
+    [InlineData("enum State { First }", "First,")]
+    [InlineData("enum State { First; Second; }", "Second,")]
+    [InlineData("enum State { First, Second, }", "Second,")]
+    public void Format_AlwaysAddsFinalEnumComma(string declaration, string lastMember)
+    {
+        var result = BondFormatter.Format("namespace Test " + declaration, "<inline>");
+        result.Success.Should().BeTrue();
+        result.FormattedText.Should().Contain(lastMember + "\n}");
+        BondFormatter.Format(result.FormattedText!, "<inline>").FormattedText.Should().Be(result.FormattedText);
+    }
+
+    [Theory]
+    [InlineData("namespace Test struct Item { 0: int32 /* inside type */ value; }")]
+    [InlineData("namespace Test struct Item { 0: int32 value; } @")]
+    public void Format_RefusesToDiscardUnpreservedCommentsOrInvalidTokens(string input)
+    {
+        var result = BondFormatter.Format(input, "<inline>");
+        result.Success.Should().BeFalse();
+        result.FormattedText.Should().BeNull();
+        result.Errors.Should().NotBeEmpty();
     }
 }

@@ -28,6 +28,8 @@ public static class BondFormatter
             var parser = new BondParser(tokenStream);
 
             var errorListener = new ErrorListener(filePath);
+            lexer.RemoveErrorListeners();
+            lexer.AddErrorListener(errorListener);
             parser.RemoveErrorListeners();
             parser.AddErrorListener(errorListener);
 
@@ -57,7 +59,8 @@ public static class BondFormatter
 
         private readonly Dictionary<int, List<IToken>> _standaloneLeading = new();
         private readonly Dictionary<int, List<IToken>> _inlineLeading = new();
-        private readonly Dictionary<int, IToken> _trailing = new();
+        private readonly Dictionary<int, List<IToken>> _trailing = new();
+        private readonly HashSet<int> _emittedComments = [];
 
         public ParseTreeFormatter(CommonTokenStream tokens, FormatOptions options)
         {
@@ -83,15 +86,17 @@ public static class BondFormatter
                     IToken? nextDefault = null;
                     for (int j = i + 1; j < allTokens.Count; j++)
                     {
-                        if (allTokens[j].Channel == TokenConstants.DefaultChannel &&
-                            allTokens[j].Type != TokenConstants.EOF)
+                        if (allTokens[j].Channel == TokenConstants.DefaultChannel)
                         {
                             nextDefault = allTokens[j];
                             break;
                         }
                     }
 
-                    if (tok.Type == BondLexer.COMMENT && nextDefault != null && tok.Line == nextDefault.Line)
+                    var afterSeparator = prevDefault?.Type is BondLexer.SEMI or BondLexer.COMMA;
+                    var beforeTerminator = nextDefault?.Type is BondLexer.SEMI or BondLexer.COMMA or BondLexer.RBRACE;
+                    if (tok.Type == BondLexer.COMMENT && nextDefault != null && tok.Line == nextDefault.Line
+                        && !afterSeparator && !beforeTerminator)
                     {
                         if (!_inlineLeading.ContainsKey(nextDefault.TokenIndex))
                             _inlineLeading[nextDefault.TokenIndex] = new List<IToken>();
@@ -99,7 +104,9 @@ public static class BondFormatter
                     }
                     else if (prevDefault != null && tok.Line == prevDefault.Line)
                     {
-                        _trailing[prevDefault.TokenIndex] = tok;
+                        if (!_trailing.TryGetValue(prevDefault.TokenIndex, out var comments))
+                            _trailing[prevDefault.TokenIndex] = comments = [];
+                        comments.Add(tok);
                     }
                     else if (nextDefault != null)
                     {
@@ -117,6 +124,8 @@ public static class BondFormatter
                 return;
             foreach (var c in comments)
             {
+                if (!_emittedComments.Add(c.TokenIndex))
+                    continue;
                 sb.Append(indent);
                 sb.Append(c.Text.TrimEnd());
                 sb.Append('\n');
@@ -129,8 +138,41 @@ public static class BondFormatter
                 return;
             foreach (var c in comments)
             {
+                if (!_emittedComments.Add(c.TokenIndex))
+                    continue;
                 sb.Append(c.Text.TrimEnd());
                 sb.Append(' ');
+            }
+        }
+
+        private void EmitTrailing(StringBuilder sb, IToken stop)
+        {
+            var index = stop.TokenIndex;
+            while (true)
+            {
+                if (_trailing.TryGetValue(index, out var comments))
+                {
+                    foreach (var comment in comments)
+                    {
+                        if (_emittedComments.Add(comment.TokenIndex))
+                            sb.Append(' ').Append(comment.Text.TrimEnd());
+                    }
+                }
+                do { index++; }
+                while (index < _tokens.Size && _tokens.Get(index).Channel != TokenConstants.DefaultChannel);
+                if (index >= _tokens.Size || _tokens.Get(index).Type is not (BondLexer.SEMI or BondLexer.COMMA))
+                    break;
+            }
+        }
+
+        private void EmitClosingComments(StringBuilder sb, int tokenIndex)
+        {
+            EmitStandaloneLeading(sb, tokenIndex, _indent);
+            if (_inlineLeading.ContainsKey(tokenIndex))
+            {
+                sb.Append(_indent);
+                EmitInlineLeading(sb, tokenIndex);
+                sb.Append('\n');
             }
         }
 
@@ -187,6 +229,14 @@ public static class BondFormatter
                 declSections.Add(string.Join("\n", currentAliasGroup));
 
             sections.AddRange(declSections);
+            var finalComments = new StringBuilder();
+            EmitStandaloneLeading(finalComments, _tokens.Size - 1);
+            if (finalComments.Length > 0)
+                sections.Add(finalComments.ToString().TrimEnd('\n'));
+            var unhandled = _tokens.GetTokens().FirstOrDefault(token =>
+                token.Type is BondLexer.LINE_COMMENT or BondLexer.COMMENT && !_emittedComments.Contains(token.TokenIndex));
+            if (unhandled != null)
+                throw new InvalidOperationException($"Cannot preserve comment at {unhandled.Line}:{unhandled.Column + 1}; formatting was not applied.");
             return string.Join("\n\n", sections);
         }
 
@@ -195,6 +245,7 @@ public static class BondFormatter
             var sb = new StringBuilder();
             EmitStandaloneLeading(sb, ctx.Start.TokenIndex);
             sb.Append($"import {ctx.STRING_LITERAL().GetText()};");
+            EmitTrailing(sb, ctx.Stop);
             return sb.ToString();
         }
 
@@ -204,6 +255,7 @@ public static class BondFormatter
             EmitStandaloneLeading(sb, ctx.Start.TokenIndex);
             var lang = ctx.language() != null ? $" {ctx.language().GetText()}" : "";
             sb.Append($"namespace{lang} {ctx.qualifiedName().GetText()}");
+            EmitTrailing(sb, ctx.Stop);
             return sb.ToString();
         }
 
@@ -223,6 +275,7 @@ public static class BondFormatter
             EmitStandaloneLeading(sb, ctx.Start.TokenIndex);
             var typeParams = ctx.typeParameters() != null ? FormatTypeParameters(ctx.typeParameters()) : "";
             sb.Append($"using {ctx.identifier().GetText()}{typeParams} = {FormatType(ctx.type())};");
+            EmitTrailing(sb, ctx.Stop);
             return sb.ToString();
         }
 
@@ -232,6 +285,7 @@ public static class BondFormatter
             EmitStandaloneLeading(sb, ctx.Start.TokenIndex);
             var typeParams = ctx.typeParameters() != null ? FormatTypeParameters(ctx.typeParameters()) : "";
             sb.Append($"struct {ctx.identifier().GetText()}{typeParams};");
+            EmitTrailing(sb, ctx.Stop);
             return sb.ToString();
         }
 
@@ -269,12 +323,15 @@ public static class BondFormatter
                 else
                 {
                     sb.Append(header);
-                    sb.Append(" {\n");
+                    sb.Append(" {");
+                    EmitTrailing(sb, def.LBRACE().Symbol);
+                    sb.Append('\n');
                     foreach (var field in fields)
                     {
                         sb.Append(FormatField(field));
                         sb.Append('\n');
                     }
+                    EmitClosingComments(sb, def.RBRACE().Symbol.TokenIndex);
                     sb.Append('}');
                 }
             }
@@ -283,16 +340,25 @@ public static class BondFormatter
                 var view = ctx.structView();
                 var baseType = view.qualifiedName().GetText();
                 var viewFields = view.viewFieldList().identifier();
-                sb.Append($"struct {name}{typeParams} view_of {baseType} {{\n");
+                sb.Append($"struct {name}{typeParams} view_of {baseType} {{");
+                EmitTrailing(sb, view.LBRACE().Symbol);
+                sb.Append('\n');
                 for (int i = 0; i < viewFields.Length; i++)
                 {
+                    EmitStandaloneLeading(sb, viewFields[i].Start.TokenIndex, _indent);
                     sb.Append(_indent);
+                    EmitInlineLeading(sb, viewFields[i].Start.TokenIndex);
                     sb.Append(viewFields[i].GetText());
-                    sb.Append(i < viewFields.Length - 1 ? ",\n" : "\n");
+                    if (i < viewFields.Length - 1)
+                        sb.Append(',');
+                    EmitTrailing(sb, viewFields[i].Stop);
+                    sb.Append('\n');
                 }
+                EmitClosingComments(sb, view.RBRACE().Symbol.TokenIndex);
                 sb.Append('}');
             }
 
+            EmitTrailing(sb, ctx.structDef()?.RBRACE().Symbol ?? ctx.structView().RBRACE().Symbol);
             return sb.ToString().TrimEnd('\n');
         }
 
@@ -314,22 +380,25 @@ public static class BondFormatter
             }
 
             var name = ctx.identifier().GetText();
-            sb.Append($"enum {name} {{\n");
+            sb.Append($"enum {name} {{");
+            EmitTrailing(sb, ctx.LBRACE().Symbol);
+            sb.Append('\n');
 
             var constants = ctx.enumConstant();
             for (int i = 0; i < constants.Length; i++)
             {
-                var isLast = i == constants.Length - 1;
                 EmitStandaloneLeading(sb, constants[i].Start.TokenIndex, _indent);
                 sb.Append(_indent);
                 EmitInlineLeading(sb, constants[i].Start.TokenIndex);
                 sb.Append(FormatEnumConstant(constants[i]));
-                if (!isLast)
-                    sb.Append(',');
+                sb.Append(',');
+                EmitTrailing(sb, constants[i].Stop);
                 sb.Append('\n');
             }
 
+            EmitClosingComments(sb, ctx.RBRACE().Symbol.TokenIndex);
             sb.Append('}');
+            EmitTrailing(sb, ctx.RBRACE().Symbol);
             return sb.ToString().TrimEnd('\n');
         }
 
@@ -353,7 +422,9 @@ public static class BondFormatter
             var name = ctx.identifier().GetText();
             var typeParams = ctx.typeParameters() != null ? FormatTypeParameters(ctx.typeParameters()) : "";
             var baseClause = ctx.serviceType() != null ? $" : {FormatServiceType(ctx.serviceType())}" : "";
-            sb.Append($"service {name}{typeParams}{baseClause} {{\n");
+            sb.Append($"service {name}{typeParams}{baseClause} {{");
+            EmitTrailing(sb, ctx.LBRACE().Symbol);
+            sb.Append('\n');
 
             foreach (var method in ctx.method())
             {
@@ -361,7 +432,9 @@ public static class BondFormatter
                 sb.Append('\n');
             }
 
+            EmitClosingComments(sb, ctx.RBRACE().Symbol.TokenIndex);
             sb.Append('}');
+            EmitTrailing(sb, ctx.RBRACE().Symbol);
             return sb.ToString().TrimEnd('\n');
         }
 
@@ -404,6 +477,7 @@ public static class BondFormatter
             }
 
             sb.Append(';');
+            EmitTrailing(sb, ctx.Stop);
             return sb.ToString();
         }
 
@@ -447,6 +521,7 @@ public static class BondFormatter
                 : "";
 
             sb.Append($"{resultType} {methodName}({param});");
+            EmitTrailing(sb, ctx.Stop);
             return sb.ToString();
         }
 
