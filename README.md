@@ -15,7 +15,7 @@ bond format schema.bond --check
 
 ```bash
 bond generate csharp MyApp/order.bond -o MyApp/Generated \
-  --descriptors --clone --equality --debugger
+  --descriptors --clone --equality --debugger --to-string
 ```
 
 Requires `Bond.Runtime.CSharp`; the optional flags also require a matching

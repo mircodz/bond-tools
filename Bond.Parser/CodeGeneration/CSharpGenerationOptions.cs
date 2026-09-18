@@ -11,7 +11,8 @@ public enum CSharpModelFeatures
     Cloning = 2,
     Equality = 4,
     Debugger = 8,
-    All = Descriptors | Cloning | Equality | Debugger
+    StringRepresentation = 16,
+    All = Descriptors | Cloning | Equality | Debugger | StringRepresentation
 }
 
 public sealed record CSharpGenerationOptions
@@ -25,4 +26,5 @@ public sealed record CSharpGenerationOptions
     public bool GenerateCloning => ModelFeatures.HasFlag(CSharpModelFeatures.Cloning);
     public bool GenerateEquality => ModelFeatures.HasFlag(CSharpModelFeatures.Equality);
     public bool GenerateDebuggerSupport => ModelFeatures.HasFlag(CSharpModelFeatures.Debugger);
+    public bool GenerateToString => ModelFeatures.HasFlag(CSharpModelFeatures.StringRepresentation);
 }

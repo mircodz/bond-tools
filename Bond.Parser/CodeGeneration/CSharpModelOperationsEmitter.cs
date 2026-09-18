@@ -19,7 +19,9 @@ public static partial class CSharpGenerator
         private string ModelInterfaces(StructDeclaration structure)
         {
             var interfaces = new List<string>();
-            if (options.ModelFeatures == CSharpModelFeatures.All)
+            const CSharpModelFeatures coreFeatures = CSharpModelFeatures.Descriptors | CSharpModelFeatures.Cloning
+                | CSharpModelFeatures.Equality | CSharpModelFeatures.Debugger;
+            if ((options.ModelFeatures & coreFeatures) == coreFeatures)
                 interfaces.Add(ModelSupport + "IGeneratedModel");
             else
             {
@@ -28,6 +30,7 @@ public static partial class CSharpGenerator
                 if (options.GenerateEquality) interfaces.Add(ModelSupport + "IGeneratedEquatable");
                 if (options.GenerateDebuggerSupport) interfaces.Add(ModelSupport + "IGeneratedDebugView");
             }
+            if (options.GenerateToString) interfaces.Add(ModelSupport + "IGeneratedSummary");
             if (options.GenerateCloning) interfaces.Add("global::System.ICloneable");
             if (options.GenerateEquality && CanEmitDefaultEquality(structure))
                 interfaces.Add($"global::System.IEquatable<{ModelSelf(structure)}>");
@@ -152,6 +155,8 @@ public static partial class CSharpGenerator
             }
             if (options.GenerateEquality && CanEmitDefaultEquality(structure))
                 Line(2, $"public override int GetHashCode() => {ModelSupport}ModelOperations.ValueHashCode(this);");
+            if (options.GenerateToString)
+                EmitSummaryMembers(structure);
         }
 
         private bool CanEmitConvenience(StructDeclaration structure, string name) =>
@@ -184,14 +189,20 @@ public static partial class CSharpGenerator
                 Line(2, $"public static bool Equals({self} left, {self} right) => {ModelSupport}ModelOperations.ValueEquals(left, right);");
                 Line(2, $"public static int GetHashCode({self} value) => {ModelSupport}ModelOperations.ValueHashCode(value);");
             }
-            for (var i = 0; i < fields.Length; i++)
+            if (options.GenerateToString)
+                EmitSummaryCompanionMembers(structure, self);
+            if (options.GenerateCloning || options.GenerateEquality)
             {
-                var field = fields[i];
-                var mapped = MapType(field.Type, field.Field.Location);
-                Line(2, $"internal static readonly {ModelSupport}IModelAdapter<{mapped.Name}> Field{i} = " +
-                    $"{ModelAdapterExpression(field.Type, field.Field.Location)};");
+                for (var i = 0; i < fields.Length; i++)
+                {
+                    var field = fields[i];
+                    var mapped = MapType(field.Type, field.Field.Location);
+                    Line(2, $"internal static readonly {ModelSupport}IModelAdapter<{mapped.Name}> Field{i} = " +
+                        $"{ModelAdapterExpression(field.Type, field.Field.Location)};");
+                }
             }
-            if (fields.Any(field => UsesMaterializedAdapter(field.Type, field.Field.Location)))
+            if ((options.GenerateCloning || options.GenerateEquality)
+                && fields.Any(field => UsesMaterializedAdapter(field.Type, field.Field.Location)))
             {
                 Line(2, "[global::System.Diagnostics.DebuggerDisplay(\"bonded (materialized)\")]");
                 Line(2, $"private sealed class __MaterializedBonded<__Payload> : global::Bond.IBonded<__Payload>, {ModelSupport}IMaterializedModelValue<__Payload>");

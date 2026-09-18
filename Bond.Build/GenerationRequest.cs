@@ -45,7 +45,8 @@ internal sealed record BuildRequest(string ProjectFile, string OutputDirectory, 
                 ("Descriptors", CSharpModelFeatures.Descriptors),
                 ("Clone", CSharpModelFeatures.Cloning),
                 ("Equality", CSharpModelFeatures.Equality),
-                ("Debugger", CSharpModelFeatures.Debugger)
+                ("Debugger", CSharpModelFeatures.Debugger),
+                ("ToString", CSharpModelFeatures.StringRepresentation)
             })
             {
                 var value = item.GetMetadata(name);

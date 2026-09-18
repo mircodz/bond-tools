@@ -36,7 +36,7 @@ public interface IGeneratedDebugView
     ModelDebugField[] GetDebugFields();
 }
 
-/// <summary>A model with all optional generated capabilities.</summary>
+/// <summary>A model with descriptors, cloning, equality, and debugger support.</summary>
 public interface IGeneratedModel : IGeneratedSchemaProvider, IGeneratedCloneable, IGeneratedEquatable, IGeneratedDebugView
 {
 }

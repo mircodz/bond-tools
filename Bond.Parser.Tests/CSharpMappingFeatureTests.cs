@@ -17,7 +17,7 @@ namespace Bond.Parser.Tests;
 public sealed class CSharpMappingFeatureTests
 {
     public static IEnumerable<object[]> FeatureSelections() =>
-        Enumerable.Range(0, 16).Select(value => new object[] { (CSharpModelFeatures)value });
+        Enumerable.Range(0, 32).Select(value => new object[] { (CSharpModelFeatures)value });
 
     [Theory]
     [MemberData(nameof(FeatureSelections))]
@@ -38,6 +38,10 @@ public sealed class CSharpMappingFeatureTests
             typeof(IGeneratedEquatable).IsAssignableFrom(type));
         Assert.Equal(features.HasFlag(CSharpModelFeatures.Debugger),
             type.GetCustomAttribute<DebuggerTypeProxyAttribute>() != null);
+        Assert.Equal(features.HasFlag(CSharpModelFeatures.StringRepresentation),
+            typeof(IGeneratedSummary).IsAssignableFrom(type));
+        Assert.Equal(features.HasFlag(CSharpModelFeatures.StringRepresentation),
+            type.GetMethod("ToString", Type.EmptyTypes)!.DeclaringType == type);
         Assert.Equal(features.HasFlag(CSharpModelFeatures.Equality),
             type.GetMethod("Equals", [typeof(object)])!.DeclaringType == type);
         Assert.Equal(features.HasFlag(CSharpModelFeatures.Equality),
@@ -280,6 +284,7 @@ public sealed class CSharpMappingFeatureTests
     [InlineData("--equality", CSharpModelFeatures.Equality)]
     [InlineData("--default-equals", CSharpModelFeatures.Equality)]
     [InlineData("--debugger", CSharpModelFeatures.Debugger)]
+    [InlineData("--to-string", CSharpModelFeatures.StringRepresentation)]
     public async Task CliFlagsSelectOnlyRequestedFeatures(string flag, CSharpModelFeatures features)
     {
         var root = NewTestDirectory();
@@ -307,6 +312,8 @@ public sealed class CSharpMappingFeatureTests
                 type.GetCustomAttribute<DebuggerDisplayAttribute>() != null);
             Assert.Equal(features.HasFlag(CSharpModelFeatures.Equality),
                 typeof(IGeneratedEquatable).IsAssignableFrom(type));
+            Assert.Equal(features.HasFlag(CSharpModelFeatures.StringRepresentation),
+                typeof(IGeneratedSummary).IsAssignableFrom(type));
         }
         finally
         {
@@ -378,6 +385,7 @@ public sealed class CSharpMappingFeatureTests
 
     [Theory]
     [InlineData("--clone=false")]
+    [InlineData("--to-string=false")]
     [InlineData("--model-features=all")]
     [InlineData("--model-features=none")]
     [InlineData("--namespace=Example")]

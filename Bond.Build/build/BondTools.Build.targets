@@ -9,6 +9,7 @@
       <Clone>$(BondClone)</Clone>
       <Equality>$(BondEquality)</Equality>
       <Debugger>$(BondDebugger)</Debugger>
+      <ToString>$(BondToString)</ToString>
     </Bond>
   </ItemDefinitionGroup>
 

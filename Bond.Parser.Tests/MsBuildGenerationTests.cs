@@ -22,7 +22,7 @@ public sealed class MsBuildGenerationTests(MsBuildPackageFixture packages) : ICl
         project.Configure(
             new XElement("Bond", new XAttribute("Include", "Demo*.bond"),
                 new XAttribute("Descriptors", "true"), new XAttribute("Clone", "true"),
-                new XAttribute("Equality", "true"), new XAttribute("Debugger", "true")),
+                new XAttribute("Equality", "true"), new XAttribute("Debugger", "true"), new XAttribute("ToString", "true")),
             new XElement("BondNamespaceMapping", new XAttribute("Include", "Demo.Contracts=Demo.Generated")),
             new XElement("BondTypeMapping", new XAttribute("Include", "demo.Timestamp=System.DateTime")),
             new XElement("BondUsing", new XAttribute("Include", "System.Collections.Generic")));
@@ -32,6 +32,29 @@ public sealed class MsBuildGenerationTests(MsBuildPackageFixture packages) : ICl
         run.AssertSuccess();
         Assert.Contains("demo.OrderCreated", run.Output);
         Assert.Contains("Debugger fields: 15", run.Output);
+        Assert.Contains("Order {", run.Output);
+    }
+
+    [Fact]
+    public async Task GeneratesToStringIndependentlyOfOtherModelFeatures()
+    {
+        var project = packages.CreateConsumer();
+        project.Write("item.bond", "namespace Contracts struct Item { 0: int32 id; }");
+        project.Write("Program.cs", """
+            var item = new Contracts.Item { id = 42 };
+            if (item.ToString() != "Item { id = 42 }")
+                throw new System.Exception("Unexpected generated summary.");
+            System.Console.WriteLine(item);
+            """);
+        project.Configure(new XElement("Bond", new XAttribute("Include", "item.bond"), new XAttribute("ToString", "true")));
+        (await project.Build()).AssertSuccess();
+        var output = File.ReadAllText(Assert.Single(project.GeneratedFiles()));
+        Assert.Contains("override string ToString()", output);
+        Assert.DoesNotContain("SchemaDescriptor", output);
+        Assert.DoesNotContain("IModelAdapter", output);
+        var run = await project.Run();
+        run.AssertSuccess();
+        Assert.Contains("Item { id = 42 }", run.Output);
     }
 
     [Fact]
@@ -338,7 +361,7 @@ public sealed class MsBuildPackageFixture : IAsyncLifetime
                 new XElement("PackageReference", new XAttribute("Include", "Bond.Runtime.CSharp"),
                     new XAttribute("Version", _runtimeVersion)));
             if (items.Any(item => item.Name == "Bond" &&
-                new[] { "Descriptors", "Clone", "Equality", "Debugger" }.Any(name => (string?)item.Attribute(name) == "true")))
+                new[] { "Descriptors", "Clone", "Equality", "Debugger", "ToString" }.Any(name => (string?)item.Attribute(name) == "true")))
                 references.Add(new XElement("PackageReference", new XAttribute("Include", "BondTools.Models"),
                     new XAttribute("Version", _version)));
             new XDocument(new XElement("Project", new XAttribute("Sdk", "Microsoft.NET.Sdk"),

@@ -97,7 +97,7 @@ public static partial class CSharpGenerator
                     {
                         case StructDeclaration structure:
                             EmitStruct((StructDeclaration)Canonical(structure));
-                            if (options.GenerateCloning || options.GenerateEquality)
+                            if (options.GenerateCloning || options.GenerateEquality || options.GenerateToString)
                                 EmitModelCompanions((StructDeclaration)Canonical(structure));
                             break;
                         case EnumDeclaration enumeration:

@@ -265,6 +265,7 @@ public static class GenerateCommand
                     "--clone" or "--clonable" => CSharpModelFeatures.Cloning,
                     "--equality" or "--default-equals" => CSharpModelFeatures.Equality,
                     "--debugger" => CSharpModelFeatures.Debugger,
+                    "--to-string" => CSharpModelFeatures.StringRepresentation,
                     _ => CSharpModelFeatures.None
                 };
                 if (feature != CSharpModelFeatures.None)
@@ -371,6 +372,7 @@ public static class GenerateCommand
           --clone, --clonable           Emit deep cloning methods
           --equality, --default-equals  Emit structural equality and hashing
           --debugger                    Emit safe debugger displays and field views
+          --to-string                   Emit bounded compact ToString() summaries
           --error-format <text|json>    Diagnostics on stderr (default: text)
           -h, --help                    Show this help
           --                            Treat remaining arguments as positional inputs
