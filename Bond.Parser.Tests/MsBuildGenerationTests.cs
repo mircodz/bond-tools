@@ -1,0 +1,397 @@
+using System;
+using System.Diagnostics;
+using System.IO;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Xml.Linq;
+using Bond.Parser.CodeGeneration;
+
+namespace Bond.Parser.Tests;
+
+public sealed class MsBuildGenerationTests(MsBuildPackageFixture packages) : IClassFixture<MsBuildPackageFixture>
+{
+    [Fact]
+    public async Task DemoUsesThePackagedBuildIntegration()
+    {
+        var project = packages.CreateConsumer();
+        project.Write("Demo.bond", packages.ReadExample("Demo.bond"));
+        project.Write("Demo.Shared.bond", packages.ReadExample("Demo.Shared.bond"));
+        project.Write("Program.cs", packages.ReadExample("Demo/Program.cs"));
+        project.Write("BondTypeAliasConverter.cs", packages.ReadExample("Demo/BondTypeAliasConverter.cs"));
+        project.Configure(
+            new XElement("Bond", new XAttribute("Include", "Demo*.bond"),
+                new XAttribute("Descriptors", "true"), new XAttribute("Clone", "true"),
+                new XAttribute("Equality", "true"), new XAttribute("Debugger", "true")),
+            new XElement("BondNamespaceMapping", new XAttribute("Include", "Demo.Contracts=Demo.Generated")),
+            new XElement("BondTypeMapping", new XAttribute("Include", "demo.Timestamp=System.DateTime")),
+            new XElement("BondUsing", new XAttribute("Include", "System.Collections.Generic")));
+        (await project.Build()).AssertSuccess();
+        Assert.Equal(2, project.GeneratedFiles().Length);
+        var run = await project.Run();
+        run.AssertSuccess();
+        Assert.Contains("demo.OrderCreated", run.Output);
+        Assert.Contains("Debugger fields: 15", run.Output);
+    }
+
+    [Fact]
+    public async Task PackagedBuildGeneratesDocumentedRichModelsAndSkipsUnchangedInputs()
+    {
+        var project = packages.CreateConsumer();
+        project.Write("Schemas/item.bond", """
+            namespace Contracts
+            // An item <with> documentation & details.
+            struct Item {
+                // The item identifier.
+                0: int32 id;
+                1: vector<int32> values;
+            }
+            """);
+        project.Write("Program.cs", """
+            using Application;
+            using Bond.IO.Safe;
+            using Bond.Protocols;
+            using BondTools.Models;
+            var item = new Item { id = 42 };
+            item.values.Add(3);
+            var copy = item.Clone();
+            if (ReferenceEquals(item.values, copy.values) || !item.Equals(copy))
+                throw new Exception("Cloning did not copy model values.");
+            if (ItemSchema.Descriptor.FullName != "Contracts.Item")
+                throw new Exception("Namespace mapping changed IDL metadata.");
+            var output = new OutputBuffer();
+            Bond.Serialize.To(new CompactBinaryWriter<OutputBuffer>(output, 2), item);
+            var decoded = Bond.Deserialize<Item>.From(new CompactBinaryReader<InputBuffer>(new InputBuffer(output.Data), 2));
+            if (!item.Equals(decoded) || new GeneratedModelDebugView(item).Fields.Length != 2)
+                throw new Exception("Generated models did not retain runtime behavior.");
+            Console.WriteLine("consumer succeeded");
+            """);
+        project.Configure(
+            new XElement("Bond", new XAttribute("Include", "Schemas/item.bond"),
+                new XAttribute("Descriptors", "true"), new XAttribute("Clone", "true"),
+                new XAttribute("Equality", "true"), new XAttribute("Debugger", "true")),
+            new XElement("BondUsing", new XAttribute("Include", "System.Collections.Generic")),
+            new XElement("BondNamespaceMapping", new XAttribute("Include", "Contracts=Application")));
+
+        var first = await project.Build();
+        first.AssertSuccess();
+        var outputFile = Assert.Single(project.GeneratedFiles());
+        var code = await File.ReadAllTextAsync(outputFile, TestContext.Current.CancellationToken);
+        Assert.Contains("using System.Collections.Generic;", code);
+        Assert.Contains("///", code);
+        var documentation = XDocument.Load(project.Binary("Consumer.xml"));
+        Assert.Equal("An item <with> documentation & details.",
+            documentation.Descendants("member").Single(member => (string?)member.Attribute("name") == "T:Application.Item")
+                .Element("summary")!.Value.Trim());
+        var run = await project.Run();
+        run.AssertSuccess();
+        Assert.Contains("consumer succeeded", run.Output);
+
+        var timestamp = File.GetLastWriteTimeUtc(outputFile);
+        var second = await project.Build();
+        second.AssertSuccess();
+        Assert.Contains("up-to-date", second.Output, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(timestamp, File.GetLastWriteTimeUtc(outputFile));
+        Assert.Equal(code, await File.ReadAllTextAsync(outputFile, TestContext.Current.CancellationToken));
+
+        File.Delete(outputFile);
+        (await project.Build()).AssertSuccess();
+        Assert.True(File.Exists(outputFile));
+        Assert.Equal(code, await File.ReadAllTextAsync(outputFile, TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task ImportClosureSearchPrecedenceAndOptionsInvalidateGeneration()
+    {
+        var project = packages.CreateConsumer();
+        project.Write("Schemas/root.bond", """
+            import "wrapper.bond"
+            namespace Contracts
+            struct Root { 0: Value value; }
+            """);
+        project.Write("Imports/wrapper.bond", "import \"nested/value.bond\"\nnamespace Contracts");
+        project.Write("Imports/nested/value.bond", "namespace Contracts using Value = int32;");
+        project.Configure(
+            new XElement("Bond", new XAttribute("Include", "Schemas/root.bond")),
+            new XElement("BondImportDirectory", new XAttribute("Include", "Imports")));
+        (await project.Build()).AssertSuccess();
+        var generated = Assert.Single(project.GeneratedFiles());
+        Assert.Contains("public int value", File.ReadAllText(generated));
+
+        project.Write("Imports/nested/value.bond", "namespace Contracts using Value = int64;");
+        var changedImport = await project.Build();
+        changedImport.AssertSuccess();
+        Assert.Contains("public long value", File.ReadAllText(generated));
+
+        project.Write("Schemas/wrapper.bond", "namespace Contracts using Value = string;");
+        (await project.Build()).AssertSuccess();
+        Assert.Contains("public string value", File.ReadAllText(generated));
+        File.Delete(Path.Combine(project.Root, "Schemas/wrapper.bond"));
+        (await project.Build()).AssertSuccess();
+        Assert.Contains("public long value", File.ReadAllText(generated));
+
+        project.Configure(
+            new XElement("Bond", new XAttribute("Include", "Schemas/root.bond"),
+                new XAttribute("Descriptors", "true")),
+            new XElement("BondImportDirectory", new XAttribute("Include", "Imports")),
+            new XElement("BondUsing", new XAttribute("Include", "System.Text")));
+        (await project.Build()).AssertSuccess();
+        Assert.Contains("class RootSchema", File.ReadAllText(generated));
+        Assert.Contains("using System.Text;", File.ReadAllText(generated));
+    }
+
+    [Fact]
+    public async Task EqualBasenamesRemovalAndCleanOnlyAffectOwnedOutputs()
+    {
+        var project = packages.CreateConsumer();
+        project.Write("One/model.bond", "namespace One struct First { 0: int32 id; }");
+        project.Write("Two/model.bond", "namespace Two struct Second { 0: int32 id; }");
+        project.Configure(new XElement("Bond", new XAttribute("Include", "**/*.bond")));
+        (await project.Build()).AssertSuccess();
+        var generated = project.GeneratedFiles();
+        Assert.Equal(2, generated.Length);
+        Assert.All(generated, path => Assert.StartsWith(project.Artifacts, path));
+        var removedOutput = generated.Single(path => File.ReadAllText(path).Contains("class Second", StringComparison.Ordinal));
+        var remainingOutput = generated.Single(path => path != removedOutput);
+        File.Delete(Path.Combine(project.Root, "Two/model.bond"));
+        (await project.Build()).AssertSuccess();
+        Assert.False(File.Exists(removedOutput));
+        Assert.Equal(remainingOutput, Assert.Single(project.GeneratedFiles()));
+
+        project.Configure();
+        (await project.Build()).AssertSuccess();
+        Assert.Empty(project.GeneratedFiles());
+        project.Configure(new XElement("Bond", new XAttribute("Include", "One/model.bond")));
+        (await project.Build()).AssertSuccess();
+        var unrelated = Path.Combine(Path.GetDirectoryName(Assert.Single(project.GeneratedFiles()))!, "keep.txt");
+        File.WriteAllText(unrelated, "not owned by the generator");
+        (await project.Command("clean", project.ProjectFile, "-c", "Debug", "--nologo", "--verbosity", "minimal")).AssertSuccess();
+        Assert.Empty(project.GeneratedFiles());
+        Assert.Equal("not owned by the generator", File.ReadAllText(unrelated));
+    }
+
+    [Fact]
+    public async Task GenerationErrorsPreserveExistingOutputsAndRejectUnownedFiles()
+    {
+        var project = packages.CreateConsumer();
+        project.Write("item.bond", "namespace Contracts struct Item { 0: int32 id; }");
+        project.Configure(new XElement("Bond", new XAttribute("Include", "*.bond")));
+        (await project.Build()).AssertSuccess();
+        var output = Assert.Single(project.GeneratedFiles());
+        var original = File.ReadAllText(output);
+        project.Write("item.bond", "namespace Contracts struct Item { 0: string id; }");
+        project.Write("invalid.bond", "namespace Contracts struct Invalid { 0: Missing value; }");
+        var failure = await project.Build();
+        Assert.NotEqual(0, failure.ExitCode);
+        Assert.Contains("invalid.bond", failure.Output);
+        Assert.Equal(original, File.ReadAllText(output));
+        Assert.Single(project.GeneratedFiles());
+
+        File.Delete(Path.Combine(project.Root, "invalid.bond"));
+        File.WriteAllText(output, "user content");
+        var overwrite = await project.Build();
+        Assert.NotEqual(0, overwrite.ExitCode);
+        Assert.Equal("user content", File.ReadAllText(output));
+    }
+
+    [Fact]
+    public async Task LinkedSchemasKeepImportsRelativeAndValidateItemOptions()
+    {
+        var project = packages.CreateConsumer();
+        var linked = Path.Combine(packages.Root, "external schemas", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(linked);
+        File.WriteAllText(Path.Combine(linked, "root.bond"),
+            "import \"types.bond\"\nnamespace Linked struct Item { 0: Value value; }");
+        File.WriteAllText(Path.Combine(linked, "types.bond"), "namespace Linked using Value = int64;");
+        var relative = Path.GetRelativePath(project.Root, Path.Combine(linked, "root.bond"));
+        project.Configure(new XElement("Bond", new XAttribute("Include", relative),
+            new XAttribute("Link", "Schemas/root.bond")));
+        (await project.Build()).AssertSuccess();
+        var output = Assert.Single(project.GeneratedFiles());
+        Assert.Contains("public long value", File.ReadAllText(output));
+        Assert.Empty(Directory.GetFiles(linked, "*.g.cs", SearchOption.AllDirectories));
+        var assets = File.ReadAllText(Path.Combine(project.Artifacts, "obj", "Consumer", "project.assets.json"));
+        Assert.DoesNotContain("\"BondTools.Models/", assets);
+
+        project.Configure(new XElement("Bond", new XAttribute("Include", relative),
+            new XAttribute("Clone", "not-a-boolean")));
+        var invalid = await project.Build();
+        Assert.NotEqual(0, invalid.ExitCode);
+        Assert.Contains("Clone", invalid.Output);
+    }
+
+    [Fact]
+    public async Task DesignTimeAndTargetFrameworkBuildsHaveIndependentOutputs()
+    {
+        var project = packages.CreateConsumer();
+        project.Write("item.bond", "namespace Contracts struct Item { 0: int32 id; }");
+        project.Configure(new XElement("Bond", new XAttribute("Include", "item.bond")));
+        (await project.Command("restore", project.ProjectFile, "--nologo", "--verbosity", "minimal")).AssertSuccess();
+        (await project.Command("msbuild", project.ProjectFile, "-t:Compile", "-p:DesignTimeBuild=true",
+            "-p:BuildingProject=false", "-nologo", "-verbosity:minimal")).AssertSuccess();
+        Assert.Single(project.GeneratedFiles());
+        (await project.Build()).AssertSuccess();
+
+        var model = XDocument.Load(project.ProjectFile);
+        model.Root!.Element("PropertyGroup")!.Element("TargetFramework")!.ReplaceWith(
+            new XElement("TargetFrameworks", "net8.0;netstandard2.1"));
+        model.Root.Element("PropertyGroup")!.Add(new XElement("LangVersion", "12.0"));
+        model.Save(project.ProjectFile);
+        (await project.Build()).AssertSuccess();
+        var frameworkOutputs = project.GeneratedFiles().Where(path => path.Contains("debug_", StringComparison.Ordinal)).ToArray();
+        Assert.Equal(2, frameworkOutputs.Length);
+        Assert.Contains(frameworkOutputs, path => path.Contains("net8.0", StringComparison.Ordinal));
+        Assert.Contains(frameworkOutputs, path => path.Contains("netstandard2.1", StringComparison.Ordinal));
+    }
+}
+
+public sealed class MsBuildPackageFixture : IAsyncLifetime
+{
+    public string Root { get; private set; } = "";
+    private string _repository = "";
+    private string _version = "";
+    private string _runtimeVersion = "";
+
+    public async ValueTask InitializeAsync()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory != null && !File.Exists(Path.Combine(directory.FullName, "Bond.sln")))
+            directory = directory.Parent;
+        _repository = directory?.FullName ?? throw new DirectoryNotFoundException("Repository root not found.");
+        Root = Path.Combine(_repository, "out", "build integration", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Root);
+        _version = CSharpGenerator.Version;
+        _runtimeVersion = XDocument.Load(Path.Combine(_repository, "Directory.Packages.props"))
+            .Descendants("PackageVersion").Single(item => (string?)item.Attribute("Include") == "Bond.Runtime.CSharp")
+            .Attribute("Version")!.Value;
+        var configuration = new DirectoryInfo(AppContext.BaseDirectory).Name.StartsWith("release", StringComparison.OrdinalIgnoreCase)
+            ? "Release" : "Debug";
+        foreach (var project in new[] { "Bond.Build", "Bond.Models" })
+        {
+            var result = await Execute(_repository, null, "pack",
+                Path.Combine(_repository, project, project + ".csproj"), "-c", configuration, "--no-build",
+                "--no-restore", "-o", Path.Combine(Root, "feed"), "--nologo", "--verbosity", "minimal");
+            result.AssertSuccess();
+        }
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        if (Directory.Exists(Root))
+            Directory.Delete(Root, recursive: true);
+        return ValueTask.CompletedTask;
+    }
+
+    public Consumer CreateConsumer() => new(this, _version, _runtimeVersion);
+    public string ReadExample(string path) => File.ReadAllText(Path.Combine(_repository, "examples", path));
+
+    public sealed class Consumer
+    {
+        private readonly MsBuildPackageFixture _fixture;
+        private readonly string _version;
+        private readonly string _runtimeVersion;
+        public string Root { get; }
+        public string Artifacts => Path.Combine(Root, "out");
+        public string ProjectFile => Path.Combine(Root, "Consumer.csproj");
+
+        internal Consumer(MsBuildPackageFixture fixture, string version, string runtimeVersion)
+        {
+            _fixture = fixture;
+            _version = version;
+            _runtimeVersion = runtimeVersion;
+            Root = Path.Combine(fixture.Root, "consumer " + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(Root);
+            new XDocument(new XElement("Project", new XElement("PropertyGroup",
+                new XElement("ArtifactsPath", Artifacts))))
+                .Save(Path.Combine(Root, "Directory.Build.props"));
+            Write("Directory.Packages.props", "<Project />");
+            new XDocument(new XElement("configuration",
+                new XElement("packageSources", new XElement("clear"),
+                    new XElement("add", new XAttribute("key", "local"), new XAttribute("value", Path.Combine(fixture.Root, "feed"))),
+                    new XElement("add", new XAttribute("key", "nuget.org"), new XAttribute("value", "https://api.nuget.org/v3/index.json"))),
+                new XElement("packageSourceMapping",
+                    new XElement("packageSource", new XAttribute("key", "local"),
+                        new XElement("package", new XAttribute("pattern", "BondTools.*"))),
+                    new XElement("packageSource", new XAttribute("key", "nuget.org"),
+                        new XElement("package", new XAttribute("pattern", "*"))))))
+                .Save(Path.Combine(Root, "NuGet.Config"));
+        }
+
+        public void Write(string path, string content)
+        {
+            var fullPath = Path.Combine(Root, path);
+            Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
+            File.WriteAllText(fullPath, content);
+        }
+
+        public void Configure(params XElement[] items)
+        {
+            var properties = new XElement("PropertyGroup",
+                new XElement("TargetFramework", "net8.0"),
+                new XElement("OutputType", File.Exists(Path.Combine(Root, "Program.cs")) ? "Exe" : "Library"),
+                new XElement("ImplicitUsings", "enable"), new XElement("Nullable", "enable"),
+                new XElement("GenerateDocumentationFile", "true"),
+                new XElement("NoWarn", "CS1591"));
+            var references = new XElement("ItemGroup",
+                new XElement("PackageReference", new XAttribute("Include", "BondTools.Build"), new XAttribute("Version", _version),
+                    new XAttribute("PrivateAssets", "all")),
+                new XElement("PackageReference", new XAttribute("Include", "Bond.Runtime.CSharp"),
+                    new XAttribute("Version", _runtimeVersion)));
+            if (items.Any(item => item.Name == "Bond" &&
+                new[] { "Descriptors", "Clone", "Equality", "Debugger" }.Any(name => (string?)item.Attribute(name) == "true")))
+                references.Add(new XElement("PackageReference", new XAttribute("Include", "BondTools.Models"),
+                    new XAttribute("Version", _version)));
+            new XDocument(new XElement("Project", new XAttribute("Sdk", "Microsoft.NET.Sdk"),
+                properties, references, new XElement("ItemGroup", items))).Save(ProjectFile);
+        }
+
+        public string[] GeneratedFiles() => Directory.Exists(Artifacts)
+            ? Directory.GetFiles(Artifacts, "*.g.cs", SearchOption.AllDirectories)
+                .Where(path => path.Split(Path.DirectorySeparatorChar).Contains("bond")).OrderBy(path => path).ToArray()
+            : [];
+
+        public string Binary(string filename) => Path.Combine(Artifacts, "bin", "Consumer", "debug", filename);
+        public Task<CommandResult> Build() => Command("build", ProjectFile, "-c", "Debug", "--nologo", "--verbosity", "minimal");
+        public Task<CommandResult> Run() => Command(Binary("Consumer.dll"));
+        public Task<CommandResult> Command(params string[] args) => Execute(Root, Path.Combine(_fixture.Root, "packages"), args);
+    }
+
+    public sealed record CommandResult(int ExitCode, string Output)
+    {
+        public void AssertSuccess() => Assert.True(ExitCode == 0, Output);
+    }
+
+    private static async Task<CommandResult> Execute(string directory, string? packages, params string[] arguments)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        timeout.CancelAfter(TimeSpan.FromMinutes(3));
+        var start = new ProcessStartInfo("dotnet")
+        {
+            WorkingDirectory = directory,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+        foreach (var argument in arguments)
+            start.ArgumentList.Add(argument);
+        start.Environment["MSBUILDDISABLENODEREUSE"] = "1";
+        start.Environment["DOTNET_CLI_USE_MSBUILD_SERVER"] = "0";
+        start.Environment["UseSharedCompilation"] = "false";
+        if (packages != null)
+            start.Environment["NUGET_PACKAGES"] = packages;
+        using var process = Process.Start(start) ?? throw new InvalidOperationException("Could not start dotnet.");
+        var stdout = process.StandardOutput.ReadToEndAsync(timeout.Token);
+        var stderr = process.StandardError.ReadToEndAsync(timeout.Token);
+        try
+        {
+            await process.WaitForExitAsync(timeout.Token);
+            return new CommandResult(process.ExitCode, await stdout + await stderr);
+        }
+        catch (OperationCanceledException)
+        {
+            if (!process.HasExited)
+                process.Kill(entireProcessTree: true);
+            throw;
+        }
+    }
+}

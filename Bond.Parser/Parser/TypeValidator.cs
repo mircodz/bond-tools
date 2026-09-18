@@ -6,12 +6,50 @@ namespace Bond.Parser.Parser;
 
 /// <summary>
 /// Validates default values against fully-resolved field types. Callers are
-/// expected to have already unwrapped aliases (see SemanticAnalyzer.UnwrapAlias).
+/// Aliases are expanded with their instantiated type arguments.
 /// </summary>
 public static class TypeValidator
 {
+    public static void ValidateType(BondType type, SourceLocation location)
+    {
+        switch (type)
+        {
+            case BondType.Set set:
+                ValidateKey(set.KeyType, "set", location);
+                break;
+            case BondType.Map map:
+                ValidateKey(map.KeyType, "map", location);
+                ValidateType(map.ValueType, location);
+                break;
+            case BondType.List list: ValidateType(list.ElementType, location); break;
+            case BondType.Vector vector: ValidateType(vector.ElementType, location); break;
+            case BondType.Nullable nullable: ValidateType(nullable.ElementType, location); break;
+            case BondType.Maybe maybe: ValidateType(maybe.ElementType, location); break;
+            case BondType.Bonded bonded:
+                var target = bonded.StructType.ResolveAliases();
+                if (!target.IsStruct() && target is not BondType.TypeParameter)
+                    throw new SemanticErrorException("A bonded type requires a struct", location);
+                ValidateType(target, location);
+                break;
+            case BondType.TypeReference { Declaration: ServiceDeclaration }:
+                throw new SemanticErrorException("A service cannot be used as a field or alias type", location);
+            case BondType.TypeReference reference:
+                foreach (var argument in reference.TypeArguments)
+                    ValidateType(argument, location);
+                break;
+        }
+    }
+
+    private static void ValidateKey(BondType type, string container, SourceLocation location)
+    {
+        if (!type.ResolveAliases().IsValidKeyType())
+            throw new SemanticErrorException($"Invalid {container} key type {type}", location);
+        ValidateType(type, location);
+    }
+
     public static bool ValidateDefaultValue(BondType fieldType, Default? defaultValue)
     {
+        fieldType = fieldType.ResolveAliases();
         if (defaultValue == null) return true;
         if (fieldType is BondType.Maybe or BondType.Nullable) return defaultValue is Default.Nothing;
         if (fieldType is BondType.List or BondType.Set or BondType.Map or BondType.Vector) return defaultValue is Default.Nothing;

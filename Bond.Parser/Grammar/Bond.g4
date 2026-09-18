@@ -65,7 +65,7 @@ enum
     ;
 
 enumConstant
-    : identifier (EQUAL MINUS? INTEGER_LITERAL)?
+    : identifier (EQUAL (MINUS | PLUS)? INTEGER_LITERAL)?
     ;
 
 service
@@ -179,7 +179,7 @@ typeArgs
 
 typeArg
     : type
-    | INTEGER_LITERAL
+    | (MINUS | PLUS)? INTEGER_LITERAL
     ;
 
 typeParameters
@@ -300,14 +300,14 @@ L : 'L';
 
 // Identifiers
 IDENTIFIER
-    : [a-zA-Z_][a-zA-Z0-9_]*
+    : [\p{L}_][\p{L}\p{N}_]*
     ;
 
 // Literals
 INTEGER_LITERAL
     : [0-9]+
-    | '0x' [0-9a-fA-F]+
-    | '0o' [0-7]+
+    | '0' [xX] [0-9a-fA-F]+
+    | '0' [oO] [0-7]+
     ;
 
 FLOAT_LITERAL
@@ -339,5 +339,5 @@ LINE_COMMENT
 
 // Whitespace
 WS
-    : [ \t\r\n]+ -> channel(HIDDEN)
+    : [ \t\r\n\f\u000B\u0085\p{Zs}\p{Zl}\p{Zp}]+ -> channel(HIDDEN)
     ;

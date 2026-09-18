@@ -5,9 +5,9 @@ command -v dotnet >/dev/null || { echo "dotnet missing" >&2; exit 1; }
 
 cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 
-out_dir="TestResults/Coverage"
-report_dir="$out_dir/html"
-rm -rf "$out_dir"
+out_dir="out/test-results/coverage"
+report_dir="out/coverage-report"
+rm -rf "$out_dir" "$report_dir"
 mkdir -p "$out_dir"
 
 dotnet test Bond.Parser.Tests/Bond.Parser.Tests.csproj \

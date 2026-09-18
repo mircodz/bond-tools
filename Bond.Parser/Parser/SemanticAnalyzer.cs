@@ -10,13 +10,8 @@ namespace Bond.Parser.Parser;
 
 /// <summary>
 /// Drives the semantic phase of parsing for a single Bond file:
-///   1. Process imports recursively, populating the shared SymbolTable.
-///   2. Register this file's declarations (structs/enums/services to the table,
-///      aliases to a per-file list).
-///   3. Resolve every UnresolvedType reference to a TypeReference wrapper.
-///   4. Validate the resolved AST.
-/// Validation operates on the resolved AST so checks are pure pattern matches —
-/// no side trips to the symbol table.
+/// Registers the import graph, binds each declaration in its original environment,
+/// and validates the bound graph without adding imports to the root declarations.
 /// </summary>
 public class SemanticAnalyzer
 {
@@ -34,34 +29,50 @@ public class SemanticAnalyzer
 
     public async Task<Syntax.Bond> AnalyzeAsync(Syntax.Bond bond)
     {
+        _symbolTable.ClaimImport(_currentFile);
+        await RegisterFileAsync(bond);
+        var resolved = TypeResolver.Resolve(bond, _symbolTable, _aliases);
+
+        foreach (var declaration in _symbolTable.BoundDeclarations)
+        {
+            try
+            {
+                ValidateDeclaration(declaration);
+                ValidateInheritance(declaration, resolved.ResolvedDeclarations);
+                if (declaration is ForwardDeclaration forward
+                    && resolved.ResolvedDeclarations.FirstOrDefault(d => d.QualifiedName == forward.QualifiedName) is StructDeclaration definition
+                    && !SymbolTable.ParametersMatch(forward.TypeParameters, definition.TypeParameters))
+                    throw new SemanticErrorException($"Type parameters for forward declaration '{forward.Name}' do not match its definition", forward.Location);
+            }
+            catch (SemanticErrorException error)
+            {
+                throw new ParseErrorsException([
+                    new ParseError(error.Message, _symbolTable.GetSourceFile(declaration) ?? _currentFile,
+                        error.Location.Line, error.Location.Column)
+                ]);
+            }
+        }
+        return resolved;
+    }
+
+    private async Task RegisterFileAsync(Syntax.Bond bond)
+    {
         foreach (var import in bond.Imports)
         {
             await ProcessImportAsync(import);
         }
 
-        foreach (var declaration in bond.Declarations)
-        {
-            RegisterDeclaration(declaration);
-        }
-
-        var resolved = TypeResolver.Resolve(bond, _symbolTable, _aliases);
-
-        foreach (var declaration in resolved.Declarations)
-        {
-            ValidateDeclaration(declaration);
-        }
-
-        return resolved;
-    }
-
-    private void RegisterDeclaration(Declaration declaration)
-    {
-        if (declaration is AliasDeclaration alias)
+        foreach (var alias in bond.Declarations.OfType<AliasDeclaration>())
         {
             RegisterAlias(alias);
-            return;
         }
-        _symbolTable.AddDeclaration(declaration);
+
+        foreach (var declaration in bond.Declarations)
+        {
+            _symbolTable.SetContext(declaration, _aliases, _currentFile);
+            if (declaration is not AliasDeclaration)
+                _symbolTable.AddDeclaration(declaration);
+        }
     }
 
     private void RegisterAlias(AliasDeclaration alias)
@@ -72,6 +83,8 @@ public class SemanticAnalyzer
 
         if (duplicate is not null)
         {
+            if (SymbolTable.EquivalentDeclarations(duplicate, alias))
+                return;
             throw new SemanticErrorException($"Duplicate declaration: alias '{alias.Name}' was already declared", alias.Location);
         }
         _aliases.Add(alias);
@@ -86,10 +99,18 @@ public class SemanticAnalyzer
             return;
         }
 
-        var importAst = ParseContent(content, canonicalPath);
-        var analyzer = new SemanticAnalyzer(_symbolTable, _importResolver, canonicalPath);
-        // Resolved AST is discarded — symbols are now in the table for lookups.
-        await analyzer.AnalyzeAsync(importAst);
+        try
+        {
+            var importAst = ParseContent(content, canonicalPath);
+            var analyzer = new SemanticAnalyzer(_symbolTable, _importResolver, canonicalPath);
+            await analyzer.RegisterFileAsync(importAst);
+        }
+        catch (SemanticErrorException error)
+        {
+            throw new ParseErrorsException([
+                new ParseError(error.Message, canonicalPath, error.Location.Line, error.Location.Column)
+            ]);
+        }
     }
 
     private static Syntax.Bond ParseContent(string content, string filePath)
@@ -100,17 +121,18 @@ public class SemanticAnalyzer
         var parser = new BondParser(tokenStream);
 
         var errorListener = new ErrorListener(filePath);
+        lexer.RemoveErrorListeners();
+        lexer.AddErrorListener(errorListener);
         parser.RemoveErrorListeners();
         parser.AddErrorListener(errorListener);
 
         var parseTree = parser.bond();
         if (errorListener.Errors.Count > 0)
         {
-            var first = errorListener.Errors.First();
-            throw new InvalidOperationException($"{first.Message} (imported from {filePath}:{first.Line}:{first.Column})");
+            throw new ParseErrorsException(errorListener.Errors);
         }
 
-        var astBuilder = new AstBuilder();
+        var astBuilder = new AstBuilder(tokenStream);
         return (Syntax.Bond)astBuilder.Visit(parseTree)!;
     }
 
@@ -119,6 +141,7 @@ public class SemanticAnalyzer
         switch (declaration)
         {
             case StructDeclaration structDecl: ValidateStruct(structDecl); break;
+            case AliasDeclaration alias: TypeValidator.ValidateType(alias.AliasedType, alias.Location); break;
             case EnumDeclaration enumDecl: ValidateEnum(enumDecl); break;
             case ServiceDeclaration serviceDecl: ValidateService(serviceDecl); break;
         }
@@ -128,6 +151,12 @@ public class SemanticAnalyzer
     {
         CheckForDuplicates(structDecl.Fields.Select(f => f.Ordinal), $"Struct '{structDecl.Name}'", "field ordinal", structDecl.Location);
         CheckForDuplicates(structDecl.Fields.Select(f => f.Name), $"Struct '{structDecl.Name}'", "field name", structDecl.Location);
+
+        if (structDecl.BaseType is { } baseType && !baseType.ResolveAliases().IsStruct()
+            && baseType.ResolveAliases() is not BondType.TypeParameter)
+            throw new SemanticErrorException($"Struct '{structDecl.Name}' must inherit from a struct", structDecl.Location);
+        if (structDecl.BaseType is not null)
+            TypeValidator.ValidateType(structDecl.BaseType, structDecl.Location);
 
         foreach (var field in structDecl.Fields)
         {
@@ -149,17 +178,62 @@ public class SemanticAnalyzer
             throw new SemanticErrorException($"Service '{serviceDecl.Name}' cannot inherit from type parameter", serviceDecl.Location);
         }
 
-        if (serviceDecl.BaseType is not null && UnwrapAlias(serviceDecl.BaseType).IsStruct())
+        if (serviceDecl.BaseType is not null && serviceDecl.BaseType.ResolveAliases() is not BondType.TypeReference { Declaration: ServiceDeclaration })
         {
             throw new SemanticErrorException($"Service '{serviceDecl.Name}' cannot inherit from struct", serviceDecl.Location);
         }
 
-        foreach (var method in serviceDecl.Methods.OfType<EventMethod>())
+        foreach (var method in serviceDecl.Methods)
         {
-            if (method.InputType is MethodType.Streaming)
+            switch (method)
             {
-                throw new SemanticErrorException($"Event method '{method.Name}' cannot have streaming input", serviceDecl.Location);
+                case FunctionMethod function:
+                    ValidateMethodType(function.InputType, function.Location);
+                    ValidateMethodType(function.ResultType, function.Location);
+                    break;
+                case EventMethod eventMethod:
+                    ValidateMethodType(eventMethod.InputType, eventMethod.Location);
+                    break;
             }
+            if (method is EventMethod { InputType: MethodType.Streaming })
+            {
+                throw new SemanticErrorException($"Event method '{method.Name}' cannot have streaming input", method.Location);
+            }
+        }
+    }
+
+    private static void ValidateMethodType(MethodType type, SourceLocation location)
+    {
+        var value = type switch
+        {
+            MethodType.Unary unary => unary.Type,
+            MethodType.Streaming streaming => streaming.Type,
+            _ => null
+        };
+        if (value is null) return;
+        TypeValidator.ValidateType(value, location);
+        if (!value.ResolveAliases().IsStruct() && value.ResolveAliases() is not BondType.TypeParameter)
+            throw new SemanticErrorException("A service method requires a struct type", location);
+    }
+
+    private static void ValidateInheritance(Declaration declaration, Declaration[] environment)
+    {
+        var visited = new HashSet<string>();
+        var current = declaration;
+        while (current is StructDeclaration or ServiceDeclaration)
+        {
+            if (!visited.Add(current.QualifiedName))
+                throw new SemanticErrorException($"Cyclic inheritance involving '{current.Name}'", declaration.Location);
+            var baseType = current switch
+            {
+                StructDeclaration structure => structure.BaseType,
+                ServiceDeclaration service => service.BaseType,
+                _ => null
+            };
+            if (baseType?.ResolveAliases() is not BondType.TypeReference reference)
+                return;
+            current = environment.FirstOrDefault(d => d.QualifiedName == reference.Declaration.QualifiedName)
+                ?? reference.Declaration;
         }
     }
 
@@ -174,16 +248,8 @@ public class SemanticAnalyzer
 
     private static void ValidateField(Field field)
     {
-        var unwrapped = UnwrapAlias(field.Type);
-
-        if (unwrapped is BondType.Set set && !UnwrapAlias(set.KeyType).IsValidKeyType())
-        {
-            throw new SemanticErrorException($"Field '{field.Name}' has invalid set key type {set.KeyType}", field.Location);
-        }
-        if (unwrapped is BondType.Map map && !UnwrapAlias(map.KeyType).IsValidKeyType())
-        {
-            throw new SemanticErrorException($"Field '{field.Name}' has invalid map key type {map.KeyType}", field.Location);
-        }
+        var unwrapped = field.Type.ResolveAliases();
+        TypeValidator.ValidateType(field.Type, field.Location);
 
         if (!TypeValidator.ValidateDefaultValue(unwrapped, field.DefaultValue))
         {
@@ -196,7 +262,7 @@ public class SemanticAnalyzer
         }
 
         // Structs cannot have default 'nothing' even when wrapped in Maybe.
-        if (field.DefaultValue is Default.Nothing && UnwrapAlias(UnwrapMaybe(field.Type)).IsStruct())
+        if (field.DefaultValue is Default.Nothing && UnwrapMaybe(unwrapped).ResolveAliases().IsStruct())
         {
             throw new SemanticErrorException($"Struct field '{field.Name}' cannot have default value of 'nothing'", field.Location);
         }
@@ -205,10 +271,4 @@ public class SemanticAnalyzer
     private static BondType UnwrapMaybe(BondType type) =>
         type is BondType.Maybe maybe ? maybe.ElementType : type;
 
-    // Validation works on the unwrapped form so `using Latency = int32` and
-    // `int32` behave identically.
-    private static BondType UnwrapAlias(BondType type) =>
-        type is BondType.TypeReference { Declaration: AliasDeclaration alias }
-            ? UnwrapAlias(alias.AliasedType)
-            : type;
 }

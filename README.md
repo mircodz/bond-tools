@@ -4,19 +4,22 @@
     <img src="https://count.getloli.com/get/@mircodz-bond-tools?theme=asoul&padding=3" /><br>
 </div>
 
-## Quick Start
-
 ```bash
 dotnet tool install -g bond-tools
-```
-
-Once installed, use the `bond` command:
-
-```bash
-bond parse schema.bond
 bond breaking schema.bond --against .git#branch=main --error-format=json
-bond breaking examples/catalog_v2.bond --against examples/catalog_v1.bond --error-format=json | jq .
-bond breaking schema.bond --against .git#branch=main --ignore-imports
 bond format schema.bond
 bond format schema.bond --check
 ```
+
+## C# generation
+
+```bash
+bond generate csharp MyApp/order.bond -o MyApp/Generated \
+  --descriptors --clone --equality --debugger
+```
+
+Requires `Bond.Runtime.CSharp`; the optional flags also require a matching
+[`BondTools.Models`](Bond.Models/README.md) version.
+See `bond generate csharp --help` for imports and mappings.
+
+For automatic `.csproj` generation, use [`BondTools.Build`](Bond.Build/README.md).

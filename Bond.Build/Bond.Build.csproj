@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <AssemblyName>Bond.Build</AssemblyName>
+    <RootNamespace>BondTools.Build</RootNamespace>
+    <IsPackable>true</IsPackable>
+    <PackageId>BondTools.Build</PackageId>
+    <Authors>Mirco De Zorzi</Authors>
+    <Description>Project-local MSBuild integration for the Bond C# compiler.</Description>
+    <PackageTags>bond;codegen;msbuild</PackageTags>
+    <DevelopmentDependency>true</DevelopmentDependency>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageLicenseFile>LICENSE</PackageLicenseFile>
+    <BuildOutputTargetFolder>tasks</BuildOutputTargetFolder>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <SuppressDependenciesWhenPacking>true</SuppressDependenciesWhenPacking>
+    <NoWarn>$(NoWarn);NU5100</NoWarn>
+    <TargetsForTfmSpecificContentInPackage>$(TargetsForTfmSpecificContentInPackage);_PackBondTaskDependencies</TargetsForTfmSpecificContentInPackage>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Build.Framework" PrivateAssets="all" ExcludeAssets="runtime" />
+    <PackageReference Include="Microsoft.Build.Utilities.Core" PrivateAssets="all" ExcludeAssets="runtime" />
+    <ProjectReference Include="../Bond.Parser/Bond.Parser.csproj" PrivateAssets="all" />
+    <None Include="build/BondTools.Build.props" Pack="true" PackagePath="build/" />
+    <None Include="build/BondTools.Build.targets" Pack="true" PackagePath="build/" />
+    <None Include="README.md" Pack="true" PackagePath="/" />
+    <None Include="../LICENSE" Pack="true" PackagePath="/" />
+  </ItemGroup>
+
+  <Target Name="_PackBondTaskDependencies">
+    <ItemGroup>
+      <TfmSpecificPackageFile Include="$(TargetDir)Bond.Parser.dll;$(TargetDir)Antlr4.Runtime.Standard.dll">
+        <PackagePath>tasks/net8.0/</PackagePath>
+      </TfmSpecificPackageFile>
+    </ItemGroup>
+  </Target>
+</Project>

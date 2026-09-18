@@ -8,6 +8,10 @@ permissions:
   id-token: write
   packages: write
 
+concurrency:
+  group: release-${{ github.repository }}
+  cancel-in-progress: false
+
 jobs:
   tag-and-publish:
     if: github.actor == 'mircodz'
@@ -15,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       VERSION_FILE: version
-      OUT_DIR: artifacts/nupkg
+      OUT_DIR: out/package/release
       OWNER: ${{ github.repository_owner }}
     steps:
       - name: Checkout
@@ -25,21 +29,18 @@ jobs:
 
       - name: Read version
         id: version
-        run: echo "VERSION=$(cat $VERSION_FILE)" >> "$GITHUB_OUTPUT"
+        run: |
+          bash scripts/validate-version.sh
+          version="$(tr -d '[:space:]' < "$VERSION_FILE")"
+          printf 'VERSION=%s\n' "$version" >> "$GITHUB_OUTPUT"
+          printf 'VERSION=%s\n' "$version" >> "$GITHUB_ENV"
 
       - name: Ensure tag does not already exist
         run: |
-          if git rev-parse "${{ steps.version.outputs.VERSION }}" >/dev/null 2>&1; then
-            echo "Tag ${{ steps.version.outputs.VERSION }} already exists. Bump the version file." >&2
+          if git show-ref --verify --quiet "refs/tags/$VERSION"; then
+            echo "Tag $VERSION already exists. Bump the version file." >&2
             exit 1
           fi
-
-      - name: Create and push tag
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag -a "${{ steps.version.outputs.VERSION }}" -m "Release ${{ steps.version.outputs.VERSION }}"
-          git push origin "${{ steps.version.outputs.VERSION }}"
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
@@ -49,8 +50,20 @@ jobs:
       - name: Restore
         run: dotnet restore
 
+      - name: Build and test
+        run: |
+          dotnet build Bond.sln -c Release --no-restore
+          dotnet test Bond.Parser.Tests/Bond.Parser.Tests.csproj -c Release --no-build --no-restore
+
       - name: Pack
-        run: dotnet pack Bond.sln -c Release -o $OUT_DIR /p:Version=${{ steps.version.outputs.VERSION }}
+        run: dotnet pack Bond.sln -c Release --no-build --no-restore /p:Version="$VERSION"
+
+      - name: Upload packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: nuget-packages
+          path: out/package/release/
+          if-no-files-found: error
 
       - name: NuGet login
         id: nuget_login
@@ -73,4 +86,12 @@ jobs:
           dotnet nuget push "$OUT_DIR"/*.nupkg \
             --source "https://nuget.pkg.github.com/${OWNER}/index.json" \
             --api-key "$GITHUB_TOKEN" \
-            --skip-duplicate
+            --skip-duplicate \
+            --no-symbols
+
+      - name: Create and push tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$VERSION" -m "Release $VERSION"
+          git push origin "refs/tags/$VERSION"
