@@ -1,4 +1,4 @@
-.PHONY: help build test clean pack install uninstall coverage format
+.PHONY: help build build-release test clean pack install uninstall coverage format
 
 # Variables
 VERSION := $(shell cat version)
@@ -14,12 +14,10 @@ help: ## Show this help message
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-20s %s\n", $$1, $$2}'
 
 build: ## Build the project in Debug mode
-	dotnet build Bond.Parser/Bond.Parser.csproj -c Debug
-	dotnet build Bond.Parser.CLI/Bond.Parser.CLI.csproj -c Debug
+	dotnet build Bond.sln -c Debug
 
 build-release: ## Build the project in Release mode
-	dotnet build Bond.Parser/Bond.Parser.csproj -c Release
-	dotnet build Bond.Parser.CLI/Bond.Parser.CLI.csproj -c Release
+	dotnet build Bond.sln -c Release
 
 test: ## Run all tests
 	dotnet test Bond.Parser.Tests/Bond.Parser.Tests.csproj
@@ -32,11 +30,10 @@ clean: ## Clean build artifacts
 	rm -rf $(OUT_DIR)
 	rm -rf */bin */obj
 
-pack: clean build-release ## Pack the CLI tool as a NuGet package
-	dotnet pack Bond.Models/Bond.Models.csproj -c Release /p:Version=$(VERSION)
-	dotnet pack Bond.Parser.CLI/Bond.Parser.CLI.csproj -c Release /p:Version=$(VERSION)
+pack: build-release ## Pack the tool, parser, and model-support libraries
+	dotnet pack Bond.sln -c Release --no-build --no-restore /p:Version=$(VERSION)
 	@echo ""
-	@echo "Package created: $(NUPKG_DIR)/$(PKG_ID).$(VERSION).nupkg"
+	@echo "Packages created in $(NUPKG_DIR)"
 
 install: pack ## Install the tool globally
 	dotnet tool uninstall -g $(PKG_ID) 2>/dev/null || true

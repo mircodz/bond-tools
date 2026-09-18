@@ -75,6 +75,58 @@ public sealed class CSharpMappingFeatureTests
         Assert.Contains("\"qualified_name\":\"Contracts.Item\"", SchemaJson(type));
     }
 
+    [Theory]
+    [InlineData(CSharpModelFeatures.None)]
+    [InlineData(CSharpModelFeatures.All)]
+    public async Task UsingNamespacesAreEmittedOnceBeforeDeclarations(CSharpModelFeatures features)
+    {
+        var result = await GenerateResult("namespace Example struct Item { 0: int32 id; }",
+            new CSharpGenerationOptions
+            {
+                ModelFeatures = features,
+                UsingNamespaces = ["System.Text", " System.Collections.Generic ", "System.Text", "Example.event"]
+            });
+        Assert.True(result.Success, Messages(result));
+        Assert.NotNull(result.Code);
+        Assert.Equal(new[]
+        {
+            "using System.Text;",
+            "using System.Collections.Generic;",
+            "using Example.@event;"
+        }, result.Code.Split('\n').Where(line => line.StartsWith("using ", StringComparison.Ordinal)));
+        Assert.True(result.Code.IndexOf("using System.Text;", StringComparison.Ordinal)
+            < result.Code.IndexOf("namespace Example", StringComparison.Ordinal));
+        Compile(result.Code + """
+
+            namespace Example.@event { public sealed class Marker {} }
+            namespace Consumer {
+                public static class Imports {
+                    public static List<StringBuilder> Values { get; } = new();
+                    public static Marker Value { get; } = new();
+                }
+            }
+            """);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(" ")]
+    [InlineData(".System")]
+    [InlineData("System..Text")]
+    [InlineData("System.Text.")]
+    [InlineData("System;")]
+    [InlineData("System\nclass Injected{}")]
+    [InlineData("Alias=System.Text")]
+    [InlineData("static System.Math")]
+    public async Task InvalidUsingNamespacesFailBeforeEmittingCode(string name)
+    {
+        var result = await GenerateResult("namespace Example struct Item {}",
+            new CSharpGenerationOptions { UsingNamespaces = [name] });
+        Assert.False(result.Success);
+        Assert.Null(result.Code);
+        Assert.NotEmpty(result.Errors);
+    }
+
     [Fact]
     public async Task MappedDefaultsUseExplicitConvertersAndKeepTheWireSchema()
     {
@@ -228,7 +280,6 @@ public sealed class CSharpMappingFeatureTests
     [InlineData("--equality", CSharpModelFeatures.Equality)]
     [InlineData("--default-equals", CSharpModelFeatures.Equality)]
     [InlineData("--debugger", CSharpModelFeatures.Debugger)]
-    [InlineData("--model-features=all", CSharpModelFeatures.All)]
     public async Task CliFlagsSelectOnlyRequestedFeatures(string flag, CSharpModelFeatures features)
     {
         var root = NewTestDirectory();
@@ -263,11 +314,76 @@ public sealed class CSharpMappingFeatureTests
         }
     }
 
+    [Fact]
+    public async Task CliCombinesExplicitFeaturesWithUsingsAndSeparateTypeMappingsForEveryInput()
+    {
+        var root = NewTestDirectory();
+        try
+        {
+            var input = Path.Combine(root, "item.bond");
+            var otherInput = Path.Combine(root, "other.bond");
+            var output = Path.Combine(root, "generated");
+            await File.WriteAllTextAsync(input,
+                "namespace Example using Timestamp = int64; struct Item { 0: Timestamp created; }",
+                TestContext.Current.CancellationToken);
+            await File.WriteAllTextAsync(otherInput, "namespace Example struct Other { 0: int32 id; }",
+                TestContext.Current.CancellationToken);
+            using var standardOutput = new StringWriter();
+            using var standardError = new StringWriter();
+            var exitCode = await GenerateCommand.RunAsync(
+                ["csharp", input, otherInput, "-o", output,
+                    "--descriptors", "--clone", "--equality", "--debugger",
+                    "-u", "System", "--using=System.Collections.Generic", "-u=System",
+                    "--using", "System.Text", "--namespace=Example=Application",
+                    "--type-map=Example.Timestamp=System.DateTime"],
+                standardOutput, standardError, TestContext.Current.CancellationToken);
+            Assert.Equal(0, exitCode);
+            Assert.Empty(standardError.ToString());
+            var sources = new List<string>();
+            foreach (var file in new[] { "item.g.cs", "other.g.cs" })
+            {
+                var code = await File.ReadAllTextAsync(Path.Combine(output, file),
+                    TestContext.Current.CancellationToken);
+                Assert.Equal(new[] { "using System;", "using System.Collections.Generic;", "using System.Text;" },
+                    code.Split('\n').Where(line => line.StartsWith("using ", StringComparison.Ordinal)));
+                sources.Add(code);
+            }
+            sources.Add("""
+                namespace Application {
+                    public static class BondTypeAliasConverter {
+                        public static System.DateTime Convert(long value, System.DateTime unused) =>
+                            System.DateTime.UnixEpoch.AddTicks(value);
+                        public static long Convert(System.DateTime value, long unused) =>
+                            (value - System.DateTime.UnixEpoch).Ticks;
+                    }
+                }
+                """);
+            var assembly = Compile(sources.ToArray());
+            foreach (var name in new[] { "Application.Item", "Application.Other" })
+            {
+                var type = assembly.GetType(name, true)!;
+                Assert.True(typeof(IGeneratedModel).IsAssignableFrom(type));
+                Assert.True(typeof(ICloneable).IsAssignableFrom(type));
+                Assert.NotNull(type.GetCustomAttribute<DebuggerTypeProxyAttribute>());
+            }
+            var item = assembly.GetType("Application.Item", true)!;
+            Assert.Equal(typeof(DateTime), item.GetProperty("created")!.PropertyType);
+            Assert.Equal(DateTime.UnixEpoch, item.GetProperty("created")!.GetValue(Activator.CreateInstance(item)));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Theory]
     [InlineData("--clone=false")]
-    [InlineData("--model-features=unknown")]
+    [InlineData("--model-features=all")]
+    [InlineData("--model-features=none")]
     [InlineData("--namespace=Example")]
     [InlineData("--type-map=Example.Value=System.String;bad")]
+    [InlineData("--using=Example.Value=System.String")]
+    [InlineData("-u=System;class Injected{}")]
     public async Task CliReportsInvalidFeatureOrMappingAsJsonWithoutWriting(string flag)
     {
         var root = NewTestDirectory();

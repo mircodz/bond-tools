@@ -255,9 +255,22 @@ public sealed class CSharpGeneratorTests
         var first = CSharpGenerator.Generate(parsed.Ast!, "/one/item.bond");
         var second = CSharpGenerator.Generate(parsed.Ast!, "/another/item.bond");
         Assert.Equal(first.Code, second.Code);
+        Assert.NotNull(first.Code);
+        Assert.Equal($"{CSharpGenerator.GeneratedHeader}\n// bond-tools {CSharpGenerator.Version}\n",
+            first.Code[..first.Code.IndexOf("#nullable", StringComparison.Ordinal)]);
+        Assert.DoesNotContain("BondTools.Models", first.Code!);
         Assert.DoesNotContain("\r", first.Code!);
         Assert.True(first.Code!.IndexOf("Bond.Id(1)", StringComparison.Ordinal)
             < first.Code.IndexOf("Bond.Id(9)", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task RichOutputIdentifiesItsMatchingSupportPackage()
+    {
+        var code = await Generate("namespace Example struct Item { 0: int32 id; }");
+        Assert.Equal($"{CSharpGenerator.GeneratedHeader}\n// bond-tools {CSharpGenerator.Version}\n" +
+            $"// BondTools.Models {CSharpGenerator.Version}\n",
+            code[..code.IndexOf("#nullable", StringComparison.Ordinal)]);
     }
 
     [Theory]

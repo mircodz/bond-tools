@@ -101,6 +101,7 @@ public static class GenerateCommand
                 }
                 var result = CSharpGenerator.Generate(parsed.Ast!, input, new CSharpGenerationOptions
                 {
+                    UsingNamespaces = options.UsingNamespaces,
                     NamespaceMappings = options.NamespaceMappings,
                     TypeMappings = options.TypeMappings,
                     ModelFeatures = options.ModelFeatures
@@ -224,6 +225,7 @@ public static class GenerateCommand
         public List<string> Inputs { get; } = [];
         public string? OutputDirectory { get; set; }
         public List<string> ImportDirectories { get; } = [];
+        public List<string> UsingNamespaces { get; } = [];
         public List<string> NamespaceMappings { get; } = [];
         public List<string> TypeMappings { get; } = [];
         public CSharpModelFeatures ModelFeatures { get; set; }
@@ -238,7 +240,6 @@ public static class GenerateCommand
         var positionalOnly = false;
         var seenOutput = false;
         var seenFormat = false;
-        var seenFeatures = false;
         void Error(string message) => options.Errors.Add(new ParseError(message, "bond", 0, 0));
 
         for (var i = 0; i < args.Length; i++)
@@ -273,7 +274,7 @@ public static class GenerateCommand
                     continue;
                 }
                 if (name is not ("-o" or "--output-dir" or "-I" or "--import-dir" or "--error-format"
-                    or "-n" or "--namespace" or "-u" or "--using" or "--type-map" or "--model-features"))
+                    or "-n" or "--namespace" or "-u" or "--using" or "--type-map"))
                 {
                     Error($"Unknown option '{name}'.");
                     continue;
@@ -310,14 +311,11 @@ public static class GenerateCommand
                     case "-n" or "--namespace":
                         options.NamespaceMappings.Add(value);
                         break;
-                    case "-u" or "--using" or "--type-map":
-                        options.TypeMappings.Add(value);
+                    case "-u" or "--using":
+                        options.UsingNamespaces.Add(value);
                         break;
-                    case "--model-features":
-                        if (seenFeatures) Error("Option '--model-features' may only be specified once.");
-                        seenFeatures = true;
-                        if (value == "all") options.ModelFeatures |= CSharpModelFeatures.All;
-                        else if (value != "none") Error($"Unsupported model features '{value}'; expected 'all' or 'none'.");
+                    case "--type-map":
+                        options.TypeMappings.Add(value);
                         break;
                     case "--error-format":
                         if (seenFormat) Error("Option '--error-format' may only be specified once.");
@@ -345,6 +343,8 @@ public static class GenerateCommand
     }
 
     private const string GenerateHelp = """
+        C# model generation.
+
         Usage: bond generate csharp <file.bond>... -o <output-dir> [options]
 
         Generate model-only C# code requiring Bond.Runtime.CSharp.
@@ -353,6 +353,8 @@ public static class GenerateCommand
         """;
 
     private const string CSharpHelp = """
+        C# model generation.
+
         Usage: bond generate csharp <file.bond>... -o <output-dir> [options]
 
         Generate model-only C# code requiring Bond.Runtime.CSharp.
@@ -363,12 +365,12 @@ public static class GenerateCommand
           -o, --output-dir <directory>  Required output directory
           -I, --import-dir <directory>  Import search directory (repeatable, searched in order)
           -n, --namespace <from=to>     Map an exact C# namespace (repeatable)
-          --type-map <alias=CLR-type>   Map an IDL alias to a CLR type (repeatable; aliases: -u, --using)
+          -u, --using <namespace>       Add a C# using directive (repeatable)
+          --type-map <alias=CLR-type>   Map an IDL alias to a CLR type (repeatable)
           --descriptors                 Emit reflection-free schema descriptors
           --clone, --clonable           Emit deep cloning methods
           --equality, --default-equals  Emit structural equality and hashing
           --debugger                    Emit safe debugger displays and field views
-          --model-features <all|none>   Enable all features, or keep explicit selections (default: none)
           --error-format <text|json>    Diagnostics on stderr (default: text)
           -h, --help                    Show this help
           --                            Treat remaining arguments as positional inputs
@@ -379,6 +381,8 @@ public static class GenerateCommand
         and bond_meta fields. Services produce no C# RPC types, matching gbc.
         No protocol selection or serializer code is generated.
         Plain models are the default. Enabling any model feature requires BondTools.Models.
+        Use the BondTools.Models version shown in the generated header; bond --version
+        reports the tool version. Model support is a separate package, not a serializer.
         Individual feature flags are additive. Cloning and equality may materialize bonded<T>
         payloads; debugger inspection never does. External CLR types may require typed adapters.
         Type mappings use qualified IDL alias names (or a local alias name) and qualified CLR

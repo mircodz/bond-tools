@@ -5,6 +5,7 @@ using System.Linq;
 using Bond.Parser.Parser;
 using Bond.Parser.Formatting;
 using Bond.Parser.Compatibility;
+using Bond.Parser.CodeGeneration;
 using Bond.Parser.Json;
 using System.Text.Json;
 using System.Threading;
@@ -18,6 +19,11 @@ public static class Program
 
     static async Task<int> Main(string[] args)
     {
+        if (args.Length == 1 && args[0] == "--version")
+        {
+            Console.WriteLine(CSharpGenerator.Version);
+            return 0;
+        }
         if (args.Length > 0 && args[0].Equals("generate", StringComparison.OrdinalIgnoreCase))
         {
             return await GenerateCommand.RunAsync(args[1..], Console.Out, Console.Error);
@@ -541,6 +547,7 @@ public static class Program
         Console.WriteLine();
         Console.WriteLine("Global Options:");
         Console.WriteLine("  -h, --help                 Show this help message");
+        Console.WriteLine("  --version                  Show the package version");
     }
 
     /// <summary>

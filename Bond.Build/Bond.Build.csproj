@@ -1,0 +1,44 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <AssemblyName>BondTools.Build</AssemblyName>
+    <RootNamespace>BondTools.Build</RootNamespace>
+    <IsPackable>true</IsPackable>
+    <PackageId>BondTools.Build</PackageId>
+    <Authors>Mirco De Zorzi</Authors>
+    <Description>Project-local MSBuild integration for the Bond C# compiler.</Description>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageLicenseFile>LICENSE</PackageLicenseFile>
+    <BuildOutputTargetFolder>tasks</BuildOutputTargetFolder>
+    <SuppressDependenciesWhenPacking>true</SuppressDependenciesWhenPacking>
+    <TargetsForTfmSpecificContentInPackage>$(TargetsForTfmSpecificContentInPackage);_PackBondCompiler</TargetsForTfmSpecificContentInPackage>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Build.Framework" PrivateAssets="all" ExcludeAssets="runtime" />
+    <PackageReference Include="Microsoft.Build.Utilities.Core" PrivateAssets="all" ExcludeAssets="runtime" />
+    <ProjectReference Include="../Bond.Parser.CLI/Bond.Parser.CLI.csproj"
+                      ReferenceOutputAssembly="false" PrivateAssets="all"
+                      SkipGetTargetFrameworkProperties="true" />
+    <None Include="build/BondTools.Build.props" Pack="true" PackagePath="build/" />
+    <None Include="build/BondTools.Build.targets" Pack="true" PackagePath="build/" />
+    <None Include="README.md" Pack="true" PackagePath="/" />
+    <None Include="../LICENSE" Pack="true" PackagePath="/" />
+  </ItemGroup>
+
+  <Target Name="_PackBondCompiler">
+    <PropertyGroup>
+      <_BondCompilerPublishDirectory>$([System.IO.Path]::Combine('$(MSBuildProjectDirectory)', '$(IntermediateOutputPath)', 'compiler/'))</_BondCompilerPublishDirectory>
+    </PropertyGroup>
+    <MSBuild Projects="../Bond.Parser.CLI/Bond.Parser.CLI.csproj" Targets="Publish"
+             RemoveProperties="TargetFramework;RuntimeIdentifier;RuntimeIdentifiers;SelfContained;PublishSingleFile;PublishTrimmed"
+             Properties="Configuration=$(Configuration);TargetFramework=net8.0;NoBuild=true;BuildProjectReferences=false;UseAppHost=false;SelfContained=false;PublishDir=$(_BondCompilerPublishDirectory)" />
+    <ItemGroup>
+      <TfmSpecificPackageFile Include="$(_BondCompilerPublishDirectory)**/*">
+        <PackagePath>tools/net8.0/any/%(RecursiveDir)</PackagePath>
+      </TfmSpecificPackageFile>
+    </ItemGroup>
+  </Target>
+</Project>

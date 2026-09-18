@@ -5,14 +5,16 @@
     <IsPackable>true</IsPackable>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <PackageId>BondTools.Models</PackageId>
+    <Title>Bond Generated Model Support</Title>
     <RootNamespace>BondTools.Models</RootNamespace>
     <Authors>Mirco De Zorzi</Authors>
-    <Description>Reflection-free schema metadata and generated model support for Bond.</Description>
+    <Description>Support for generated Bond C# descriptors, cloning, equality, and debugger views. This package does not provide serialization.</Description>
+    <PackageTags>bond;codegen;models;metadata</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageLicenseFile>LICENSE</PackageLicenseFile>
   </PropertyGroup>
   <ItemGroup>
-    <None Include="../README.md" Pack="true" PackagePath="/" />
+    <None Update="README.md" Pack="true" PackagePath="/" />
     <None Include="../LICENSE" Pack="true" PackagePath="/" />
   </ItemGroup>
 </Project>

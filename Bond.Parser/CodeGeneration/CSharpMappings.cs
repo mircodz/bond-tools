@@ -12,6 +12,7 @@ public static partial class CSharpGenerator
 {
     private sealed partial class Emitter
     {
+        private readonly List<string> _usingNamespaces = [];
         private readonly Dictionary<string, string[]> _namespaceMappings = new(StringComparer.Ordinal);
         private readonly Dictionary<string, string> _typeMappings = new(StringComparer.Ordinal);
         private int _suppressTypeMappings;
@@ -20,6 +21,16 @@ public static partial class CSharpGenerator
         {
             if ((options.ModelFeatures & ~CSharpModelFeatures.All) != 0)
                 Fail("Unknown C# model feature selection.", default);
+            var usings = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var name in options.UsingNamespaces)
+            {
+                if (string.IsNullOrWhiteSpace(name))
+                    throw new GenerationException("A using namespace cannot be empty.", default);
+                var parts = NamespaceParts(name.Trim());
+                var qualifiedName = string.Join(".", parts.Select(part => Identifier(part, default)));
+                if (usings.Add(qualifiedName))
+                    _usingNamespaces.Add(qualifiedName);
+            }
             foreach (var specification in options.NamespaceMappings)
             {
                 var (source, target) = SplitMapping(specification, "namespace");

@@ -16,6 +16,7 @@ public enum CSharpModelFeatures
 
 public sealed record CSharpGenerationOptions
 {
+    public IReadOnlyList<string> UsingNamespaces { get; init; } = [];
     public IReadOnlyList<string> NamespaceMappings { get; init; } = [];
     public IReadOnlyList<string> TypeMappings { get; init; } = [];
     public CSharpModelFeatures ModelFeatures { get; init; }

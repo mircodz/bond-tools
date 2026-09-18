@@ -16,6 +16,7 @@ public class AstBuilder : BondBaseVisitor<object?>
 {
     private readonly List<Namespace> _currentNamespaces = [];
     private readonly List<TypeParam> _currentTypeParams = [];
+    private readonly HashSet<int> _trailingComments = [];
 
     /// <summary>Token stream used to recover comments from the hidden channel; null disables trivia.</summary>
     private readonly BufferedTokenStream? _tokens;
@@ -72,6 +73,7 @@ public class AstBuilder : BondBaseVisitor<object?>
             {
                 case BondLexer.COMMENT:
                 case BondLexer.LINE_COMMENT:
+                    _trailingComments.Add(token.TokenIndex);
                     return MakeTrivia(token);
                 case BondLexer.SEMI:
                 case BondLexer.COMMA:
@@ -85,7 +87,7 @@ public class AstBuilder : BondBaseVisitor<object?>
         return null;
     }
 
-    private static Trivia[] ToTrivia(IList<IToken>? tokens)
+    private Trivia[] ToTrivia(IList<IToken>? tokens)
     {
         if (tokens is null)
         {
@@ -95,7 +97,8 @@ public class AstBuilder : BondBaseVisitor<object?>
         var result = new List<Trivia>();
         foreach (var token in tokens)
         {
-            if (token.Type is BondLexer.COMMENT or BondLexer.LINE_COMMENT)
+            if (token.Type is BondLexer.COMMENT or BondLexer.LINE_COMMENT
+                && !_trailingComments.Contains(token.TokenIndex))
             {
                 result.Add(MakeTrivia(token));
             }
