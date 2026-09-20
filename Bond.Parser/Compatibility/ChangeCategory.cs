@@ -3,25 +3,25 @@ namespace Bond.Parser.Compatibility;
 public enum ChangeCategory
 {
     /// <summary>
-    /// Compatible with all protocols — safe to deploy without coordination.
+    /// No tagged binary or SimpleJSON contract is broken. Warnings may require coordinated rollout.
     /// </summary>
     Compatible,
 
     /// <summary>
-    /// Breaks binary wire protocols (Compact Binary, Fast Binary, …).
-    /// Fields are identified by ordinal on the wire, so changes to ordinals,
-    /// required-ness, types, defaults, or inheritance all fall here.
+    /// Breaks binary decoding or the interpretation of omitted values.
     /// </summary>
     BreakingWire,
 
     /// <summary>
-    /// Breaks text-based protocols (SimpleJSON, SimpleXML, …) but is safe
-    /// for binary protocols. Field name changes are the primary example:
-    /// binary protocols use ordinals so they are unaffected, but text
-    /// protocols key on the field name.
+    /// Breaks the SimpleJSON contract.
     /// </summary>
     BreakingText,
+
+    /// <summary>The schema cannot be checked reliably.</summary>
+    InvalidSchema,
 }
+
+public enum ChangeSeverity { Info, Warning, Error }
 
 public record SchemaChange(
     ChangeCategory Category,
@@ -30,6 +30,11 @@ public record SchemaChange(
     string? Recommendation = null
 )
 {
+    public string Id { get; init; } = DiagnosticIds.Unclassified;
+    public ChangeSeverity Severity { get; init; } =
+        Category == ChangeCategory.Compatible ? ChangeSeverity.Info : ChangeSeverity.Error;
+    public bool IsSuppressed { get; init; }
+
     public override string ToString()
     {
         var categoryStr = Category switch
@@ -37,10 +42,11 @@ public record SchemaChange(
             ChangeCategory.Compatible    => "COMPATIBLE",
             ChangeCategory.BreakingWire  => "BREAKING-WIRE",
             ChangeCategory.BreakingText  => "BREAKING-TEXT",
+            ChangeCategory.InvalidSchema => "INVALID-SCHEMA",
             _                            => "UNKNOWN"
         };
 
-        var result = $"[{categoryStr}] {Location}: {Description}";
+        var result = $"[{categoryStr}] {Id}{(IsSuppressed ? " (suppressed)" : "")} {Location}: {Description}";
         if (Recommendation != null)
         {
             result += $"\n  → {Recommendation}";

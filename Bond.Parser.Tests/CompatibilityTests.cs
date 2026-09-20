@@ -111,7 +111,7 @@ public class CompatibilityTests
     }
 
     [Fact]
-    public async Task ChangingDefaultValue_IsBreaking()
+    public async Task ChangingAlwaysWrittenDefaultValue_IsCompatible()
     {
         var oldSchema = await ParseSchema("""
             namespace Test
@@ -125,7 +125,7 @@ public class CompatibilityTests
         var changes = _checker.CheckCompatibility(oldSchema, newSchema);
 
         changes.Should().ContainSingle(c =>
-            c.Category == ChangeCategory.BreakingWire &&
+            c.Category == ChangeCategory.Compatible &&
             c.Description.ToLower().Contains("default"));
     }
 
@@ -397,7 +397,7 @@ public class CompatibilityTests
     }
 
     [Fact]
-    public async Task RemovingEnumConstant_IsBreaking()
+    public async Task RemovingEnumConstant_IsCompatible()
     {
         var oldSchema = await ParseSchema("""
             namespace Test
@@ -411,7 +411,7 @@ public class CompatibilityTests
         var changes = _checker.CheckCompatibility(oldSchema, newSchema);
 
         changes.Should().ContainSingle(c =>
-            c.Category == ChangeCategory.BreakingWire &&
+            c.Category == ChangeCategory.Compatible &&
             c.Description.Contains("removed") &&
             c.Description.Contains("Inactive"));
     }
@@ -426,13 +426,13 @@ public class CompatibilityTests
         var oldSchema = await ParseSchema("""
             namespace Test
             struct Base1 { 0: required string id; }
-            struct Base2 { 0: required string id; }
+            struct Base2 { 0: required int32 id; }
             struct User : Base1 { 1: required string name; }
         """);
         var newSchema = await ParseSchema("""
             namespace Test
             struct Base1 { 0: required string id; }
-            struct Base2 { 0: required string id; }
+            struct Base2 { 0: required int32 id; }
             struct User : Base2 { 1: required string name; }
         """);
 
@@ -469,7 +469,7 @@ public class CompatibilityTests
     #region Declaration Changes
 
     [Fact]
-    public async Task RemovingDeclaration_IsBreaking()
+    public async Task RemovingDeclarationAlone_IsCompatible()
     {
         var oldSchema = await ParseSchema("""
             namespace Test
@@ -484,7 +484,7 @@ public class CompatibilityTests
         var changes = _checker.CheckCompatibility(oldSchema, newSchema);
 
         changes.Should().ContainSingle(c =>
-            c.Category == ChangeCategory.BreakingWire &&
+            c.Category == ChangeCategory.Compatible &&
             c.Description.Contains("removed") &&
             c.Description.Contains("Profile"));
     }
@@ -556,7 +556,7 @@ public class CompatibilityTests
     [Fact]
     public async Task BreakingCheck_WithImports_ResolvesTypes()
     {
-        var root = Path.Combine(Path.GetTempPath(), "bond-parser-tests", Guid.NewGuid().ToString("N"));
+        var root = Path.GetFullPath(Path.Combine("bond-parser-tests", Guid.NewGuid().ToString("N")));
         var mainPath = Path.Combine(root, "schema.bond");
         var commonPath = Path.Combine(root, "common.bond");
 
@@ -683,7 +683,7 @@ public class CompatibilityTests
     #region Enum edge cases
 
     [Fact]
-    public async Task AddingEnumConstantInMiddle_WithoutExplicitValue_IsBreaking()
+    public async Task AddingEnumConstantInMiddle_WithoutShiftingValues_IsLegalNumericAlias()
     {
         var oldSchema = await ParseSchema("""
             namespace Test
@@ -697,12 +697,13 @@ public class CompatibilityTests
         var changes = _checker.CheckCompatibility(oldSchema, newSchema);
 
         changes.Should().ContainSingle(c =>
-            c.Category == ChangeCategory.BreakingWire &&
+            c.Category == ChangeCategory.Compatible &&
             c.Description.Contains("Pending"));
+        changes.Should().NotContain(c => c.Severity == ChangeSeverity.Error);
     }
 
     [Fact]
-    public async Task AliasTypeChange_IsBreaking()
+    public async Task UnusedAliasTypeChange_DoesNotChangeWireOrGeneratedApi()
     {
         var oldSchema = await ParseSchema("""
             namespace Test
@@ -715,9 +716,7 @@ public class CompatibilityTests
 
         var changes = _checker.CheckCompatibility(oldSchema, newSchema);
 
-        changes.Should().ContainSingle(c =>
-            c.Category == ChangeCategory.BreakingWire &&
-            c.Description.Contains("Alias"));
+        changes.Should().BeEmpty();
     }
 
     [Fact]

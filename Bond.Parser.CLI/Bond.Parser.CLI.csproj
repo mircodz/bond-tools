@@ -4,10 +4,6 @@
     <ProjectReference Include="..\Bond.Parser\Bond.Parser.csproj" />
   </ItemGroup>
 
-  <ItemGroup>
-    <PackageReference Include="System.CommandLine" />
-  </ItemGroup>
-
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net8.0</TargetFramework>

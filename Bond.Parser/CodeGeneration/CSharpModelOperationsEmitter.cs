@@ -49,7 +49,8 @@ public static partial class CSharpGenerator
             var operations = QualifiedCompanionName(structure, "Operations") +
                 TypeArguments(structure.TypeParameters.Select(parameter =>
                     Identifier(parameter.Name, structure.Location, typeName: true)));
-            var fields = OperationFields(structure).ToArray();
+            var fields = options.GenerateCloning || options.GenerateEquality || options.GenerateDebuggerSupport
+                ? OperationFields(structure).ToArray() : [];
             string Local(string name)
             {
                 var candidate = "__bond" + name;
@@ -232,7 +233,9 @@ public static partial class CSharpGenerator
             {
                 var reference = (BondType.TypeReference)UnwrapAlias(current, structure.Location);
                 if (Canonical(reference.Declaration) is not StructDeclaration declaration)
-                    yield break;
+                    throw new GenerationException(
+                        $"Cannot generate model operations for '{structure.Name}' because base '{reference.Declaration.QualifiedName}' " +
+                        "has no schema definition. Include its .bond definition or disable these operations.", structure.Location);
                 var owner = MapType(reference, structure.Location).Name;
                 foreach (var field in declaration.Fields.OrderBy(field => field.Ordinal))
                     yield return new(owner, IdlFullName(declaration), field, Substitute(field.Type, declaration, reference.TypeArguments));

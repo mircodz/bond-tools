@@ -1,551 +1,397 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
-using Bond.Parser.Syntax;
 
 namespace Bond.Parser.Compatibility;
 
+/// <summary>Checks tagged binary (Compact/Fast) and SimpleJSON compatibility.</summary>
 public class CompatibilityChecker
 {
-    public List<SchemaChange> CheckCompatibility(Syntax.Bond oldSchema, Syntax.Bond newSchema)
+    public List<SchemaChange> CheckCompatibility(Syntax.Bond oldSchema, Syntax.Bond newSchema,
+        CompatibilityOptions? options = null) => Compare(oldSchema, newSchema, options).Changes.ToList();
+
+    public CompatibilityResult Compare(Syntax.Bond oldSchema, Syntax.Bond newSchema, CompatibilityOptions? options = null)
     {
-        var changes = new List<SchemaChange>();
-
-        var oldDecls = oldSchema.Declarations.ToDictionary(d => d.QualifiedName, d => d);
-        var newDecls = newSchema.Declarations.ToDictionary(d => d.QualifiedName, d => d);
-
-        foreach (var oldDecl in oldDecls.Values)
+        options ??= new CompatibilityOptions();
+        options.Validate();
+        var errors = new List<SchemaChange>();
+        SchemaContract? Contract(Syntax.Bond schema, string side)
         {
-            if (!newDecls.ContainsKey(oldDecl.QualifiedName))
+            try { return SchemaContractValidation.Create(schema, options.IncludeImports, options.AllowUnresolvedTypes); }
+            catch (InvalidDataException ex)
             {
-                changes.Add(new SchemaChange(
-                    ChangeCategory.BreakingWire,
-                    $"{oldDecl.Kind} '{oldDecl.Name}' was removed",
-                    oldDecl.QualifiedName,
-                    "Removing declarations breaks existing code using them"));
+                errors.Add(new SchemaChange(ChangeCategory.InvalidSchema, side + ": " + ex.Message,
+                    ex.Data["Location"] as string ?? "schema")
+                { Id = ex.Data["Id"] as string ?? DiagnosticIds.InvalidSchema, Severity = ChangeSeverity.Error });
+                return null;
+            }
+        }
+        var oldContract = Contract(oldSchema, "Previous schema");
+        var newContract = Contract(newSchema, "Current schema");
+        var changes = errors.Count != 0 ? errors : new Comparison(oldContract!, newContract!, options).Run();
+        return new CompatibilityResult(Array.AsReadOnly(changes.Select(c => c with
+        {
+            IsSuppressed = options.SuppressedDiagnosticIds?.Contains(c.Id) == true
+        }).OrderBy(c => c.Location, StringComparer.Ordinal).ThenBy(c => c.Id, StringComparer.Ordinal)
+            .ThenBy(c => c.Description, StringComparer.Ordinal).ToArray()));
+    }
+
+    private sealed class Comparison
+    {
+        private readonly Dictionary<string, ContractDeclaration> _oldDeclarations;
+        private readonly Dictionary<string, ContractDeclaration> _newDeclarations;
+        private readonly Dictionary<string, string> _declarationPairs = new(StringComparer.Ordinal);
+        private readonly List<SchemaChange> _changes = [];
+
+        internal Comparison(SchemaContract oldContract, SchemaContract newContract, CompatibilityOptions options)
+        {
+            _oldDeclarations = oldContract.Declarations.Where(d => options.IncludeImports || d.IsRoot).ToDictionary(d => d.Name, StringComparer.Ordinal);
+            _newDeclarations = newContract.Declarations.Where(d => options.IncludeImports || d.IsRoot).ToDictionary(d => d.Name, StringComparer.Ordinal);
+            foreach (var name in _oldDeclarations.Keys.Intersect(_newDeclarations.Keys, StringComparer.Ordinal))
+                _declarationPairs.Add(name, name);
+
+            // A unique unchanged declaration name also identifies namespace-only moves.
+            static string LocalName(ContractDeclaration d) => d.Name.Split('.').Last();
+            var moved = _newDeclarations.Values.Where(d => !_declarationPairs.ContainsValue(d.Name))
+                .GroupBy(LocalName).ToDictionary(g => g.Key, g => g.ToArray(), StringComparer.Ordinal);
+            foreach (var group in _oldDeclarations.Values.Where(d => !_declarationPairs.ContainsKey(d.Name)).GroupBy(LocalName))
+                if (group.Count() == 1 && moved.TryGetValue(group.Key, out var candidates) && candidates.Length == 1)
+                    _declarationPairs.Add(group.Single().Name, candidates[0].Name);
+        }
+
+        internal IReadOnlyList<SchemaChange> Run()
+        {
+            foreach (var old in _oldDeclarations.Values)
+            {
+                if (!_declarationPairs.TryGetValue(old.Name, out var currentName))
+                {
+                    Add(DiagnosticIds.DeclarationRemoved, ChangeCategory.Compatible,
+                        $"{old.Kind} '{old.Name}' was removed", old.Name);
+                    continue;
+                }
+                CompareDeclaration(old, _newDeclarations[currentName]);
+            }
+            var paired = _declarationPairs.Values.ToHashSet(StringComparer.Ordinal);
+            foreach (var current in _newDeclarations.Values.Where(d => !paired.Contains(d.Name)))
+                Add(DiagnosticIds.DeclarationAdded, ChangeCategory.Compatible, $"{current.Kind} '{current.Name}' was added", current.Name);
+            return _changes;
+        }
+
+        private void CompareDeclaration(ContractDeclaration old, ContractDeclaration current)
+        {
+            if (old.Kind == "forward" && current.Kind == "struct")
+            {
+                Add(DiagnosticIds.DeclarationAdded, ChangeCategory.Compatible, "Forward declaration acquired a complete struct definition", old.Name);
+                return;
+            }
+            if (old.Kind == "struct" && current.Kind == "forward")
+            {
+                Add(DiagnosticIds.IncompleteDefinition, ChangeCategory.InvalidSchema,
+                    "Struct definition was replaced by an incomplete forward declaration; its layout cannot be established", old.Name);
+                return;
+            }
+            if (old.Kind != current.Kind)
+            {
+                Add(DiagnosticIds.DeclarationKind, ChangeCategory.BreakingWire,
+                    $"Declaration kind changed from {old.Kind} to {current.Kind}", old.Name);
+                return;
+            }
+            switch (old.Kind)
+            {
+                case "struct": CompareStruct(old, current, old.Name, []); break;
+                case "enum": CompareEnum(old, current); break;
+                case "service": CompareService(old, current); break;
             }
         }
 
-        foreach (var newDecl in newDecls.Values)
+        private void CompareStruct(ContractDeclaration old, ContractDeclaration current, string location, HashSet<string> active)
         {
-            if (!oldDecls.ContainsKey(newDecl.QualifiedName))
+            if (!Same(old.BaseType, current.BaseType) || NeedsPayloadComparison(old.BaseType, current.BaseType))
+                CompareBase(old.BaseType, current.BaseType, location, active);
+            var oldFields = old.Fields.ToDictionary(f => f.Ordinal);
+            var newFields = current.Fields.ToDictionary(f => f.Ordinal);
+            foreach (var field in old.Fields)
             {
-                changes.Add(new SchemaChange(
-                    ChangeCategory.Compatible,
-                    $"{newDecl.Kind} '{newDecl.Name}' was added",
-                    newDecl.QualifiedName));
+                if (newFields.TryGetValue(field.Ordinal, out var next)) CompareField(location, field, next, active);
+                else
+                    Add(DiagnosticIds.FieldRemoved,
+                        field.Modifier == "required" ? ChangeCategory.BreakingWire : ChangeCategory.Compatible,
+                        $"Field {field.Ordinal} '{field.Name}' ({field.Modifier}) was removed", location + "." + field.Name,
+                        field.Modifier == "required"
+                            ? "Old readers still require this field. Relax readers before removing it; do not reuse the ordinal."
+                            : "Keep the removed field commented out to document its ordinal; do not reuse that ordinal.");
+            }
+            foreach (var field in current.Fields.Where(f => !oldFields.ContainsKey(f.Ordinal)))
+                Add(field.Modifier == "required" ? DiagnosticIds.RequiredFieldAdded : DiagnosticIds.OptionalFieldAdded,
+                    field.Modifier == "required" ? ChangeCategory.BreakingWire : ChangeCategory.Compatible,
+                    $"Field {field.Ordinal} '{field.Name}' ({field.Modifier}) was added", location + "." + field.Name,
+                    field.Modifier == "required"
+                        ? "Old data omits this field. Start with required_optional (always write, accept absence), update every producer, then require it."
+                        : null);
+        }
+
+        private void CompareBase(TypeShape? old, TypeShape? current, string location, HashSet<string> active)
+        {
+            var start = _changes.Count;
+            if (old is null || current is null || !Classify(old, current, location + ".base", active).Compatible)
+                Add(DiagnosticIds.BaseType, ChangeCategory.BreakingWire,
+                    $"Inheritance layout changed from '{old?.ToString() ?? "none"}' to '{current?.ToString() ?? "none"}'",
+                    location, "Preserve the base payload layout and inheritance levels.");
+            for (var i = start; i < _changes.Count; i++)
+                if (_changes[i].Category == ChangeCategory.BreakingWire
+                    && _changes[i].Id is DiagnosticIds.FieldType or DiagnosticIds.RequiredFieldAdded or DiagnosticIds.FieldRemoved)
+                    _changes[i] = _changes[i] with
+                    {
+                        Id = DiagnosticIds.BaseType, Description = "Inheritance layout changed: " + _changes[i].Description
+                    };
+        }
+
+        private void CompareField(string owner, ContractField old, ContractField current, HashSet<string> active)
+        {
+            var location = owner + "." + old.Name;
+            if (old.JsonName != current.JsonName)
+                Add(DiagnosticIds.TextName, ChangeCategory.BreakingText,
+                    $"Effective SimpleJSON field name changed from '{old.JsonName}' to '{current.JsonName}'", location,
+                    "Pin JsonName to the old text name when renaming the field.");
+            if (old.Modifier != current.Modifier)
+            {
+                var direct = old.Modifier == "optional" && current.Modifier == "required"
+                    || old.Modifier == "required" && current.Modifier == "optional";
+                var id = direct ? old.Modifier == "optional" ? DiagnosticIds.OptionalToRequired : DiagnosticIds.RequiredToOptional
+                    : DiagnosticIds.ModifierRollout;
+                Add(id, direct ? ChangeCategory.BreakingWire : ChangeCategory.Compatible,
+                    $"Modifier changed from {old.Modifier} to {current.Modifier}", location,
+                    ModifierRecommendation(old.Modifier, current.Modifier),
+                    direct ? ChangeSeverity.Error : ChangeSeverity.Warning);
+            }
+            var oldType = UnwrapMaybe(old.Type);
+            var newType = UnwrapMaybe(current.Type);
+            if (!oldType.Same(newType) || NeedsPayloadComparison(oldType, newType))
+            {
+                var change = Classify(oldType, newType, location, active);
+                if (!change.NominalOnly)
+                {
+                    var semanticOnly = change.EnumSemantics && !change.Promotion && change.Compatible;
+                    Add(semanticOnly ? DiagnosticIds.EnumTypeSemantics : DiagnosticIds.FieldType,
+                        change.Compatible ? ChangeCategory.Compatible : ChangeCategory.BreakingWire,
+                        $"Type changed from {oldType} to {newType}", location,
+                        !change.Compatible ? "This type change is not wire compatible."
+                            : change.Promotion ? "Deploy widened consumers before producers; old readers may reject new wider values."
+                            : semanticOnly ? "The numeric representation is compatible, but validate enum meanings and accepted values." : null,
+                        !change.Compatible ? ChangeSeverity.Error
+                            : change.Promotion || semanticOnly ? ChangeSeverity.Warning : ChangeSeverity.Info);
+                    if (change.EnumSemantics && !semanticOnly)
+                        Add(DiagnosticIds.EnumTypeSemantics, ChangeCategory.Compatible,
+                            $"Numeric enum interpretation changed from {oldType} to {newType}", location,
+                            "The numeric representation is compatible, but validate the meaning and accepted domain of enum values.", ChangeSeverity.Warning);
+                }
+            }
+            var nothingChanged = (old.Default.Kind == "nothing") != (current.Default.Kind == "nothing");
+            if (nothingChanged)
+                Add(DiagnosticIds.NothingDefault, ChangeCategory.BreakingWire,
+                    $"Field presence default changed from {Display(old.Default)} to {Display(current.Default)}", location,
+                    "nothing represents absence, not Bond nullable<T>'s list encoding. Check absent-value handling in both readers and writers.");
+            else if (old.Default != current.Default && old.Default.Kind == current.Default.Kind)
+            {
+                var meaningful = old.Modifier == "optional" || current.Modifier == "optional";
+                Add(DiagnosticIds.DefaultValue, meaningful ? ChangeCategory.BreakingWire : ChangeCategory.Compatible,
+                    $"Default value changed from {Display(old.Default)} to {Display(current.Default)}", location,
+                    meaningful ? "Omitted fields acquire different values under the two schemas; this changes meaning, not necessarily parsing."
+                        : "These modifiers always write the field; only newly constructed values change.");
             }
         }
 
-        foreach (var (name, oldDecl) in oldDecls)
+        private void CompareEnum(ContractDeclaration old, ContractDeclaration current)
         {
-            if (newDecls.TryGetValue(name, out var newDecl))
+            var oldValues = old.Constants.ToDictionary(c => c.Name, c => c.Value, StringComparer.Ordinal);
+            var newValues = current.Constants.ToDictionary(c => c.Name, c => c.Value, StringComparer.Ordinal);
+            foreach (var constant in old.Constants)
             {
-                CompareDeclarations(oldDecl, newDecl, changes);
+                if (!newValues.TryGetValue(constant.Name, out var value))
+                    Add(DiagnosticIds.EnumMemberRemoved, ChangeCategory.Compatible,
+                        $"Enum constant '{constant.Name}' was removed", old.Name + "." + constant.Name,
+                        "Unknown numeric enum values still decode; check application interpretation.", ChangeSeverity.Warning);
+                else if (value != constant.Value)
+                    Add(DiagnosticIds.EnumValue, ChangeCategory.BreakingWire,
+                        $"Enum constant '{constant.Name}' value changed from {constant.Value} to {value}", old.Name + "." + constant.Name,
+                        "Preserve existing numeric meanings. Explicitly number members before inserting or removing implicit constants.");
+            }
+            foreach (var constant in current.Constants.Where(c => !oldValues.ContainsKey(c.Name)))
+            {
+                var alias = current.Constants.Any(c => c.Name != constant.Name && c.Value == constant.Value);
+                Add(DiagnosticIds.EnumMemberAdded, ChangeCategory.Compatible,
+                    $"Enum constant '{constant.Name}' was added" + (alias ? $" as a numeric alias for {constant.Value}" : ""),
+                    current.Name + "." + constant.Name,
+                    alias ? "Numeric aliases are legal; name-based application logic may distinguish them." : null,
+                    alias ? ChangeSeverity.Warning : ChangeSeverity.Info);
             }
         }
 
-        return changes;
-    }
-
-    private void CompareDeclarations(Declaration oldDecl, Declaration newDecl, List<SchemaChange> changes)
-    {
-        if (oldDecl.GetType() != newDecl.GetType())
+        private void CompareService(ContractDeclaration old, ContractDeclaration current)
         {
-            changes.Add(new SchemaChange(
-                ChangeCategory.BreakingWire,
-                $"Declaration kind changed from {oldDecl.Kind} to {newDecl.Kind}",
-                oldDecl.QualifiedName));
-            return;
-        }
-
-        switch (oldDecl, newDecl)
-        {
-            case (StructDeclaration oldStruct, StructDeclaration newStruct):
-                CompareStructs(oldStruct, newStruct, changes);
-                break;
-            case (EnumDeclaration oldEnum, EnumDeclaration newEnum):
-                CompareEnums(oldEnum, newEnum, changes);
-                break;
-            case (ServiceDeclaration oldService, ServiceDeclaration newService):
-                CompareServices(oldService, newService, changes);
-                break;
-            case (AliasDeclaration oldAlias, AliasDeclaration newAlias):
-                CompareAliases(oldAlias, newAlias, changes);
-                break;
-            case (ForwardDeclaration, ForwardDeclaration):
-                // Forwards carry only Name + TypeParameters, both already checked by
-                // QualifiedName matching and the declaration-kind check above.
-                break;
-            default:
-                throw new InvalidOperationException(
-                    $"CompareDeclarations: unhandled declaration kind '{oldDecl.Kind}' (type {oldDecl.GetType().Name})");
-        }
-    }
-
-    private void CompareStructs(StructDeclaration oldStruct, StructDeclaration newStruct, List<SchemaChange> changes)
-    {
-        var location = $"struct {oldStruct.Name}";
-
-        var oldBase = oldStruct.BaseType?.ToString() ?? "";
-        var newBase = newStruct.BaseType?.ToString() ?? "";
-        if (oldBase != newBase)
-        {
-            changes.Add(new SchemaChange(
-                ChangeCategory.BreakingWire,
-                $"Inheritance hierarchy changed from '{oldBase}' to '{newBase}'",
-                location,
-                "Changing inheritance breaks wire compatibility"));
-        }
-
-        var oldFields = oldStruct.Fields.ToDictionary(f => f.Ordinal, f => f);
-        var newFields = newStruct.Fields.ToDictionary(f => f.Ordinal, f => f);
-
-        foreach (var oldField in oldFields.Values)
-        {
-            if (!newFields.ContainsKey(oldField.Ordinal))
+            if (!Same(old.BaseType, current.BaseType))
+                Add(DiagnosticIds.ServiceBase, ChangeCategory.BreakingWire,
+                    $"Inheritance changed from '{old.BaseType?.ToString() ?? "none"}' to '{current.BaseType?.ToString() ?? "none"}'", old.Name);
+            var oldMethods = old.Methods.ToDictionary(m => m.Name, StringComparer.Ordinal);
+            var newMethods = current.Methods.ToDictionary(m => m.Name, StringComparer.Ordinal);
+            foreach (var method in old.Methods)
             {
-                var category = oldField.Modifier == FieldModifier.Required
-                    ? ChangeCategory.BreakingWire
-                    : ChangeCategory.Compatible;
-
-                var recommendation = oldField.Modifier == FieldModifier.Required
-                    ? "Removing required fields breaks compatibility."
-                    : "Consider commenting out the field rather than removing it to avoid ordinal/name reuse.";
-
-                changes.Add(new SchemaChange(
-                    category,
-                    $"Field {oldField.Ordinal} '{oldField.Name}' ({oldField.Modifier}) was removed",
-                    $"{location}.{oldField.Name}",
-                    recommendation));
+                if (!newMethods.TryGetValue(method.Name, out var next))
+                {
+                    Add(DiagnosticIds.MethodRemoved, ChangeCategory.BreakingWire, $"Method '{method.Name}' was removed", old.Name + "." + method.Name);
+                    continue;
+                }
+                if (method.Kind != next.Kind || !method.Input.Same(next.Input) || !method.Result.Same(next.Result))
+                    Add(DiagnosticIds.MethodSignature, ChangeCategory.BreakingWire,
+                        $"Method '{method.Name}' signature changed from {method.Kind} {method.Result} ({method.Input}) to {next.Kind} {next.Result} ({next.Input})",
+                        old.Name + "." + method.Name);
             }
+            foreach (var method in current.Methods.Where(m => !oldMethods.ContainsKey(m.Name)))
+                Add(DiagnosticIds.MethodAdded, ChangeCategory.Compatible, $"Method '{method.Name}' was added", current.Name + "." + method.Name);
         }
 
-        foreach (var newField in newFields.Values)
-        {
-            if (!oldFields.ContainsKey(newField.Ordinal))
+        private void Add(string id, ChangeCategory category, string description, string location, string? recommendation = null,
+            ChangeSeverity? severity = null) =>
+            _changes.Add(new SchemaChange(category, description, location, recommendation)
             {
-                var category = newField.Modifier == FieldModifier.Required
-                    ? ChangeCategory.BreakingWire
-                    : ChangeCategory.Compatible;
+                Id = id, Severity = severity ?? (category == ChangeCategory.Compatible ? ChangeSeverity.Info : ChangeSeverity.Error)
+            });
 
-                var recommendation = newField.Modifier == FieldModifier.Required
-                    ? "Adding required fields breaks compatibility with old data"
-                    : null;
+        private static bool Same(TypeShape? a, TypeShape? b) => a is null ? b is null : a.Same(b);
+        private static TypeShape UnwrapMaybe(TypeShape type) => type.Kind == "maybe" ? type.Arguments[0] : type;
+        private static string Display(ContractDefault value) => value.Kind == "string" ? $"\"{value.Value}\"" : value.Value.Length == 0 ? value.Kind : value.Value;
 
-                changes.Add(new SchemaChange(
-                    category,
-                    $"Field {newField.Ordinal} '{newField.Name}' ({newField.Modifier}) was added",
-                    $"{location}.{newField.Name}",
-                    recommendation));
-            }
-        }
+        private readonly record struct TypeChange(bool Compatible, bool Promotion = false,
+            bool EnumSemantics = false, bool NominalOnly = false);
 
-        foreach (var (ordinal, oldField) in oldFields)
+        private TypeChange Classify(TypeShape old, TypeShape current, string location, HashSet<string> active)
         {
-            if (newFields.TryGetValue(ordinal, out var newField))
+            if (old.Same(current) && !NeedsPayloadComparison(old, current)) return new(true, NominalOnly: true);
+            // Unbound parameters describe templates, not serialized types. Their concrete uses are checked below.
+            if (old.Kind == "parameter" || current.Kind == "parameter") return new(true, NominalOnly: true);
+            if (old.Kind == "maybe" || current.Kind == "maybe")
+                return Classify(UnwrapMaybe(old), UnwrapMaybe(current), location, active);
+            if (old.Kind == "bonded" && current.Kind != "bonded")
+                return Classify(old.Arguments[0], current, location, active) with { NominalOnly = false };
+            if (current.Kind == "bonded" && old.Kind != "bonded")
+                return Classify(old, current.Arguments[0], location, active) with { NominalOnly = false };
+            if (old.Kind == "blob" && current.Kind is "list" or "vector") return new(current.Arguments[0].Kind == "int8");
+            if (current.Kind == "blob" && old.Kind is "list" or "vector") return new(old.Arguments[0].Kind == "int8");
+            if (old.Kind is "enum" or "int32" && current.Kind is "enum" or "int32")
+                return new(true, EnumSemantics: true);
+            if (old.Kind is "int8" or "int16" && current.Kind == "enum")
+                return new(true, Promotion: true, EnumSemantics: true);
+            var oldWidth = Width(old.Kind);
+            var newWidth = Width(current.Kind);
+            if (oldWidth > 0 && newWidth > oldWidth && NumericFamily(old.Kind) == NumericFamily(current.Kind))
+                return new(true, Promotion: true);
+            if (old.Kind == "struct" && current.Kind == "struct"
+                && _oldDeclarations.TryGetValue(old.Name!, out var oldTemplate)
+                && _newDeclarations.TryGetValue(current.Name!, out var newTemplate)
+                && oldTemplate.Kind == "struct" && newTemplate.Kind == "struct")
             {
-                CompareFields(oldField, newField, location, changes);
+                if (!NeedsPayloadComparison(old, current)) return new(true, NominalOnly: true);
+                var key = old + " -> " + current;
+                if (active.Contains(key)) return new(true, NominalOnly: true);
+                if (active.Count >= 64)
+                {
+                    Add(DiagnosticIds.IncompleteDefinition, ChangeCategory.InvalidSchema,
+                        "Expanding generic recursion prevents establishing a finite payload comparison", location);
+                    return new(true, NominalOnly: true);
+                }
+                active.Add(key);
+                CompareStruct(Instantiate(oldTemplate, old.Arguments), Instantiate(newTemplate, current.Arguments), location, active);
+                active.Remove(key);
+                return new(true, NominalOnly: true);
             }
-        }
-    }
-
-    private void CompareFields(Field oldField, Field newField, string structLocation, List<SchemaChange> changes)
-    {
-        var location = $"{structLocation}.{oldField.Name}";
-
-        // Field name changes are safe on the wire (ordinals are used) but break
-        // text-based protocols like SimpleJSON which key on field names.
-        if (oldField.Name != newField.Name)
-        {
-            changes.Add(new SchemaChange(
-                ChangeCategory.BreakingText,
-                $"Field name changed from '{oldField.Name}' to '{newField.Name}'",
-                location));
-        }
-
-        if (oldField.Modifier != newField.Modifier)
-        {
-            var changeCategory = ClassifyModifierChange(oldField.Modifier, newField.Modifier);
-            var recommendation = GetModifierChangeRecommendation(oldField.Modifier, newField.Modifier);
-
-            changes.Add(new SchemaChange(
-                changeCategory,
-                $"Modifier changed from {oldField.Modifier} to {newField.Modifier}",
-                location,
-                recommendation));
-        }
-
-        if (oldField.Type != newField.Type)
-        {
-            var typeChange = ClassifyTypeChange(oldField.Type, newField.Type);
-            changes.Add(new SchemaChange(
-                typeChange.Category,
-                $"Type changed from {oldField.Type} to {newField.Type}",
-                location,
-                typeChange.Recommendation));
-        }
-
-        if (oldField.DefaultValue != newField.DefaultValue)
-        {
-            changes.Add(new SchemaChange(
-                ChangeCategory.BreakingWire,
-                $"Default value changed from {oldField.DefaultValue} to {newField.DefaultValue}",
-                location,
-                "Changing default values breaks wire compatibility"));
-        }
-    }
-
-    private void CompareEnums(EnumDeclaration oldEnum, EnumDeclaration newEnum, List<SchemaChange> changes)
-    {
-        var location = $"enum {oldEnum.Name}";
-
-        // Bond rule: adding constants is safe iff they don't shift any existing
-        // constant's effective integer value.
-        var oldEffective = EffectiveValues(oldEnum.Constants);
-        var newEffective = EffectiveValues(newEnum.Constants);
-
-        var oldByName = oldEnum.Constants
-            .Select((c, i) => (c.Name, Value: oldEffective[i]))
-            .ToDictionary(x => x.Name, x => x.Value);
-        var newByName = newEnum.Constants
-            .Select((c, i) => (c.Name, Value: newEffective[i]))
-            .ToDictionary(x => x.Name, x => x.Value);
-
-        foreach (var (name, _) in oldByName)
-        {
-            if (!newByName.ContainsKey(name))
+            if (old.Kind is "list" or "vector" && current.Kind is "list" or "vector"
+                || old.Kind == current.Kind && old.Kind is "map" or "set" or "nullable" or "bonded" or "stream")
             {
-                changes.Add(new SchemaChange(
-                    ChangeCategory.BreakingWire,
-                    $"Enum constant '{name}' was removed",
-                    $"{location}.{name}",
-                    "Removing enum constants breaks compatibility"));
+                var children = old.Arguments.Zip(current.Arguments)
+                    .Select(pair => Classify(pair.First, pair.Second, location, active)).ToArray();
+                return new(children.All(c => c.Compatible), children.Any(c => c.Promotion), children.Any(c => c.EnumSemantics),
+                    old.Kind == current.Kind && children.All(c => c.NominalOnly));
             }
+            return new(false);
         }
 
-        foreach (var (name, newValue) in newByName)
+        private bool NeedsPayloadComparison(TypeShape? old, TypeShape? current)
         {
-            if (!oldByName.ContainsKey(name))
+            if (old is null || current is null) return false;
+            if (old.Kind == "struct" && current.Kind == "struct")
             {
-                // Same integer mapping to two names breaks round-tripping.
-                var colliding = oldByName
-                    .Where(kv => kv.Value == newValue)
-                    .Select(kv => kv.Key)
-                    .FirstOrDefault();
-
-                var category = colliding != null ? ChangeCategory.BreakingWire : ChangeCategory.Compatible;
-                var recommendation = colliding != null
-                    ? $"New constant '{name}' has effective value {newValue} which collides with existing constant '{colliding}'"
-                    : null;
-
-                changes.Add(new SchemaChange(
-                    category,
-                    $"Enum constant '{name}' was added",
-                    $"{location}.{name}",
-                    recommendation));
+                if (old.Same(current) && (!_oldDeclarations.ContainsKey(old.Name!) || !_newDeclarations.ContainsKey(current.Name!)))
+                    return false;
+                if (!_declarationPairs.TryGetValue(old.Name!, out var paired) || paired != current.Name
+                    || old.Arguments.Count != current.Arguments.Count
+                    || !old.Arguments.Zip(current.Arguments).All(p => p.First.Same(p.Second)))
+                    return true;
+                return old.Arguments.Count != 0 && HasParameterizedChanges(old.Name!, current.Name!, []);
             }
+            return old.Arguments.Count == current.Arguments.Count
+                && old.Arguments.Zip(current.Arguments).Any(p => NeedsPayloadComparison(p.First, p.Second));
         }
 
-        // Attribute downward shifts to preceding removals when the math lines up: if a
-        // constant shifted down by N and exactly N removed constants used to sit at lower
-        // ordinals, the removals explain the shift. Per-constant signals stay (a user may
-        // care about a specific name) but the recommendation now names the root cause.
-        var removedBeforeByValue = oldByName
-            .Where(kv => !newByName.ContainsKey(kv.Key))
-            .OrderBy(kv => kv.Value)
-            .ToList();
-
-        foreach (var (name, oldValue) in oldByName)
+        private bool HasParameterizedChanges(string oldName, string newName, HashSet<string> visited)
         {
-            if (!newByName.TryGetValue(name, out var newValue) || oldValue == newValue) continue;
-
-            var delta = oldValue - newValue;
-            var precedingRemovals = removedBeforeByValue
-                .Where(r => r.Value < oldValue)
-                .Select(r => r.Key)
-                .ToList();
-
-            var description = $"Enum constant '{name}' value changed from {oldValue} to {newValue}";
-            if (delta > 0 && precedingRemovals.Count == delta)
+            if (!visited.Add(oldName + " -> " + newName)
+                || !_oldDeclarations.TryGetValue(oldName, out var old)
+                || !_newDeclarations.TryGetValue(newName, out var current)) return false;
+            bool Changed(TypeShape? a, TypeShape? b)
             {
-                description += $" (caused by removal of {string.Join(", ", precedingRemovals.Select(r => $"'{r}'"))})";
+                if (a is null || b is null) return false;
+                if (!a.Same(b) && (ContainsParameter(a) || ContainsParameter(b))) return true;
+                if (a.Kind == "struct" && b.Kind == "struct" && ContainsParameter(a))
+                    return HasParameterizedChanges(a.Name!, b.Name!, visited);
+                return a.Arguments.Count == b.Arguments.Count
+                    && a.Arguments.Zip(b.Arguments).Any(p => Changed(p.First, p.Second));
             }
-
-            changes.Add(new SchemaChange(
-                ChangeCategory.BreakingWire,
-                description,
-                $"{location}.{name}",
-                "Changing enum constant values breaks compatibility"));
-        }
-    }
-
-    private static long[] EffectiveValues(Constant[] constants)
-    {
-        var values = new long[constants.Length];
-        long next = 0;
-        for (int i = 0; i < constants.Length; i++)
-        {
-            values[i] = constants[i].Value ?? next;
-            next = values[i] + 1;
-        }
-        return values;
-    }
-
-    private void CompareServices(ServiceDeclaration oldService, ServiceDeclaration newService, List<SchemaChange> changes)
-    {
-        var location = $"service {oldService.Name}";
-
-        var oldBase = oldService.BaseType?.ToString() ?? "";
-        var newBase = newService.BaseType?.ToString() ?? "";
-        if (oldBase != newBase)
-        {
-            changes.Add(new SchemaChange(
-                ChangeCategory.BreakingWire,
-                $"Inheritance changed from '{(oldService.BaseType != null ? oldBase : "none")}' to '{(newService.BaseType != null ? newBase : "none")}'",
-                location,
-                "Changing service inheritance breaks compatibility"));
+            if (Changed(old.BaseType, current.BaseType)) return true;
+            var fields = current.Fields.ToDictionary(f => f.Ordinal);
+            return old.Fields.Any(f => fields.TryGetValue(f.Ordinal, out var next) && Changed(f.Type, next.Type));
         }
 
-        var oldMethods = oldService.Methods.ToDictionary(m => m.Name, m => m);
-        var newMethods = newService.Methods.ToDictionary(m => m.Name, m => m);
+        private static bool ContainsParameter(TypeShape type) =>
+            type.Kind == "parameter" || type.Arguments.Any(ContainsParameter);
 
-        foreach (var oldMethod in oldMethods.Values)
-        {
-            if (!newMethods.ContainsKey(oldMethod.Name))
+        private static ContractDeclaration Instantiate(ContractDeclaration declaration, IReadOnlyList<TypeShape> arguments) =>
+            declaration with
             {
-                changes.Add(new SchemaChange(
-                    ChangeCategory.BreakingWire,
-                    $"Method '{oldMethod.Name}' was removed",
-                    $"{location}.{oldMethod.Name}"));
-            }
-        }
+                BaseType = declaration.BaseType is null ? null : Substitute(declaration.BaseType, arguments),
+                Fields = SchemaContractValidation.ReadOnly(declaration.Fields.Select(field =>
+                {
+                    var type = Substitute(field.Type, arguments);
+                    return field with
+                    {
+                        Type = type,
+                        Modifier = type.Kind is "meta_name" or "meta_full_name" ? "required_optional" : field.Modifier,
+                        Default = field.Default.Kind == "generic" ? SchemaContractBuilder.ImplicitDefault(type, declaration.Name) : field.Default
+                    };
+                }))
+            };
 
-        foreach (var newMethod in newMethods.Values)
+        private static TypeShape Substitute(TypeShape type, IReadOnlyList<TypeShape> arguments) =>
+            type.Kind == "parameter" ? arguments[(int)type.Integer!.Value]
+                : type with { Arguments = SchemaContractValidation.ReadOnly(type.Arguments.Select(t => Substitute(t, arguments))) };
+
+        private static int Width(string kind) => kind switch
         {
-            if (!oldMethods.ContainsKey(newMethod.Name))
-            {
-                changes.Add(new SchemaChange(
-                    ChangeCategory.Compatible,
-                    $"Method '{newMethod.Name}' was added",
-                    $"{location}.{newMethod.Name}"));
-            }
-        }
-
-        foreach (var (name, oldMethod) in oldMethods)
-        {
-            if (newMethods.TryGetValue(name, out var newMethod))
-            {
-                CompareMethods(location, oldMethod, newMethod, changes);
-            }
-        }
-    }
-
-    private void CompareMethods(string serviceLocation, Method oldMethod, Method newMethod, List<SchemaChange> changes)
-    {
-        var location = $"{serviceLocation}.{oldMethod.Name}";
-
-        if (oldMethod.GetType() != newMethod.GetType())
-        {
-            changes.Add(new SchemaChange(
-                ChangeCategory.BreakingWire,
-                $"Method '{oldMethod.Name}' kind changed from {MethodKindName(oldMethod)} to {MethodKindName(newMethod)}",
-                location));
-            return;
-        }
-
-        var oldInput = MethodInput(oldMethod);
-        var newInput = MethodInput(newMethod);
-        if (oldInput != newInput)
-        {
-            changes.Add(new SchemaChange(
-                ChangeCategory.BreakingWire,
-                $"Method '{oldMethod.Name}' input changed from {oldInput} to {newInput}",
-                location));
-        }
-
-        if (oldMethod is FunctionMethod fOld && newMethod is FunctionMethod fNew && fOld.ResultType != fNew.ResultType)
-        {
-            changes.Add(new SchemaChange(
-                ChangeCategory.BreakingWire,
-                $"Method '{oldMethod.Name}' result changed from {fOld.ResultType} to {fNew.ResultType}",
-                location));
-        }
-    }
-
-    private static MethodType MethodInput(Method method) => method switch
-    {
-        FunctionMethod f => f.InputType,
-        EventMethod e => e.InputType,
-        _ => MethodType.Void.Instance
-    };
-
-    private static string MethodKindName(Method method) => method switch
-    {
-        FunctionMethod => "function",
-        EventMethod => "event",
-        _ => "unknown"
-    };
-
-    private void CompareAliases(AliasDeclaration oldAlias, AliasDeclaration newAlias, List<SchemaChange> changes)
-    {
-        if (oldAlias.AliasedType != newAlias.AliasedType)
-        {
-            var typeChange = ClassifyTypeChange(oldAlias.AliasedType, newAlias.AliasedType);
-            changes.Add(new SchemaChange(
-                typeChange.Category,
-                $"Alias type changed from {oldAlias.AliasedType} to {newAlias.AliasedType}",
-                $"alias {oldAlias.Name}",
-                typeChange.Recommendation));
-        }
-    }
-
-    // optional ↔ required directly is breaking; transitions through required_optional
-    // are safe with careful rollout.
-    private static ChangeCategory ClassifyModifierChange(FieldModifier oldMod, FieldModifier newMod)
-    {
-        if ((oldMod == FieldModifier.Optional && newMod == FieldModifier.Required) ||
-            (oldMod == FieldModifier.Required && newMod == FieldModifier.Optional))
-        {
-            return ChangeCategory.BreakingWire;
-        }
-
-        return ChangeCategory.Compatible;
-    }
-
-    private static string GetModifierChangeRecommendation(FieldModifier oldMod, FieldModifier newMod)
-    {
-        if ((oldMod == FieldModifier.Optional && newMod == FieldModifier.Required) ||
-            (oldMod == FieldModifier.Required && newMod == FieldModifier.Optional))
-        {
-            return "Use required_optional as intermediate step: optional → required_optional → required";
-        }
-
-        return "Deploy to all consumers before deploying to producers";
-    }
-
-    private static (ChangeCategory Category, string? Recommendation) ClassifyTypeChange(BondType oldType, BondType newType)
-    {
-        // Recursion base case: structural equality (e.g. unchanged map key when only the
-        // value type differs).
-        if (oldType == newType) return (ChangeCategory.Compatible, null);
-
-        if (IsInt32ToEnumChange(oldType, newType) || IsInt32ToEnumChange(newType, oldType))
-            return (ChangeCategory.Compatible, null);
-
-        if (IsVectorListChange(oldType, newType))
-            return (ChangeCategory.Compatible, null);
-
-        if (IsBlobVectorChange(oldType, newType))
-            return (ChangeCategory.Compatible, null);
-
-        if (IsBondedChange(oldType, newType))
-            return (ChangeCategory.Compatible, null);
-
-        if (IsNumericPromotion(oldType, newType))
-            return (ChangeCategory.Compatible, "Deploy to consumers before producers when promoting numeric types");
-
-        if (IsIntToEnumPromotion(oldType, newType))
-            return (ChangeCategory.Compatible, "Deploy to consumers before producers when promoting int8/int16 to enum");
-
-        // Same container shape: classify the inner change(s). Lets `map<string, int8>` →
-        // `map<string, int16>` be recognized as a numeric-promotion-of-the-value-type
-        // instead of an opaque BreakingWire.
-        var inner = ClassifyContainerChange(oldType, newType);
-        if (inner is { } result) return result;
-
-        return (ChangeCategory.BreakingWire, "This type change is not compatible");
-    }
-
-    private static (ChangeCategory Category, string? Recommendation)? ClassifyContainerChange(BondType oldType, BondType newType) =>
-        (oldType, newType) switch
-        {
-            (BondType.List a,     BondType.List b)     => ClassifyTypeChange(a.ElementType, b.ElementType),
-            (BondType.Vector a,   BondType.Vector b)   => ClassifyTypeChange(a.ElementType, b.ElementType),
-            (BondType.Set a,      BondType.Set b)      => ClassifyTypeChange(a.KeyType,     b.KeyType),
-            (BondType.Nullable a, BondType.Nullable b) => ClassifyTypeChange(a.ElementType, b.ElementType),
-            (BondType.Maybe a,    BondType.Maybe b)    => ClassifyTypeChange(a.ElementType, b.ElementType),
-            (BondType.Bonded a,   BondType.Bonded b)   => ClassifyTypeChange(a.StructType,  b.StructType),
-            (BondType.Map a,      BondType.Map b)      => CombineChanges(
-                ClassifyTypeChange(a.KeyType,   b.KeyType),
-                ClassifyTypeChange(a.ValueType, b.ValueType)),
-            _ => null
+            "int8" or "uint8" => 8, "int16" or "uint16" => 16, "int32" or "uint32" or "float" => 32,
+            "int64" or "uint64" or "double" => 64, _ => 0
         };
+        private static string NumericFamily(string kind) => kind.StartsWith("uint", StringComparison.Ordinal) ? "unsigned"
+            : kind.StartsWith("int", StringComparison.Ordinal) ? "signed" : "floating";
 
-    // For map<K, V> we may have independent changes to K and V. The combined verdict is
-    // the more-breaking of the two; the recommendation falls back to whichever side has
-    // one (typically the compatible-with-rollout-note side).
-    private static (ChangeCategory Category, string? Recommendation) CombineChanges(
-        (ChangeCategory Category, string? Recommendation) key,
-        (ChangeCategory Category, string? Recommendation) value)
-    {
-        var category = MoreSevere(key.Category, value.Category);
-        var recommendation = key.Recommendation ?? value.Recommendation;
-        return (category, recommendation);
+        private static string ModifierRecommendation(string old, string current) => (old, current) switch
+        {
+            ("optional", "required") => "Use optional → required_optional → required: deploy always-writing producers first; require the field only after all producers have upgraded.",
+            ("required", "optional") => "Use required → required_optional → optional: relax all readers first, then allow producers to omit the field.",
+            ("optional", "required_optional") => "Deploy producers first so they always write the field; required_optional readers still accept absence in old data.",
+            ("required_optional", "required") => "Require the field only after every producer always writes it and retained old data supplies it.",
+            ("required", "required_optional") => "Relax readers first; all readers must accept omission before producers switch to optional.",
+            ("required_optional", "optional") => "Allow producers to omit the field only after all readers accept omission.",
+            _ => "Coordinate readers and writers before changing field presence."
+        };
     }
-
-    private static ChangeCategory MoreSevere(ChangeCategory a, ChangeCategory b) =>
-        Severity(a) >= Severity(b) ? a : b;
-
-    private static int Severity(ChangeCategory category) => category switch
-    {
-        ChangeCategory.Compatible   => 0,
-        ChangeCategory.BreakingText => 1,
-        ChangeCategory.BreakingWire => 2,
-        _ => 0
-    };
-
-    private static bool IsInt32ToEnumChange(BondType type1, BondType type2) =>
-        type1 is BondType.Int32 &&
-        type2 is BondType.TypeReference { Declaration: EnumDeclaration };
-
-    private static bool IsVectorListChange(BondType type1, BondType type2) =>
-        (type1, type2) switch
-        {
-            (BondType.Vector v, BondType.List l)   => v.ElementType == l.ElementType,
-            (BondType.List l,   BondType.Vector v) => l.ElementType == v.ElementType,
-            _ => false
-        };
-
-    private static bool IsBlobVectorChange(BondType type1, BondType type2) =>
-        (type1, type2) switch
-        {
-            (BondType.Blob, BondType.Vector { ElementType: BondType.Int8 }) => true,
-            (BondType.Vector { ElementType: BondType.Int8 }, BondType.Blob) => true,
-            (BondType.Blob, BondType.List   { ElementType: BondType.Int8 }) => true,
-            (BondType.List   { ElementType: BondType.Int8 }, BondType.Blob) => true,
-            _ => false
-        };
-
-    private static bool IsBondedChange(BondType type1, BondType type2) =>
-        (type1, type2) switch
-        {
-            (BondType.Bonded bonded, var t) => bonded.StructType == t,
-            (var t, BondType.Bonded bonded) => t == bonded.StructType,
-            _ => false
-        };
-
-    private static readonly HashSet<(Type, Type)> NumericPromotions =
-    [
-        (typeof(BondType.Float),  typeof(BondType.Double)),
-        (typeof(BondType.UInt8),  typeof(BondType.UInt16)),
-        (typeof(BondType.UInt8),  typeof(BondType.UInt32)),
-        (typeof(BondType.UInt8),  typeof(BondType.UInt64)),
-        (typeof(BondType.UInt16), typeof(BondType.UInt32)),
-        (typeof(BondType.UInt16), typeof(BondType.UInt64)),
-        (typeof(BondType.UInt32), typeof(BondType.UInt64)),
-        (typeof(BondType.Int8),   typeof(BondType.Int16)),
-        (typeof(BondType.Int8),   typeof(BondType.Int32)),
-        (typeof(BondType.Int8),   typeof(BondType.Int64)),
-        (typeof(BondType.Int16),  typeof(BondType.Int32)),
-        (typeof(BondType.Int16),  typeof(BondType.Int64)),
-        (typeof(BondType.Int32),  typeof(BondType.Int64)),
-    ];
-
-    private static bool IsNumericPromotion(BondType oldType, BondType newType) =>
-        NumericPromotions.Contains((oldType.GetType(), newType.GetType()));
-
-    private static bool IsIntToEnumPromotion(BondType oldType, BondType newType) =>
-        oldType is BondType.Int8 or BondType.Int16 &&
-        newType is BondType.TypeReference { Declaration: EnumDeclaration };
 }

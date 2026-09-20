@@ -1,22 +1,17 @@
 using System;
-using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using Bond.Parser.Parser;
 using Bond.Parser.Formatting;
-using Bond.Parser.Compatibility;
 using Bond.Parser.CodeGeneration;
 using Bond.Parser.Json;
 using System.Text.Json;
-using System.Threading;
 using System.Threading.Tasks;
 
 namespace Bond.Parser.CLI;
 
 public static class Program
 {
-    private static readonly JsonSerializerOptions PrettyJson = new() { WriteIndented = true };
-
     static async Task<int> Main(string[] args)
     {
         if (args.Length == 1 && args[0] == "--version")
@@ -28,6 +23,8 @@ public static class Program
         {
             return await GenerateCommand.RunAsync(args[1..], Console.Out, Console.Error);
         }
+        if (args.Length > 0 && args[0].Equals("breaking", StringComparison.OrdinalIgnoreCase))
+            return await BreakingCommand.RunAsync(args[1..], Console.Out, Console.Error);
 
         if (args.Length == 0 || args.Contains("--help") || args.Contains("-h"))
         {
@@ -40,7 +37,6 @@ public static class Program
 
         return command switch
         {
-            "breaking" => await RunBreakingCommand(rest),
             "parse" => await RunParseCommand(rest),
             "fmt" or "format" => await RunFormatCommand(rest),
             _ => UnknownCommand(command)
@@ -91,39 +87,6 @@ public static class Program
         }
 
         return 0;
-    }
-
-    static async Task<int> RunBreakingCommand(string[] args)
-    {
-        var parsed = new Args(args);
-        var filePath = parsed.PositionalOrNull;
-        if (filePath is null)
-        {
-            WriteError("Error: No file specified");
-            ShowHelp();
-            return 1;
-        }
-
-        var against = parsed.GetValue("--against");
-        if (against is null)
-        {
-            WriteError("Error: --against flag is required for breaking command");
-            ShowHelp();
-            return 1;
-        }
-
-        var errorFormat = parsed.GetValue("--error-format") ?? "text";
-        var verbose = parsed.HasFlag("-v", "--verbose");
-        var ignoreImports = parsed.HasFlag("--ignore-imports");
-
-        var reference = await ResolveReference(against, filePath);
-        if (reference is null)
-        {
-            WriteError($"Error: Could not resolve reference: {against}");
-            return 1;
-        }
-
-        return await CheckBreaking(reference, filePath, errorFormat, verbose, ignoreImports);
     }
 
     static async Task<int> RunFormatCommand(string[] args)
@@ -186,215 +149,6 @@ public static class Program
         return 0;
     }
 
-    private sealed record ResolvedReference(
-        string FilePath,
-        string? Content,
-        ImportResolver? ImportResolver);
-
-    static async Task<ResolvedReference?> ResolveReference(string reference, string currentFilePath)
-    {
-        if (reference.StartsWith(".git#", StringComparison.Ordinal))
-        {
-            return await ResolveGitReference(reference, currentFilePath);
-        }
-
-        if (File.Exists(reference))
-        {
-            return new ResolvedReference(Path.GetFullPath(reference), null, null);
-        }
-
-        return null;
-    }
-
-    static async Task<ResolvedReference?> ResolveGitReference(string gitRef, string currentFilePath)
-    {
-        var parts = gitRef.Split('#');
-        if (parts.Length != 2)
-        {
-            return null;
-        }
-
-        var refParts = parts[1].Split('=');
-        if (refParts.Length != 2)
-        {
-            return null;
-        }
-
-        var refName = refParts[1];
-
-        try
-        {
-            var gitRoot = await RunGitCommand("rev-parse --show-toplevel");
-            if (gitRoot is null) return null;
-
-            var fullPath = Path.GetFullPath(currentFilePath);
-            var gitRelativePath = Path.GetRelativePath(gitRoot, fullPath).Replace('\\', '/');
-            if (gitRelativePath.StartsWith("..") || Path.IsPathRooted(gitRelativePath))
-            {
-                return null;
-            }
-
-            var content = await RunGitCommand($"show {refName}:{gitRelativePath}", gitRoot);
-            if (content is null) return null;
-
-            var virtualPath = Path.GetFullPath(Path.Combine(gitRoot, gitRelativePath));
-            var importResolver = CreateGitAwareImportResolver(gitRoot, refName);
-            return new ResolvedReference(virtualPath, content, importResolver);
-        }
-        catch (Exception ex)
-        {
-            WriteError($"Error: failed to resolve git reference '{gitRef}': {ex.Message}");
-            return null;
-        }
-    }
-
-    static async Task<string?> RunGitCommand(string arguments, string? workingDirectory = null)
-    {
-        using var process = new System.Diagnostics.Process();
-        process.StartInfo = new System.Diagnostics.ProcessStartInfo
-        {
-            FileName = "git",
-            Arguments = arguments,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            WorkingDirectory = workingDirectory ?? Environment.CurrentDirectory,
-            CreateNoWindow = true
-        };
-
-        process.Start();
-        // Read both streams concurrently to avoid deadlock if git fills its stderr buffer.
-        var stdoutTask = process.StandardOutput.ReadToEndAsync();
-        var stderrTask = process.StandardError.ReadToEndAsync();
-        await process.WaitForExitAsync();
-        var output = await stdoutTask;
-        var stderr = await stderrTask;
-
-        if (process.ExitCode != 0)
-        {
-            if (!string.IsNullOrWhiteSpace(stderr))
-            {
-                WriteError($"git {arguments}: {stderr.Trim()}");
-            }
-            return null;
-        }
-
-        return output.Trim();
-    }
-
-    static async Task<int> CheckBreaking(ResolvedReference oldSchema, string newFilePath, string errorFormat, bool verbose, bool ignoreImports)
-    {
-        var parseOptions = new ParseOptions(IgnoreImports: ignoreImports);
-        ParseResult oldResult;
-        if (oldSchema.Content is not null)
-        {
-            oldResult = await ParserFacade.ParseContentAsync(
-                oldSchema.Content,
-                oldSchema.FilePath,
-                oldSchema.ImportResolver,
-                parseOptions);
-        }
-        else
-        {
-            oldResult = await ParserFacade.ParseFileAsync(
-                oldSchema.FilePath,
-                oldSchema.ImportResolver,
-                CancellationToken.None,
-                parseOptions);
-        }
-        if (!oldResult.Success)
-        {
-            return OutputParseError(errorFormat, oldResult.Errors, "Failed to parse reference schema", oldSchema.FilePath);
-        }
-
-        var newResult = await ParserFacade.ParseFileAsync(newFilePath, options: parseOptions);
-        if (!newResult.Success)
-        {
-            return OutputParseError(errorFormat, newResult.Errors, "Failed to parse current schema", newFilePath);
-        }
-
-        var checker = new CompatibilityChecker();
-        var changes = checker.CheckCompatibility(oldResult.Ast!, newResult.Ast!);
-        var hasBreaking = changes.Any(c => c.Category is ChangeCategory.BreakingWire or ChangeCategory.BreakingText);
-
-        if (errorFormat == "json")
-        {
-            OutputJsonBreaking(changes);
-            return hasBreaking ? 1 : 0;
-        }
-
-        if (hasBreaking)
-        {
-            foreach (var change in changes.Where(c => c.Category is ChangeCategory.BreakingWire or ChangeCategory.BreakingText))
-            {
-                Console.Error.WriteLine($"{change.Location}: {change.Description}");
-            }
-            return 1;
-        }
-
-        if (verbose)
-        {
-            foreach (var change in changes)
-            {
-                Console.WriteLine($"{change.Category}: {change.Location}: {change.Description}");
-            }
-        }
-        return 0;
-    }
-
-    // git's object database is content-addressed and won't change for a given (ref, path)
-    // during one CLI invocation; cache to avoid one process spawn per imported file.
-    static ImportResolver CreateGitAwareImportResolver(string gitRoot, string refName)
-    {
-        var cache = new Dictionary<string, string?>(StringComparer.Ordinal);
-
-        return async (currentFile, importPath) =>
-        {
-            var currentDir = Path.GetDirectoryName(currentFile) ?? gitRoot;
-            var absolutePath = Path.GetFullPath(Path.Combine(currentDir, importPath));
-
-            var relativePath = Path.GetRelativePath(gitRoot, absolutePath).Replace('\\', '/');
-            var inRepo = !relativePath.StartsWith("..") && !Path.IsPathRooted(relativePath);
-            if (inRepo)
-            {
-                if (!cache.TryGetValue(relativePath, out var cached))
-                {
-                    cached = await RunGitCommand($"show {refName}:{relativePath}", gitRoot);
-                    cache[relativePath] = cached;
-                }
-                if (cached is not null)
-                {
-                    return (absolutePath, cached);
-                }
-            }
-
-            if (File.Exists(absolutePath))
-            {
-                var content = await File.ReadAllTextAsync(absolutePath);
-                return (absolutePath, content);
-            }
-
-            throw new FileNotFoundException($"Imported file not found: {importPath}", absolutePath);
-        };
-    }
-
-    static int OutputParseError(string errorFormat, IReadOnlyList<ParseError> errors, string message, string filePath)
-    {
-        if (errorFormat == "json")
-        {
-            OutputJsonErrors("parse_error", errors, message);
-        }
-        else
-        {
-            WriteError($"{message}: {filePath}");
-            foreach (var error in errors)
-            {
-                Console.WriteLine($"  {error.Message}");
-            }
-        }
-        return 1;
-    }
-
     // Suppress ANSI color sequences when stderr is redirected so they don't leak into pipes / log files.
     static void WriteError(string message)
     {
@@ -407,44 +161,6 @@ public static class Program
         {
             Console.ResetColor();
         }
-    }
-
-    static void OutputJson(object output) =>
-        Console.WriteLine(JsonSerializer.Serialize(output, PrettyJson));
-
-    static void OutputJsonErrors(string errorType, IReadOnlyList<ParseError> errors, string message) =>
-        OutputJson(new
-        {
-            error = errorType,
-            message,
-            errors = errors.Select(e => new
-            {
-                line = e.Line,
-                column = e.Column,
-                message = e.Message,
-                file = e.FilePath
-            })
-        });
-
-    static void OutputJsonBreaking(List<SchemaChange> changes)
-    {
-        static string CategoryToString(ChangeCategory cat) => cat switch
-        {
-            ChangeCategory.BreakingWire => "breaking_wire",
-            ChangeCategory.BreakingText => "breaking_text",
-            _                           => "compatible",
-        };
-
-        OutputJson(new
-        {
-            changes = changes.Select(c => new
-            {
-                type           = CategoryToString(c.Category),
-                location       = c.Location,
-                description    = c.Description,
-                recommendation = c.Recommendation
-            }).ToArray()
-        });
     }
 
     static void PrintJson(Bond.Parser.Syntax.Bond ast)
@@ -534,6 +250,7 @@ public static class Program
         Console.WriteLine("  --against <reference>      Reference schema to compare against (file path or .git#branch=name)");
         Console.WriteLine("  --error-format <format>    Output format: text, json (default: text)");
         Console.WriteLine("  --ignore-imports           Compare without resolving imports or types");
+        Console.WriteLine("  --suppress <IDs>           Suppress selected diagnostic IDs");
         Console.WriteLine();
         Console.WriteLine("Format Options:");
         Console.WriteLine("  --check                    Exit non-zero if formatting is needed");
@@ -550,10 +267,6 @@ public static class Program
         Console.WriteLine("  --version                  Show the package version");
     }
 
-    /// <summary>
-    /// Tiny argument helper. The first non-flag arg is the positional (file path);
-    /// flags are matched by exact name; values support both `--flag value` and `--flag=value`.
-    /// </summary>
     private sealed class Args
     {
         private readonly string[] _args;
@@ -584,21 +297,5 @@ public static class Program
             return false;
         }
 
-        public string? GetValue(string name)
-        {
-            for (var i = 0; i < _args.Length; i++)
-            {
-                if (_args[i] == name && i + 1 < _args.Length)
-                {
-                    return _args[i + 1];
-                }
-                var prefix = name + "=";
-                if (_args[i].StartsWith(prefix, StringComparison.Ordinal))
-                {
-                    return _args[i][prefix.Length..];
-                }
-            }
-            return null;
-        }
     }
 }
