@@ -14,9 +14,9 @@ public static class BreakingCommand
     public static async Task<int> RunAsync(string[] args, TextWriter standardOutput, TextWriter standardError,
         CancellationToken cancellationToken = default)
     {
-        var options = BreakingOptions.Parse(args);
+        var options = SchemaCommandOptions.Parse(args, comparison: true);
         if (options.Errors.Count != 0)
-            return await BreakingOptions.WriteErrors(standardError, options.ErrorFormat,
+            return await SchemaCommandOptions.WriteErrors(standardError, options.ErrorFormat,
                 options.Errors.Select(error => new ParseError(error, null, 0, 0)));
         if (options.Help)
         {
@@ -48,23 +48,23 @@ public static class BreakingCommand
             var compatibility = options.CreateCompatibilityOptions();
             var input = Path.GetFullPath(options.Input!);
             var parseOptions = new ParseOptions(IgnoreImports: options.IgnoreImports);
-            var resolver = BreakingSchemaIO.ImportResolver(options.ImportDirectories, cancellationToken);
+            var resolver = SchemaFiles.ImportResolver(options.ImportDirectories, cancellationToken);
             var current = await ParserFacade.ParseFileAsync(input, resolver, cancellationToken, parseOptions);
             if (!current.Success)
-                return await BreakingOptions.WriteErrors(standardError, options.ErrorFormat, current.Errors);
+                return await SchemaCommandOptions.WriteErrors(standardError, options.ErrorFormat, current.Errors);
             var checker = new CompatibilityChecker();
             currentPath = options.Against!;
             ParseResult previous;
             if (options.Against!.StartsWith(".git#", StringComparison.Ordinal))
             {
-                var reference = await BreakingSchemaIO.ReadGitReference(options.Against, input,
+                var reference = await SchemaFiles.ReadGitReference(options.Against, input,
                     options.ImportDirectories, cancellationToken);
                 previous = await ParserFacade.ParseContentAsync(reference.Content, input, reference.Resolver, parseOptions);
             }
             else
                 previous = await ParserFacade.ParseFileAsync(options.Against, resolver, cancellationToken, parseOptions);
             if (!previous.Success)
-                return await BreakingOptions.WriteErrors(standardError, options.ErrorFormat, previous.Errors);
+                return await SchemaCommandOptions.WriteErrors(standardError, options.ErrorFormat, previous.Errors);
             var result = checker.Compare(previous.Ast!, current.Ast!, compatibility);
             if (options.ErrorFormat == "json")
             {
@@ -104,7 +104,7 @@ public static class BreakingCommand
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
-            return await BreakingOptions.WriteErrors(standardError, options.ErrorFormat,
+            return await SchemaCommandOptions.WriteErrors(standardError, options.ErrorFormat,
                 [new ParseError(error.Message, currentPath, 0, 0)]);
         }
     }

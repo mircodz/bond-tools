@@ -6,6 +6,7 @@
 
 ```bash
 dotnet tool install -g bond-tools
+bond check schema.bond
 bond breaking schema.bond --against .git#branch=main --error-format=json
 bond format schema.bond
 bond format schema.bond --check

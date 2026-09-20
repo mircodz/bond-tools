@@ -9,7 +9,7 @@ using Bond.Parser.Parser;
 
 namespace Bond.Parser.CLI;
 
-internal sealed class BreakingOptions
+internal sealed class SchemaCommandOptions
 {
     internal string? Input { get; private set; }
     internal string? Against { get; private set; }
@@ -30,9 +30,9 @@ internal sealed class BreakingOptions
             SuppressedDiagnosticIds = Suppressions
         };
 
-    internal static BreakingOptions Parse(string[] args)
+    internal static SchemaCommandOptions Parse(string[] args, bool comparison)
     {
-        var options = new BreakingOptions();
+        var options = new SchemaCommandOptions();
         var positional = false;
         var seen = new HashSet<string>(StringComparer.Ordinal);
         for (var i = 0; i < args.Length; i++)
@@ -47,7 +47,7 @@ internal sealed class BreakingOptions
             {
                 var equals = argument.IndexOf('=');
                 var name = equals < 0 ? argument : argument[..equals];
-                if (name is "-h" or "--help" or "-v" or "--verbose" or "--ignore-imports" or "--list-rules")
+                if (name is "-h" or "--help" || comparison && name is "-v" or "--verbose" or "--ignore-imports" or "--list-rules")
                 {
                     if (equals >= 0)
                         options.Errors.Add($"Flag '{name}' does not accept a value.");
@@ -58,7 +58,7 @@ internal sealed class BreakingOptions
                     continue;
                 }
                 var allowed = name is "-I" or "--import-dir" or "--error-format"
-                    or "--against" or "--suppress";
+                    || comparison && name is "--against" or "--suppress";
                 if (!allowed)
                 {
                     options.Errors.Add($"Unknown option '{name}'.");
@@ -100,7 +100,7 @@ internal sealed class BreakingOptions
         if (!options.Help && !options.ListRules)
         {
             if (options.Input == null) options.Errors.Add("A .bond schema file is required.");
-            if (options.Against == null) options.Errors.Add("--against is required.");
+            if (comparison && options.Against == null) options.Errors.Add("--against is required.");
         }
         return options;
     }
@@ -108,7 +108,8 @@ internal sealed class BreakingOptions
     internal static string[] Split(string value) =>
         value.Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
-    internal static async Task<int> WriteErrors(TextWriter writer, string format, IEnumerable<ParseError> errors)
+    internal static async Task<int> WriteErrors(TextWriter writer, string format, IEnumerable<ParseError> errors,
+        int exitCode = 2)
     {
         var values = errors.ToArray();
         if (format == "json")
@@ -128,6 +129,6 @@ internal sealed class BreakingOptions
         else
             foreach (var error in values)
                 await writer.WriteLineAsync($"{error.FilePath ?? "bond"}({error.Line},{error.Column}): error: {error.Message}");
-        return 2;
+        return exitCode;
     }
 }

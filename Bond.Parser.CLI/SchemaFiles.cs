@@ -9,7 +9,7 @@ using Bond.Parser.Parser;
 
 namespace Bond.Parser.CLI;
 
-internal static class BreakingSchemaIO
+internal static class SchemaFiles
 {
     internal static ImportResolver ImportResolver(IEnumerable<string> directories, CancellationToken cancellationToken)
     {
