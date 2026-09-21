@@ -21,6 +21,7 @@ public sealed record CSharpGenerationOptions
     public IReadOnlyList<string> NamespaceMappings { get; init; } = [];
     public IReadOnlyList<string> TypeMappings { get; init; } = [];
     public CSharpModelFeatures ModelFeatures { get; init; }
+
     public bool GenerateModelFeatures => ModelFeatures != CSharpModelFeatures.None;
     public bool GenerateDescriptors => ModelFeatures.HasFlag(CSharpModelFeatures.Descriptors);
     public bool GenerateCloning => ModelFeatures.HasFlag(CSharpModelFeatures.Cloning);

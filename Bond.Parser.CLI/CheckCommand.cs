@@ -14,8 +14,11 @@ public static class CheckCommand
     {
         var options = SchemaCommandOptions.Parse(args, comparison: false);
         if (options.Errors.Count != 0)
+        {
             return await SchemaCommandOptions.WriteErrors(standardError, options.ErrorFormat,
                 options.Errors.Select(error => new ParseError(error, null, 0, 0)));
+        }
+
         if (options.Help)
         {
             await standardOutput.WriteLineAsync("""
@@ -31,6 +34,7 @@ public static class CheckCommand
                 """);
             return 0;
         }
+
         var file = options.Input!;
         try
         {
@@ -39,7 +43,10 @@ public static class CheckCommand
                 SchemaFiles.ImportResolver(options.ImportDirectories, cancellationToken), cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
             if (result.Success)
+            {
                 return 0;
+            }
+
             return await SchemaCommandOptions.WriteErrors(standardError, options.ErrorFormat, result.Errors, exitCode: 1);
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)

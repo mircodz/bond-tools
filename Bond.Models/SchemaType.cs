@@ -93,7 +93,9 @@ public sealed class PrimitiveSchemaType : SchemaType
     public PrimitiveSchemaType(SchemaTypeKind kind) : base(kind)
     {
         if (kind is < SchemaTypeKind.Int8 or > SchemaTypeKind.MetaFullName)
+        {
             throw new ArgumentOutOfRangeException(nameof(kind));
+        }
     }
 
     internal override SchemaType Substitute(IReadOnlyList<SchemaType> arguments) => this;
@@ -107,7 +109,10 @@ public sealed class UnarySchemaType : SchemaType
     {
         if (kind is not (SchemaTypeKind.List or SchemaTypeKind.Vector or SchemaTypeKind.Set
             or SchemaTypeKind.Nullable or SchemaTypeKind.Maybe or SchemaTypeKind.Bonded))
+        {
             throw new ArgumentOutOfRangeException(nameof(kind));
+        }
+
         ElementType = elementType ?? throw new ArgumentNullException(nameof(elementType));
     }
 
@@ -116,7 +121,8 @@ public sealed class UnarySchemaType : SchemaType
 
     /// <inheritdoc />
     public override string ToString() => Kind == SchemaTypeKind.Maybe
-        ? ElementType + " = nothing" : base.ToString() + "<" + ElementType + ">";
+        ? ElementType + " = nothing"
+        : base.ToString() + "<" + ElementType + ">";
 
     internal override SchemaType Substitute(IReadOnlyList<SchemaType> arguments) =>
         new UnarySchemaType(Kind, ElementType.Substitute(arguments));
@@ -159,16 +165,21 @@ public sealed class NamedSchemaType : SchemaType
         Func<SchemaDescriptor> declaration, IEnumerable<SchemaType>? typeArguments = null) : base(kind)
     {
         if (kind is not (SchemaTypeKind.Struct or SchemaTypeKind.Enum or SchemaTypeKind.Alias))
+        {
             throw new ArgumentOutOfRangeException(nameof(kind));
+        }
+
         Name = name ?? throw new ArgumentNullException(nameof(name));
         Namespace = @namespace ?? throw new ArgumentNullException(nameof(@namespace));
         ArgumentNullException.ThrowIfNull(declaration);
         TypeArguments = SchemaCollections.Freeze(typeArguments);
+
         _declaration = new Lazy<SchemaDescriptor>(
             () => declaration() ?? throw new InvalidOperationException("A declaration factory returned null."),
             LazyThreadSafetyMode.ExecutionAndPublication);
-        _resolved = new Lazy<SchemaDescriptor>(() => TypeArguments.Count == 0
-            ? Declaration : Declaration.Bind(TypeArguments.ToArray()), LazyThreadSafetyMode.ExecutionAndPublication);
+        _resolved = new Lazy<SchemaDescriptor>(
+            () => TypeArguments.Count == 0 ? Declaration : Declaration.Bind(TypeArguments.ToArray()),
+            LazyThreadSafetyMode.ExecutionAndPublication);
     }
 
     /// <summary>The referenced declaration's IDL name.</summary>
@@ -190,8 +201,9 @@ public sealed class NamedSchemaType : SchemaType
     public SchemaDescriptor Resolve() => _resolved.Value;
 
     /// <inheritdoc />
-    public override string ToString() => TypeArguments.Count == 0 ? FullName :
-        FullName + "<" + string.Join(", ", TypeArguments) + ">";
+    public override string ToString() => TypeArguments.Count == 0
+        ? FullName
+        : FullName + "<" + string.Join(", ", TypeArguments) + ">";
 
     internal override SchemaType Substitute(IReadOnlyList<SchemaType> arguments) =>
         new NamedSchemaType(Kind, Name, Namespace, () => Declaration,

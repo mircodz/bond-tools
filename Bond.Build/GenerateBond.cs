@@ -9,15 +9,22 @@ namespace BondTools.Build;
 
 public sealed class GenerateBond : Task, ICancelableTask
 {
-    [Required] public string ProjectFile { get; set; } = "";
-    [Required] public string OutputDirectory { get; set; } = "";
+    [Required]
+    public string ProjectFile { get; set; } = "";
+
+    [Required]
+    public string OutputDirectory { get; set; } = "";
+
     public ITaskItem[] Sources { get; set; } = [];
     public ITaskItem[] ImportDirectories { get; set; } = [];
     public ITaskItem[] Usings { get; set; } = [];
     public ITaskItem[] NamespaceMappings { get; set; } = [];
     public ITaskItem[] TypeMappings { get; set; } = [];
-    [Output] public ITaskItem[] GeneratedFiles { get; private set; } = [];
-    [Output] public ITaskItem[] WrittenFiles { get; private set; } = [];
+    [Output]
+    public ITaskItem[] GeneratedFiles { get; private set; } = [];
+
+    [Output]
+    public ITaskItem[] WrittenFiles { get; private set; } = [];
 
     private readonly CancellationTokenSource _cancellation = new();
 
@@ -28,11 +35,17 @@ public sealed class GenerateBond : Task, ICancelableTask
             var request = BuildRequest.Create(ProjectFile, OutputDirectory, Sources,
                 ImportDirectories, Usings, NamespaceMappings, TypeMappings);
             var result = GenerationEngine.RunAsync(request, _cancellation.Token).GetAwaiter().GetResult();
+
             foreach (var error in result.Errors)
+            {
                 Log.LogError(null, "BOND1001", null, error.FilePath ?? ProjectFile,
                     error.Line, error.Column, 0, 0, "{0}", error.Message);
+            }
+
             if (result.Errors.Count != 0)
+            {
                 return false;
+            }
 
             GeneratedFiles = result.GeneratedFiles.Select(path => (ITaskItem)new TaskItem(path)).ToArray();
             WrittenFiles = result.WrittenFiles.Select(path => (ITaskItem)new TaskItem(path)).ToArray();

@@ -16,8 +16,11 @@ public static class BreakingCommand
     {
         var options = SchemaCommandOptions.Parse(args, comparison: true);
         if (options.Errors.Count != 0)
+        {
             return await SchemaCommandOptions.WriteErrors(standardError, options.ErrorFormat,
                 options.Errors.Select(error => new ParseError(error, null, 0, 0)));
+        }
+
         if (options.Help)
         {
             await standardOutput.WriteLineAsync("""
@@ -36,12 +39,17 @@ public static class BreakingCommand
                 """);
             return 0;
         }
+
         if (options.ListRules)
         {
             foreach (var rule in DiagnosticIds.Rules.OrderBy(rule => rule.Key, StringComparer.Ordinal))
+            {
                 await standardOutput.WriteLineAsync($"{rule.Key}  {rule.Value}");
+            }
+
             return 0;
         }
+
         var currentPath = options.Input!;
         try
         {
@@ -51,8 +59,10 @@ public static class BreakingCommand
             var resolver = SchemaFiles.ImportResolver(options.ImportDirectories, cancellationToken);
             var current = await ParserFacade.ParseFileAsync(input, resolver, cancellationToken, parseOptions);
             if (!current.Success)
+            {
                 return await SchemaCommandOptions.WriteErrors(standardError, options.ErrorFormat, current.Errors);
-            var checker = new CompatibilityChecker();
+            }
+
             currentPath = options.Against!;
             ParseResult previous;
             if (options.Against!.StartsWith(".git#", StringComparison.Ordinal))
@@ -62,9 +72,16 @@ public static class BreakingCommand
                 previous = await ParserFacade.ParseContentAsync(reference.Content, input, reference.Resolver, parseOptions);
             }
             else
+            {
                 previous = await ParserFacade.ParseFileAsync(options.Against, resolver, cancellationToken, parseOptions);
+            }
+
             if (!previous.Success)
+            {
                 return await SchemaCommandOptions.WriteErrors(standardError, options.ErrorFormat, previous.Errors);
+            }
+
+            var checker = new CompatibilityChecker();
             var result = checker.Compare(previous.Ast!, current.Ast!, compatibility);
             if (options.ErrorFormat == "json")
             {
@@ -90,16 +107,25 @@ public static class BreakingCommand
                 foreach (var change in result.Changes)
                 {
                     if (change.IsSuppressed && !options.Verbose)
+                    {
                         continue;
+                    }
+
                     if (!options.Verbose && change.Severity == ChangeSeverity.Info)
+                    {
                         continue;
+                    }
+
                     var writer = change.Severity == ChangeSeverity.Info || change.IsSuppressed ? standardOutput : standardError;
                     await writer.WriteLineAsync($"{change.Location}: {change.Severity.ToString().ToLowerInvariant()} {change.Id}: {change.Description}" +
                         (change.IsSuppressed ? " (suppressed)" : ""));
                     if (change.Recommendation != null)
+                    {
                         await writer.WriteLineAsync("  " + change.Recommendation);
+                    }
                 }
             }
+
             return result.ExitCode;
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)

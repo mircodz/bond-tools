@@ -39,10 +39,13 @@ public class SemanticAnalyzer
             {
                 ValidateDeclaration(declaration);
                 ValidateInheritance(declaration, resolved.ResolvedDeclarations);
+
                 if (declaration is ForwardDeclaration forward
                     && resolved.ResolvedDeclarations.FirstOrDefault(d => d.QualifiedName == forward.QualifiedName) is StructDeclaration definition
                     && !SymbolTable.ParametersMatch(forward.TypeParameters, definition.TypeParameters))
+                {
                     throw new SemanticErrorException($"Type parameters for forward declaration '{forward.Name}' do not match its definition", forward.Location);
+                }
             }
             catch (SemanticErrorException error)
             {
@@ -52,6 +55,7 @@ public class SemanticAnalyzer
                 ]);
             }
         }
+
         return resolved;
     }
 
@@ -71,7 +75,9 @@ public class SemanticAnalyzer
         {
             _symbolTable.SetContext(declaration, _aliases, _currentFile);
             if (declaration is not AliasDeclaration)
+            {
                 _symbolTable.AddDeclaration(declaration);
+            }
         }
     }
 
@@ -84,9 +90,13 @@ public class SemanticAnalyzer
         if (duplicate is not null)
         {
             if (SymbolTable.EquivalentDeclarations(duplicate, alias))
+            {
                 return;
+            }
+
             throw new SemanticErrorException($"Duplicate declaration: alias '{alias.Name}' was already declared", alias.Location);
         }
+
         _aliases.Add(alias);
     }
 
@@ -140,10 +150,18 @@ public class SemanticAnalyzer
     {
         switch (declaration)
         {
-            case StructDeclaration structDecl: ValidateStruct(structDecl); break;
-            case AliasDeclaration alias: TypeValidator.ValidateType(alias.AliasedType, alias.Location); break;
-            case EnumDeclaration enumDecl: ValidateEnum(enumDecl); break;
-            case ServiceDeclaration serviceDecl: ValidateService(serviceDecl); break;
+            case StructDeclaration structDecl:
+                ValidateStruct(structDecl);
+                break;
+            case AliasDeclaration alias:
+                TypeValidator.ValidateType(alias.AliasedType, alias.Location);
+                break;
+            case EnumDeclaration enumDecl:
+                ValidateEnum(enumDecl);
+                break;
+            case ServiceDeclaration serviceDecl:
+                ValidateService(serviceDecl);
+                break;
         }
     }
 
@@ -152,11 +170,16 @@ public class SemanticAnalyzer
         CheckForDuplicates(structDecl.Fields.Select(f => f.Ordinal), $"Struct '{structDecl.Name}'", "field ordinal", structDecl.Location);
         CheckForDuplicates(structDecl.Fields.Select(f => f.Name), $"Struct '{structDecl.Name}'", "field name", structDecl.Location);
 
-        if (structDecl.BaseType is { } baseType && !baseType.ResolveAliases().IsStruct()
-            && baseType.ResolveAliases() is not BondType.TypeParameter)
-            throw new SemanticErrorException($"Struct '{structDecl.Name}' must inherit from a struct", structDecl.Location);
         if (structDecl.BaseType is not null)
+        {
+            var baseType = structDecl.BaseType.ResolveAliases();
+            if (!baseType.IsStruct() && baseType is not BondType.TypeParameter)
+            {
+                throw new SemanticErrorException($"Struct '{structDecl.Name}' must inherit from a struct", structDecl.Location);
+            }
+
             TypeValidator.ValidateType(structDecl.BaseType, structDecl.Location);
+        }
 
         foreach (var field in structDecl.Fields)
         {
@@ -195,6 +218,7 @@ public class SemanticAnalyzer
                     ValidateMethodType(eventMethod.InputType, eventMethod.Location);
                     break;
             }
+
             if (method is EventMethod { InputType: MethodType.Streaming })
             {
                 throw new SemanticErrorException($"Event method '{method.Name}' cannot have streaming input", method.Location);
@@ -204,16 +228,24 @@ public class SemanticAnalyzer
 
     private static void ValidateMethodType(MethodType type, SourceLocation location)
     {
-        var value = type switch
+        var parameterType = type switch
         {
             MethodType.Unary unary => unary.Type,
             MethodType.Streaming streaming => streaming.Type,
             _ => null
         };
-        if (value is null) return;
-        TypeValidator.ValidateType(value, location);
-        if (!value.ResolveAliases().IsStruct() && value.ResolveAliases() is not BondType.TypeParameter)
+        if (parameterType is null)
+        {
+            return;
+        }
+
+        TypeValidator.ValidateType(parameterType, location);
+
+        var resolvedType = parameterType.ResolveAliases();
+        if (!resolvedType.IsStruct() && resolvedType is not BondType.TypeParameter)
+        {
             throw new SemanticErrorException("A service method requires a struct type", location);
+        }
     }
 
     private static void ValidateInheritance(Declaration declaration, Declaration[] environment)
@@ -223,7 +255,10 @@ public class SemanticAnalyzer
         while (current is StructDeclaration or ServiceDeclaration)
         {
             if (!visited.Add(current.QualifiedName))
+            {
                 throw new SemanticErrorException($"Cyclic inheritance involving '{current.Name}'", declaration.Location);
+            }
+
             var baseType = current switch
             {
                 StructDeclaration structure => structure.BaseType,
@@ -231,7 +266,10 @@ public class SemanticAnalyzer
                 _ => null
             };
             if (baseType?.ResolveAliases() is not BondType.TypeReference reference)
+            {
                 return;
+            }
+
             current = environment.FirstOrDefault(d => d.QualifiedName == reference.Declaration.QualifiedName)
                 ?? reference.Declaration;
         }
@@ -239,7 +277,11 @@ public class SemanticAnalyzer
 
     private static void CheckForDuplicates<T>(IEnumerable<T> items, string context, string itemType, SourceLocation location)
     {
-        var duplicates = items.GroupBy(x => x).Where(g => g.Count() > 1).Select(g => g.Key).ToList();
+        var duplicates = items
+            .GroupBy(item => item)
+            .Where(group => group.Count() > 1)
+            .Select(group => group.Key)
+            .ToList();
         if (duplicates.Count > 0)
         {
             throw new SemanticErrorException($"{context} has duplicate {itemType}(s): {string.Join(", ", duplicates)}", location);
@@ -270,5 +312,4 @@ public class SemanticAnalyzer
 
     private static BondType UnwrapMaybe(BondType type) =>
         type is BondType.Maybe maybe ? maybe.ElementType : type;
-
 }

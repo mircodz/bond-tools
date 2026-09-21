@@ -164,6 +164,7 @@ public abstract record BondType
             {
                 return $"{name}<{string.Join(", ", TypeArguments.Select(t => t.ToString()))}>";
             }
+
             return name;
         }
 
@@ -178,7 +179,11 @@ public abstract record BondType
         {
             var hash = new HashCode();
             hash.Add(Declaration.QualifiedName);
-            foreach (var t in TypeArguments) hash.Add(t);
+            foreach (var t in TypeArguments)
+            {
+                hash.Add(t);
+            }
+
             return hash.ToHashCode();
         }
     }
@@ -211,6 +216,7 @@ public abstract record BondType
             {
                 return $"{name}<{string.Join(", ", TypeArguments.Select(t => t.ToString()))}>";
             }
+
             return name;
         }
 
@@ -223,8 +229,16 @@ public abstract record BondType
         public override int GetHashCode()
         {
             var hash = new HashCode();
-            foreach (var s in QualifiedName) hash.Add(s);
-            foreach (var t in TypeArguments) hash.Add(t);
+            foreach (var s in QualifiedName)
+            {
+                hash.Add(s);
+            }
+
+            foreach (var t in TypeArguments)
+            {
+                hash.Add(t);
+            }
+
             return hash.ToHashCode();
         }
     }
@@ -236,14 +250,21 @@ public static class BondTypeExtensions
     public static BondType ResolveAliases(this BondType type)
     {
         if (type is not BondType.TypeReference { Declaration: AliasDeclaration })
+        {
             return type;
+        }
+
         var visited = new HashSet<BondType.TypeReference>();
         while (type is BondType.TypeReference { Declaration: AliasDeclaration alias } reference)
         {
             if (!visited.Add(reference))
+            {
                 throw new InvalidOperationException($"Cyclic type alias '{alias.Name}'.");
+            }
+
             type = alias.AliasedType.SubstituteTypeParameters(alias.TypeParameters, reference.TypeArguments);
         }
+
         return type;
     }
 
@@ -251,23 +272,33 @@ public static class BondTypeExtensions
     public static BondType SubstituteTypeParameters(this BondType type, TypeParam[] parameters, BondType[] arguments)
     {
         if (parameters.Length != arguments.Length)
-            throw new ArgumentException("The number of type arguments must match the number of type parameters.");
-
-        BondType Substitute(BondType value) => value switch
         {
-            BondType.TypeParameter parameter => Array.FindIndex(parameters, p => p == parameter.Param) is var index && index >= 0
-                ? arguments[index] : value,
-            BondType.List list => new BondType.List(Substitute(list.ElementType)),
-            BondType.Vector vector => new BondType.Vector(Substitute(vector.ElementType)),
-            BondType.Set set => new BondType.Set(Substitute(set.KeyType)),
-            BondType.Map map => new BondType.Map(Substitute(map.KeyType), Substitute(map.ValueType)),
-            BondType.Nullable nullable => new BondType.Nullable(Substitute(nullable.ElementType)),
-            BondType.Maybe maybe => new BondType.Maybe(Substitute(maybe.ElementType)),
-            BondType.Bonded bonded => new BondType.Bonded(Substitute(bonded.StructType)),
-            BondType.TypeReference reference => reference with { TypeArguments = reference.TypeArguments.Select(Substitute).ToArray() },
-            BondType.UnresolvedType unresolved => unresolved with { TypeArguments = unresolved.TypeArguments.Select(Substitute).ToArray() },
-            _ => value
-        };
+            throw new ArgumentException("The number of type arguments must match the number of type parameters.");
+        }
+
+        BondType Substitute(BondType value)
+        {
+            if (value is BondType.TypeParameter parameter)
+            {
+                var index = Array.FindIndex(parameters, p => p == parameter.Param);
+                return index >= 0 ? arguments[index] : value;
+            }
+
+            return value switch
+            {
+                BondType.List list => new BondType.List(Substitute(list.ElementType)),
+                BondType.Vector vector => new BondType.Vector(Substitute(vector.ElementType)),
+                BondType.Set set => new BondType.Set(Substitute(set.KeyType)),
+                BondType.Map map => new BondType.Map(Substitute(map.KeyType), Substitute(map.ValueType)),
+                BondType.Nullable nullable => new BondType.Nullable(Substitute(nullable.ElementType)),
+                BondType.Maybe maybe => new BondType.Maybe(Substitute(maybe.ElementType)),
+                BondType.Bonded bonded => new BondType.Bonded(Substitute(bonded.StructType)),
+                BondType.TypeReference reference => reference with { TypeArguments = reference.TypeArguments.Select(Substitute).ToArray() },
+                BondType.UnresolvedType unresolved => unresolved with { TypeArguments = unresolved.TypeArguments.Select(Substitute).ToArray() },
+                _ => value
+            };
+        }
+
         return Substitute(type);
     }
 

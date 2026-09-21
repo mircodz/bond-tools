@@ -23,6 +23,7 @@ public static class GenerateCommand
         {
             return await WriteErrorsAsync(standardError, options.ErrorFormat, options.Errors);
         }
+
         if (options.Help)
         {
             await standardOutput.WriteLineAsync(
@@ -55,35 +56,16 @@ public static class GenerateCommand
                 {
                     errors.Add(new ParseError($"Output-name collision: '{outputName}'. Input basenames must be unique (case-insensitive).", input, 0, 0));
                 }
+
                 inputs.Add((fullPath, Path.Combine(outputDirectory, outputName)));
             }
+
             if (errors.Count > 0)
             {
                 return await WriteErrorsAsync(standardError, options.ErrorFormat, errors);
             }
 
-            ImportResolver resolver = async (currentFile, importPath) =>
-            {
-                var directories = new[] { Path.GetDirectoryName(currentFile)! }.Concat(importDirectories);
-                foreach (var directory in directories)
-                {
-                    var normalizedImport = importPath.Replace('\\', Path.DirectorySeparatorChar)
-                        .Replace('/', Path.DirectorySeparatorChar);
-                    var candidate = Path.GetFullPath(Path.Combine(directory, normalizedImport));
-                    string content;
-                    try
-                    {
-                        content = await File.ReadAllTextAsync(candidate, cancellationToken);
-                    }
-                    catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
-                    {
-                        continue;
-                    }
-                    return (candidate, content);
-                }
-                throw new FileNotFoundException($"Imported file not found: {importPath}", importPath);
-            };
-
+            var resolver = SchemaFiles.ImportResolver(importDirectories, cancellationToken);
             var generated = new List<(string Path, string Code)>();
             foreach (var (input, output) in inputs)
             {
@@ -97,8 +79,10 @@ public static class GenerateCommand
                     {
                         errors.Add(new ParseError("Parsing produced no schema.", input, 0, 0));
                     }
+
                     continue;
                 }
+
                 var result = CSharpGenerator.Generate(parsed.Ast!, input, new CSharpGenerationOptions
                 {
                     UsingNamespaces = options.UsingNamespaces,
@@ -113,10 +97,13 @@ public static class GenerateCommand
                     {
                         errors.Add(new ParseError("C# generation produced no output.", input, 0, 0));
                     }
+
                     continue;
                 }
+
                 generated.Add((output, result.Code!));
             }
+
             if (errors.Count > 0)
             {
                 return await WriteErrorsAsync(standardError, options.ErrorFormat, errors);
@@ -127,6 +114,7 @@ public static class GenerateCommand
             {
                 errors.Add(new ParseError("Output directory is an existing file.", outputDirectory, 0, 0));
             }
+
             var existingEntries = Directory.Exists(outputDirectory)
                 ? Directory.EnumerateFileSystemEntries(outputDirectory).ToLookup(Path.GetFileName, StringComparer.OrdinalIgnoreCase)
                 : Array.Empty<string>().ToLookup(Path.GetFileName, StringComparer.OrdinalIgnoreCase);
@@ -134,12 +122,16 @@ public static class GenerateCommand
             foreach (var output in generated)
             {
                 currentPath = output.Path;
-                var matches = existingEntries[Path.GetFileName(output.Path)].ToArray();
-                if (matches.Length > 1 || (matches.Length == 1 && !string.Equals(Path.GetFileName(matches[0]), Path.GetFileName(output.Path), StringComparison.Ordinal)))
+                var outputName = Path.GetFileName(output.Path);
+                var matches = existingEntries[outputName].ToArray();
+                var differentCasing = matches.Length == 1
+                    && !string.Equals(Path.GetFileName(matches[0]), outputName, StringComparison.Ordinal);
+                if (matches.Length > 1 || differentCasing)
                 {
                     errors.Add(new ParseError("Output-name collision with an existing directory entry (case-insensitive).", output.Path, 0, 0));
                     continue;
                 }
+
                 if (matches.Length == 1)
                 {
                     var attributes = File.GetAttributes(matches[0]);
@@ -148,19 +140,23 @@ public static class GenerateCommand
                         errors.Add(new ParseError("Output path is a directory or symbolic link; refusing to overwrite it.", output.Path, 0, 0));
                         continue;
                     }
+
                     var existing = await File.ReadAllTextAsync(output.Path, cancellationToken);
                     if (!HasGeneratedHeader(existing))
                     {
                         errors.Add(new ParseError("Refusing to overwrite a non-generated file.", output.Path, 0, 0));
                         continue;
                     }
+
                     if (string.Equals(existing, output.Code, StringComparison.Ordinal))
                     {
                         continue;
                     }
                 }
+
                 pending.Add(output);
             }
+
             if (errors.Count > 0)
             {
                 return await WriteErrorsAsync(standardError, options.ErrorFormat, errors);
@@ -174,10 +170,12 @@ public static class GenerateCommand
                 currentPath = output.Path;
                 await File.WriteAllTextAsync(output.Path, output.Code, cancellationToken);
             }
+
             foreach (var output in generated)
             {
                 await standardOutput.WriteLineAsync(output.Path);
             }
+
             return 0;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
@@ -200,12 +198,12 @@ public static class GenerateCommand
             {
                 error = "generation_error",
                 message = "C# generation failed.",
-                errors = errors.Select(e => new
+                errors = errors.Select(error => new
                 {
-                    line = e.Line,
-                    column = e.Column,
-                    message = e.Message,
-                    file = e.FilePath ?? "bond"
+                    line = error.Line,
+                    column = error.Column,
+                    message = error.Message,
+                    file = error.FilePath ?? "bond"
                 })
             }));
         }
@@ -216,6 +214,7 @@ public static class GenerateCommand
                 await writer.WriteLineAsync($"{error.FilePath ?? "bond"}({error.Line},{error.Column}): error BOND1001: {error.Message}");
             }
         }
+
         return 1;
     }
 
@@ -240,6 +239,7 @@ public static class GenerateCommand
         var positionalOnly = false;
         var seenOutput = false;
         var seenFormat = false;
+
         void Error(string message) => options.Errors.Add(new ParseError(message, "bond", 0, 0));
 
         for (var i = 0; i < args.Length; i++)
@@ -250,11 +250,13 @@ public static class GenerateCommand
                 positionalOnly = true;
                 continue;
             }
+
             if (!positionalOnly && argument is "-h" or "--help")
             {
                 options.Help = true;
                 continue;
             }
+
             if (!positionalOnly && argument.StartsWith('-'))
             {
                 var equals = argument.IndexOf('=');
@@ -270,16 +272,25 @@ public static class GenerateCommand
                 };
                 if (feature != CSharpModelFeatures.None)
                 {
-                    if (equals >= 0) Error($"Flag '{name}' does not take a value.");
-                    else options.ModelFeatures |= feature;
+                    if (equals >= 0)
+                    {
+                        Error($"Flag '{name}' does not take a value.");
+                    }
+                    else
+                    {
+                        options.ModelFeatures |= feature;
+                    }
+
                     continue;
                 }
+
                 if (name is not ("-o" or "--output-dir" or "-I" or "--import-dir" or "--error-format"
                     or "-n" or "--namespace" or "-u" or "--using" or "--type-map"))
                 {
                     Error($"Unknown option '{name}'.");
                     continue;
                 }
+
                 string value;
                 if (equals >= 0)
                 {
@@ -294,15 +305,21 @@ public static class GenerateCommand
                     Error($"Option '{name}' requires a value.");
                     continue;
                 }
+
                 if (value.Length == 0)
                 {
                     Error($"Option '{name}' requires a non-empty value.");
                     continue;
                 }
+
                 switch (name)
                 {
                     case "-o" or "--output-dir":
-                        if (seenOutput) Error("Option '--output-dir' may only be specified once.");
+                        if (seenOutput)
+                        {
+                            Error("Option '--output-dir' may only be specified once.");
+                        }
+
                         seenOutput = true;
                         options.OutputDirectory = value;
                         break;
@@ -319,27 +336,60 @@ public static class GenerateCommand
                         options.TypeMappings.Add(value);
                         break;
                     case "--error-format":
-                        if (seenFormat) Error("Option '--error-format' may only be specified once.");
+                        if (seenFormat)
+                        {
+                            Error("Option '--error-format' may only be specified once.");
+                        }
+
                         seenFormat = true;
-                        if (value is "text" or "json") options.ErrorFormat = value;
-                        else Error($"Unsupported error format '{value}'; expected 'text' or 'json'.");
+                        if (value is "text" or "json")
+                        {
+                            options.ErrorFormat = value;
+                        }
+                        else
+                        {
+                            Error($"Unsupported error format '{value}'; expected 'text' or 'json'.");
+                        }
+
                         break;
                 }
+
                 continue;
             }
-            if (options.Language is null) options.Language = argument;
-            else options.Inputs.Add(argument);
+
+            if (options.Language is null)
+            {
+                options.Language = argument;
+            }
+            else
+            {
+                options.Inputs.Add(argument);
+            }
         }
+
         if (options.Language is not null && !options.Language.Equals("csharp", StringComparison.OrdinalIgnoreCase))
         {
             Error($"Unsupported language '{options.Language}'; only 'csharp' is supported.");
         }
+
         if (!options.Help)
         {
-            if (options.Language is null) Error("A language is required: bond generate csharp.");
-            if (options.Inputs.Count == 0) Error("At least one explicit .bond input file is required.");
-            if (options.OutputDirectory is null) Error("Option '-o'/'--output-dir' is required.");
+            if (options.Language is null)
+            {
+                Error("A language is required: bond generate csharp.");
+            }
+
+            if (options.Inputs.Count == 0)
+            {
+                Error("At least one explicit .bond input file is required.");
+            }
+
+            if (options.OutputDirectory is null)
+            {
+                Error("Option '-o'/'--output-dir' is required.");
+            }
         }
+
         return options;
     }
 

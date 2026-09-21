@@ -32,12 +32,14 @@ public sealed class CodegenReviewRegressionTests
             """, "/schemas/root.bond",
             (_, import) => Task.FromResult(("/schemas/" + import, imports[import])));
         Assert.True(parsed.Success, string.Join("\n", parsed.Errors.Select(error => error.Message)));
+
         var imported = parsed.Ast!.ResolvedDeclarations.OfType<StructDeclaration>().Single(type => type.Name == "Imported");
         var view = parsed.Ast.Declarations.OfType<StructDeclaration>().Single(type => type.Name == "View");
         var local = parsed.Ast.Declarations.OfType<StructDeclaration>().Single(type => type.Name == "Local");
         Assert.IsType<BondType.Int32>(Assert.Single(imported.Fields).Type.ResolveAliases());
         Assert.IsType<BondType.Int32>(Assert.Single(view.Fields).Type.ResolveAliases());
         Assert.IsType<BondType.String>(Assert.Single(local.Fields).Type.ResolveAliases());
+
         var generated = CSharpGenerator.Generate(parsed.Ast, "root.bond");
         Assert.True(generated.Success);
         Assert.Contains("public int value", generated.Code!);
@@ -53,6 +55,7 @@ public sealed class CodegenReviewRegressionTests
     {
         var parsed = await ParserFacade.ParseStringAsync("namespace Example struct Base; struct Child : Base {}");
         Assert.True(parsed.Success);
+
         var generated = CSharpGenerator.Generate(parsed.Ast!, "child.bond",
             new CSharpGenerationOptions { ModelFeatures = feature });
         Assert.False(generated.Success);
@@ -67,6 +70,7 @@ public sealed class CodegenReviewRegressionTests
     {
         var parsed = await ParserFacade.ParseStringAsync("namespace Example struct Base; struct Child : Base {}");
         Assert.True(parsed.Success);
+
         var generated = CSharpGenerator.Generate(parsed.Ast!, "child.bond",
             new CSharpGenerationOptions { ModelFeatures = feature });
         Assert.True(generated.Success, string.Join("\n", generated.Errors.Select(error => error.Message)));
@@ -93,6 +97,7 @@ public sealed class CodegenReviewRegressionTests
         var formatted = BondFormatter.Format(schema, "item.bond");
         Assert.True(formatted.Success);
         Assert.Contains("Values<int32, " + literal + ">", formatted.FormattedText!);
+
         var parsed = await ParserFacade.ParseStringAsync(formatted.FormattedText!);
         Assert.True(parsed.Success);
         var structure = Assert.Single(parsed.Ast!.Declarations.OfType<StructDeclaration>());

@@ -19,20 +19,32 @@ public static partial class CSharpGenerator
             foreach (var trivia in leading)
             {
                 if (previous is not null && trivia.Location.Line > previous.Location.Line + previous.Text.Count(c => c == '\n') + 1)
+                {
                     lines.Add("");
+                }
+
                 lines.AddRange(DocumentationLines(trivia));
                 previous = trivia;
             }
+
             if (trailing is not null)
+            {
                 lines.AddRange(DocumentationLines(trailing));
+            }
 
             var start = lines.FindIndex(line => line.Length != 0);
             if (start < 0)
+            {
                 return;
+            }
+
             var end = lines.FindLastIndex(line => line.Length != 0);
             Line(indent, "/// <summary>");
             for (var i = start; i <= end; i++)
+            {
                 Line(indent, "/// " + EscapeDocumentation(lines[i]));
+            }
+
             Line(indent, "/// </summary>");
         }
 
@@ -47,7 +59,10 @@ public static partial class CSharpGenerator
 
             text = text[2..^2];
             if (text.StartsWith('*'))
+            {
                 text = text[1..];
+            }
+
             var lines = text.Split('\n');
             lines[0] = RemoveCommentSpace(lines[0]);
             var margin = lines.Skip(1).Where(line => line.Trim(' ', '\t').Length != 0)
@@ -58,13 +73,22 @@ public static partial class CSharpGenerator
                 var line = lines[i];
                 line = line[Math.Min(margin, line.Length)..];
                 if (line.StartsWith('*') && (line.Length == 1 || line[1] is ' ' or '\t'))
+                {
                     line = RemoveCommentSpace(line[1..]);
+                }
+
                 lines[i] = line;
             }
 
             lines = lines.Select(line => line.TrimEnd(' ', '\t')).ToArray();
             var start = Array.FindIndex(lines, line => line.Length != 0);
-            return start < 0 ? [] : lines[start..(Array.FindLastIndex(lines, line => line.Length != 0) + 1)];
+            if (start < 0)
+            {
+                return [];
+            }
+
+            var end = Array.FindLastIndex(lines, line => line.Length != 0);
+            return lines[start..(end + 1)];
         }
 
         private static string RemoveCommentSpace(string text) =>
@@ -78,9 +102,15 @@ public static partial class CSharpGenerator
                 var character = text[i];
                 switch (character)
                 {
-                    case '&': escaped.Append("&amp;"); break;
-                    case '<': escaped.Append("&lt;"); break;
-                    case '>': escaped.Append("&gt;"); break;
+                    case '&':
+                        escaped.Append("&amp;");
+                        break;
+                    case '<':
+                        escaped.Append("&lt;");
+                        break;
+                    case '>':
+                        escaped.Append("&gt;");
+                        break;
                     case '\u0085':
                     case '\u2028':
                     case '\u2029':
@@ -88,14 +118,22 @@ public static partial class CSharpGenerator
                         break;
                     default:
                         if (char.IsHighSurrogate(character) && i + 1 < text.Length && char.IsLowSurrogate(text[i + 1]))
+                        {
                             escaped.Append(character).Append(text[++i]);
+                        }
                         else if (XmlConvert.IsXmlChar(character))
+                        {
                             escaped.Append(character);
+                        }
                         else
+                        {
                             escaped.Append("\\u").Append(((int)character).ToString("X4", CultureInfo.InvariantCulture));
+                        }
+
                         break;
                 }
             }
+
             return escaped.ToString();
         }
     }

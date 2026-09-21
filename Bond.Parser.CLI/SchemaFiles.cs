@@ -19,8 +19,12 @@ internal static class SchemaFiles
             foreach (var candidate in ImportCandidates(currentFile, importPath, imports))
             {
                 var content = await ReadIfPresent(candidate, cancellationToken);
-                if (content != null) return (candidate, content);
+                if (content != null)
+                {
+                    return (candidate, content);
+                }
             }
+
             throw new FileNotFoundException($"Imported file not found: {importPath}", importPath);
         };
     }
@@ -34,9 +38,18 @@ internal static class SchemaFiles
 
     internal static async Task<string?> ReadIfPresent(string path, CancellationToken cancellationToken)
     {
-        try { return await File.ReadAllTextAsync(path, cancellationToken); }
-        catch (FileNotFoundException) { return null; }
-        catch (DirectoryNotFoundException) { return null; }
+        try
+        {
+            return await File.ReadAllTextAsync(path, cancellationToken);
+        }
+        catch (FileNotFoundException)
+        {
+            return null;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return null;
+        }
     }
 
     internal static async Task<(string Content, ImportResolver Resolver)> ReadGitReference(
@@ -44,16 +57,23 @@ internal static class SchemaFiles
     {
         var separator = reference.IndexOf('=');
         if (separator < 0 || reference[..separator] is not (".git#branch" or ".git#tag" or ".git#commit"))
+        {
             throw new ArgumentException("Git references use .git#branch=name, .git#tag=name, or .git#commit=hash.");
+        }
+
         var root = (await Git(Path.GetDirectoryName(input)!, cancellationToken, "rev-parse", "--show-toplevel")).Trim();
         var revision = (await Git(root, cancellationToken, "rev-parse", "--verify", "--end-of-options",
             reference[(separator + 1)..] + "^{commit}")).Trim();
         var relative = Path.GetRelativePath(root, input);
         if (!WithinRepository(relative))
+        {
             throw new ArgumentException("The input schema must be inside the selected Git repository.");
+        }
+
         var content = await Git(root, cancellationToken, "show", revision + ":" + relative.Replace('\\', '/'));
         var imports = directories.Select(Path.GetFullPath).ToArray();
         var cache = new Dictionary<string, string?>(StringComparer.Ordinal);
+
         ImportResolver resolver = async (currentFile, importPath) =>
         {
             foreach (var candidate in ImportCandidates(currentFile, importPath, imports))
@@ -70,11 +90,19 @@ internal static class SchemaFiles
                     }
                 }
                 else
+                {
                     imported = await ReadIfPresent(candidate, cancellationToken);
-                if (imported != null) return (candidate, imported);
+                }
+
+                if (imported != null)
+                {
+                    return (candidate, imported);
+                }
             }
+
             throw new FileNotFoundException($"Imported file not found at {revision}: {importPath}", importPath);
         };
+
         return (content, resolver);
     }
 
@@ -86,7 +114,10 @@ internal static class SchemaFiles
     {
         var result = await RunGit(directory, cancellationToken, arguments);
         if (result.ExitCode != 0)
+        {
             throw new IOException(result.Error.Trim());
+        }
+
         return result.Output;
     }
 
@@ -101,16 +132,28 @@ internal static class SchemaFiles
             RedirectStandardError = true,
             CreateNoWindow = true
         };
-        foreach (var argument in arguments) start.ArgumentList.Add(argument);
+        foreach (var argument in arguments)
+        {
+            start.ArgumentList.Add(argument);
+        }
+
         using var process = Process.Start(start) ?? throw new IOException("Could not start git.");
         var output = process.StandardOutput.ReadToEndAsync(cancellationToken);
         var error = process.StandardError.ReadToEndAsync(cancellationToken);
-        try { await process.WaitForExitAsync(cancellationToken); }
+        try
+        {
+            await process.WaitForExitAsync(cancellationToken);
+        }
         catch (OperationCanceledException)
         {
-            if (!process.HasExited) process.Kill(entireProcessTree: true);
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+            }
+
             throw;
         }
+
         return (process.ExitCode, await output, await error);
     }
 }

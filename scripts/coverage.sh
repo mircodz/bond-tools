@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-command -v dotnet >/dev/null || { echo "dotnet missing" >&2; exit 1; }
+if ! command -v dotnet >/dev/null; then
+  echo "dotnet missing" >&2
+  exit 1
+fi
 
 cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 

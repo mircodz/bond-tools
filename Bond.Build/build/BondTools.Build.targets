@@ -3,6 +3,7 @@
     <!-- Import candidates can appear without changing any existing input. -->
     <DisableFastUpToDateCheck>true</DisableFastUpToDateCheck>
   </PropertyGroup>
+
   <ItemDefinitionGroup>
     <Bond>
       <Descriptors>$(BondDescriptors)</Descriptors>
@@ -23,9 +24,11 @@
       <_BondOutputDirectory>$([System.IO.Path]::Combine('$(MSBuildProjectDirectory)', '$(IntermediateOutputPath)', 'bond'))</_BondOutputDirectory>
       <_BondUnsupportedSdk Condition="'$(NETCoreSdkVersion)' != ''">$([MSBuild]::VersionLessThan('$(NETCoreSdkVersion)', '8.0'))</_BondUnsupportedSdk>
     </PropertyGroup>
+
     <Error Condition="('@(Bond)' != '' or Exists('$(_BondOutputDirectory)/manifest.json')) and ('$(MSBuildRuntimeType)' != 'Core' or '$(_BondUnsupportedSdk)' == 'true')"
            Code="BOND1001"
            Text="BondTools.Build requires .NET 8 or newer SDK MSBuild. Use 'dotnet build' with a .NET 8+ SDK instead of legacy Full MSBuild." />
+
     <GenerateBond Condition="'$(MSBuildRuntimeType)' == 'Core' and ('@(Bond)' != '' or Exists('$(_BondOutputDirectory)/manifest.json'))"
                   ProjectFile="$(MSBuildProjectFullPath)"
                   OutputDirectory="$(_BondOutputDirectory)"
@@ -37,6 +40,7 @@
       <Output TaskParameter="GeneratedFiles" ItemName="_BondGeneratedFiles" />
       <Output TaskParameter="WrittenFiles" ItemName="FileWrites" />
     </GenerateBond>
+
     <ItemGroup>
       <Compile Remove="@(_BondGeneratedFiles)" />
       <Compile Include="@(_BondGeneratedFiles)" AutoGen="true" DesignTime="true" Visible="false" />

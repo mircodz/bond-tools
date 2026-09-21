@@ -42,17 +42,24 @@ internal sealed record BuildManifest
         BuildFiles.EnsureSafePath(path, directory: false);
         var bytes = await BuildFiles.ReadIfPresentAsync(path, cancellationToken);
         if (bytes == null)
+        {
             return null;
+        }
+
         try
         {
             var manifest = JsonSerializer.Deserialize<BuildManifest>(bytes, JsonOptions);
+
             // JSON can contain explicit nulls even for required, non-nullable properties.
             if (manifest == null || manifest.Version != 1
                 || !BuildFiles.PathComparer.Equals(manifest.ProjectFile, request.ProjectFile)
                 || !BuildFiles.PathComparer.Equals(manifest.OutputDirectory, request.OutputDirectory)
                 || !BuildFiles.IsHash(manifest.GeneratorIdentity) || !BuildFiles.IsHash(manifest.RequestHash)
                 || manifest.Entries == null)
+            {
                 throw new InvalidDataException("Invalid manifest identity or version.");
+            }
+
             var sources = new HashSet<string>(BuildFiles.PathComparer);
             var outputs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var entry in manifest.Entries)
@@ -62,17 +69,28 @@ internal sealed record BuildManifest
                     || entry.Output != BuildRequest.OutputFor(request.ProjectFile, entry.Source)
                     || !outputs.Add(entry.Output) || !BuildFiles.IsHash(entry.OptionsHash)
                     || !BuildFiles.IsHash(entry.OutputHash) || entry.Dependencies == null)
+                {
                     throw new InvalidDataException("Invalid manifest output entry.");
+                }
+
                 BuildFiles.OutputPath(request.OutputDirectory, entry.Output);
                 var dependencies = new HashSet<string>(BuildFiles.PathComparer);
                 foreach (var dependency in entry.Dependencies)
+                {
                     if (dependency == null || !CanonicalPath(dependency.Path) || !dependencies.Add(dependency.Path)
                         || (dependency.Hash != null && !BuildFiles.IsHash(dependency.Hash)))
+                    {
                         throw new InvalidDataException("Invalid manifest dependency.");
+                    }
+                }
+
                 if (!entry.Dependencies.Any(dependency =>
                     BuildFiles.PathComparer.Equals(dependency.Path, entry.Source) && dependency.Hash != null))
+                {
                     throw new InvalidDataException("Manifest does not include the root input hash.");
+                }
             }
+
             return manifest;
         }
         catch (Exception error) when (error is JsonException or InvalidDataException or ArgumentException or NotSupportedException)

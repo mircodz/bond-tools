@@ -35,6 +35,7 @@ internal sealed class SchemaCommandOptions
         var options = new SchemaCommandOptions();
         var positional = false;
         var seen = new HashSet<string>(StringComparer.Ordinal);
+
         for (var i = 0; i < args.Length; i++)
         {
             var argument = args[i];
@@ -43,65 +44,133 @@ internal sealed class SchemaCommandOptions
                 positional = true;
                 continue;
             }
+
             if (!positional && argument.StartsWith('-'))
             {
                 var equals = argument.IndexOf('=');
                 var name = equals < 0 ? argument : argument[..equals];
-                if (name is "-h" or "--help" || comparison && name is "-v" or "--verbose" or "--ignore-imports" or "--list-rules")
+                var isFlag = name is "-h" or "--help"
+                    || (comparison && name is "-v" or "--verbose" or "--ignore-imports" or "--list-rules");
+
+                if (isFlag)
                 {
                     if (equals >= 0)
+                    {
                         options.Errors.Add($"Flag '{name}' does not accept a value.");
-                    else if (name is "-h" or "--help") options.Help = true;
-                    else if (name is "-v" or "--verbose") options.Verbose = true;
-                    else if (name == "--ignore-imports") options.IgnoreImports = true;
-                    else if (name == "--list-rules") options.ListRules = true;
+                    }
+                    else if (name is "-h" or "--help")
+                    {
+                        options.Help = true;
+                    }
+                    else if (name is "-v" or "--verbose")
+                    {
+                        options.Verbose = true;
+                    }
+                    else if (name == "--ignore-imports")
+                    {
+                        options.IgnoreImports = true;
+                    }
+                    else if (name == "--list-rules")
+                    {
+                        options.ListRules = true;
+                    }
+
                     continue;
                 }
+
                 var allowed = name is "-I" or "--import-dir" or "--error-format"
-                    || comparison && name is "--against" or "--suppress";
+                    || (comparison && name is "--against" or "--suppress");
                 if (!allowed)
                 {
                     options.Errors.Add($"Unknown option '{name}'.");
                     continue;
                 }
+
                 string value;
-                if (equals >= 0) value = argument[(equals + 1)..];
-                else if (i + 1 < args.Length && !args[i + 1].StartsWith('-')) value = args[++i];
+                if (equals >= 0)
+                {
+                    value = argument[(equals + 1)..];
+                }
+                else if (i + 1 < args.Length && !args[i + 1].StartsWith('-'))
+                {
+                    value = args[++i];
+                }
                 else
                 {
                     options.Errors.Add($"Option '{name}' requires a value.");
                     continue;
                 }
+
                 if (string.IsNullOrWhiteSpace(value))
                 {
                     options.Errors.Add($"Option '{name}' requires a non-empty value.");
                     continue;
                 }
+
                 if (name is "--against" or "--error-format" && !seen.Add(name))
+                {
                     options.Errors.Add($"Option '{name}' may only be specified once.");
+                }
+
                 switch (name)
                 {
-                    case "-I" or "--import-dir": options.ImportDirectories.Add(value); break;
-                    case "--against": options.Against = value; break;
+                    case "-I" or "--import-dir":
+                        options.ImportDirectories.Add(value);
+                        break;
+                    case "--against":
+                        options.Against = value;
+                        break;
                     case "--suppress":
-                        if (Split(value).Length == 0) options.Errors.Add("--suppress requires at least one diagnostic ID.");
-                        else options.Suppressions.UnionWith(Split(value));
+                        var suppressions = Split(value);
+                        if (suppressions.Length == 0)
+                        {
+                            options.Errors.Add("--suppress requires at least one diagnostic ID.");
+                        }
+                        else
+                        {
+                            options.Suppressions.UnionWith(suppressions);
+                        }
+
                         break;
                     case "--error-format":
-                        if (value is "text" or "json") options.ErrorFormat = value;
-                        else options.Errors.Add("Error format must be text or json.");
+                        if (value is "text" or "json")
+                        {
+                            options.ErrorFormat = value;
+                        }
+                        else
+                        {
+                            options.Errors.Add("Error format must be text or json.");
+                        }
+
                         break;
                 }
+
                 continue;
             }
-            if (options.Input != null) options.Errors.Add("Only one root schema may be selected.");
-            else options.Input = argument;
+
+            if (options.Input != null)
+            {
+                options.Errors.Add("Only one root schema may be selected.");
+            }
+            else
+            {
+                options.Input = argument;
+            }
         }
+
         if (!options.Help && !options.ListRules)
         {
-            if (options.Input == null) options.Errors.Add("A .bond schema file is required.");
-            if (comparison && options.Against == null) options.Errors.Add("--against is required.");
+            if (options.Input == null)
+            {
+                options.Errors.Add("A .bond schema file is required.");
+            }
+
+            if (comparison && options.Against == null)
+            {
+                options.Errors.Add("--against is required.");
+            }
         }
+
         return options;
     }
 
@@ -127,8 +196,13 @@ internal sealed class SchemaCommandOptions
             }));
         }
         else
+        {
             foreach (var error in values)
+            {
                 await writer.WriteLineAsync($"{error.FilePath ?? "bond"}({error.Line},{error.Column}): error: {error.Message}");
+            }
+        }
+
         return exitCode;
     }
 }

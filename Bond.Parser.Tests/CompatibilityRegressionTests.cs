@@ -13,16 +13,26 @@ namespace Bond.Parser.Tests;
 public class CompatibilityRegressionTests
 {
     private readonly CompatibilityChecker _checker = new();
+
     internal static async Task<Syntax.Bond> Parse(string text)
     {
         var result = await ParserFacade.ParseStringAsync(text);
         result.Success.Should().BeTrue(string.Join("; ", result.Errors.Select(e => e.Message)));
+
         return result.Ast!;
     }
 
     internal static Syntax.Bond Root(params Declaration[] declarations) => new([], [], declarations);
+
     internal static StructDeclaration Structure(params Field[] fields) =>
-        new() { Name = "Record", Namespaces = [new(null, ["Test"])], Attributes = [], Fields = fields };
+        new()
+        {
+            Name = "Record",
+            Namespaces = [new(null, ["Test"])],
+            Attributes = [],
+            Fields = fields
+        };
+
     internal static Field Field(ushort ordinal = 0, string name = "value", BondType? type = null) =>
         new([], ordinal, FieldModifier.Optional, type ?? BondType.Int32.Instance, name, null);
 
@@ -34,6 +44,7 @@ public class CompatibilityRegressionTests
     {
         var old = await Parse("namespace Test " + body);
         var current = await Parse("namespace Test " + body);
+
         _checker.Compare(old, current).Changes.Should().BeEmpty();
     }
 
@@ -53,6 +64,7 @@ public class CompatibilityRegressionTests
             using Renamed<U> = vector<U>;
             struct Box<U> { 1: string label = ""; 7: Renamed<U> items; }
             """);
+
         _checker.Compare(old, current).Changes.Should().BeEmpty();
     }
 
@@ -62,6 +74,7 @@ public class CompatibilityRegressionTests
         var old = await Parse("namespace Test struct Record { 0: int32 original; }");
         var removed = await Parse("namespace Test struct Record {}");
         var renamed = await Parse("namespace Test struct Record { [JsonName(\"original\")] 0: int32 renamed; }");
+
         _checker.Compare(old, removed).HasBreakingChanges.Should().BeFalse();
         _checker.Compare(removed, renamed).Changes.Should().ContainSingle(c =>
             c.Id == DiagnosticIds.OptionalFieldAdded && c.Severity == ChangeSeverity.Info);
@@ -78,7 +91,9 @@ public class CompatibilityRegressionTests
         const string schema = "namespace Test struct Inner { 0: int32 value; } struct Outer { 0: Inner a; 1: vector<Inner> b; }";
         var old = await Parse(schema);
         var current = await Parse(schema.Replace("int32", "string"));
+
         var changes = _checker.Compare(old, current).Changes;
+
         changes.Should().ContainSingle().Which.Location.Should().Be("Test.Inner.value");
         changes[0].Id.Should().Be(DiagnosticIds.FieldType);
     }
@@ -100,28 +115,52 @@ public class CompatibilityRegressionTests
         var structure = Structure();
         var enumeration = new EnumDeclaration
         {
-            Name = "State", Namespaces = structure.Namespaces, Attributes = [],
+            Name = "State",
+            Namespaces = structure.Namespaces,
+            Attributes = [],
             Constants = [new("A", 0), new("A", 1)]
         };
-        var method = new FunctionMethod { Name = "Get", Attributes = [], InputType = MethodType.Void.Instance, ResultType = MethodType.Void.Instance };
-        var service = new ServiceDeclaration { Name = "Api", Namespaces = structure.Namespaces, Attributes = [], Methods = [method, method] };
+        var method = new FunctionMethod
+        {
+            Name = "Get",
+            Attributes = [],
+            InputType = MethodType.Void.Instance,
+            ResultType = MethodType.Void.Instance
+        };
+        var service = new ServiceDeclaration
+        {
+            Name = "Api",
+            Namespaces = structure.Namespaces,
+            Attributes = [],
+            Methods = [method, method]
+        };
         var cases = new[]
         {
             (Root(structure, structure with { }), DiagnosticIds.DuplicateDeclaration),
             (Root(enumeration), DiagnosticIds.DuplicateEnumMember),
             (Root(service), DiagnosticIds.DuplicateMethod)
         };
+
         foreach (var (schema, id) in cases)
+        {
             _checker.Compare(Root(), schema).Changes.Should().ContainSingle(c => c.Id == id && c.Category == ChangeCategory.InvalidSchema);
+        }
     }
 
     [Fact]
     public void MalformedPublicAstDefaultsAndInheritanceAreRejected()
     {
-        var badDefault = Root(Structure(Field() with { DefaultValue = new Default.String("not an integer") }));
+        var badDefault = Root(Structure(Field() with
+        {
+            DefaultValue = new Default.String("not an integer")
+        }));
         _checker.Compare(Root(), badDefault).Changes.Should().ContainSingle(c => c.Category == ChangeCategory.InvalidSchema);
+
         var forward = new ForwardDeclaration { Name = "Record", Namespaces = Structure().Namespaces };
-        var cyclic = Root(Structure() with { BaseType = new BondType.TypeReference(forward, []) });
+        var cyclic = Root(Structure() with
+        {
+            BaseType = new BondType.TypeReference(forward, [])
+        });
         _checker.Compare(Root(), cyclic).Changes.Should().ContainSingle(c => c.Category == ChangeCategory.InvalidSchema && c.Description.Contains("Cyclic inheritance"));
     }
 
@@ -130,7 +169,11 @@ public class CompatibilityRegressionTests
     {
         var old = await Parse("namespace Test struct Record; struct Record { 0: int32 value; }");
         var current = await Parse("namespace Test struct Record { 0: int32 value; }");
-        old = old with { ResolvedDeclarations = old.ResolvedDeclarations.Concat(old.ResolvedDeclarations).ToArray() };
+        old = old with
+        {
+            ResolvedDeclarations = old.ResolvedDeclarations.Concat(old.ResolvedDeclarations).ToArray()
+        };
+
         _checker.Compare(old, current).Changes.Should().BeEmpty();
     }
 
@@ -139,6 +182,7 @@ public class CompatibilityRegressionTests
     {
         var old = await Parse("namespace Test struct Record;");
         var current = await Parse("namespace Test struct Record { 0: required int32 value; }");
+
         _checker.Compare(old, current).HasBreakingChanges.Should().BeFalse();
         _checker.Compare(current, old).Changes.Should().ContainSingle(c => c.Id == DiagnosticIds.IncompleteDefinition && c.Severity == ChangeSeverity.Error);
     }
@@ -148,6 +192,7 @@ public class CompatibilityRegressionTests
     {
         var old = await Imported("int32");
         var current = await Imported("string");
+
         _checker.Compare(old, current).Changes.Should().ContainSingle(c =>
             c.Id == DiagnosticIds.FieldType && c.Location == "Test.Leaf.value");
         _checker.Compare(old, current, new CompatibilityOptions { IncludeImports = false }).Changes.Should().BeEmpty();
@@ -166,8 +211,10 @@ public class CompatibilityRegressionTests
             result.Success.Should().BeTrue(string.Join("; ", result.Errors.Select(e => e.Message)));
             return result.Ast!;
         }
+
         var old = await Schema("A");
         var current = await Schema("Alias");
+
         _checker.Compare(old, current, new CompatibilityOptions { IncludeImports = false }).Changes.Should().BeEmpty();
     }
 
@@ -182,6 +229,7 @@ public class CompatibilityRegressionTests
         var result = await ParserFacade.ParseContentAsync("import \"middle.bond\" namespace Test struct Root { 0: Middle value; }",
             root, (_, path) => Task.FromResult((Path.GetFullPath("compatibility-memory/" + path), files[path])));
         result.Success.Should().BeTrue(string.Join("; ", result.Errors.Select(e => e.Message)));
+
         return result.Ast!;
     }
 
@@ -198,6 +246,7 @@ public class CompatibilityRegressionTests
             root, (_, path) => Task.FromResult((Path.GetFullPath("compatibility-memory/" + path), files[path])));
         result.Success.Should().BeTrue(string.Join("; ", result.Errors.Select(e => e.Message)));
         _checker.Compare(result.Ast!, result.Ast!).Changes.Should().BeEmpty();
+
         var explicitSchema = await Parse("namespace Test struct A { 0: int32 value; } struct B { 0: string value; } struct Root { 0: A a; 1: B b; }");
         _checker.Compare(result.Ast!, explicitSchema).Changes.Should().BeEmpty();
     }
@@ -209,6 +258,7 @@ public class CompatibilityRegressionTests
         var old = await Parse(text);
         var renamed = await Parse(text.Replace("Items", "Renamed"));
         _checker.Compare(old, renamed).Changes.Should().BeEmpty();
+
         var changed = await Parse(text.Replace("vector<T>", "set<T>"));
         _checker.Compare(old, changed).Changes.Should().ContainSingle(c => c.Id == DiagnosticIds.FieldType && c.Location == "Test.Record.value");
     }
@@ -218,6 +268,7 @@ public class CompatibilityRegressionTests
     {
         var schema = Root(Structure(Field(type: new BondType.UnresolvedType(["External"], []))));
         _checker.Compare(schema, schema).Changes.Should().OnlyContain(c => c.Id == DiagnosticIds.UnresolvedType);
+
         var options = new CompatibilityOptions { IncludeImports = false, AllowUnresolvedTypes = true };
         _checker.Compare(schema, schema, options).Changes.Should().BeEmpty();
     }
@@ -231,7 +282,9 @@ public class CompatibilityRegressionTests
     {
         var old = await Parse($"namespace Test struct Record {{ 0: {before} int32 value = 1; }}");
         var current = await Parse($"namespace Test struct Record {{ 0: {after} int32 value = 2; }}");
+
         var change = _checker.Compare(old, current).Changes.Single(c => c.Id == DiagnosticIds.DefaultValue);
+
         (change.Severity == ChangeSeverity.Error).Should().Be(breaking);
         change.Recommendation.Should().NotContain("parse failure");
     }
@@ -262,7 +315,9 @@ public class CompatibilityRegressionTests
     {
         var old = await Parse($"namespace Test struct Record {{ 0: {before} int32 value; }}");
         var current = await Parse($"namespace Test struct Record {{ 0: {after} int32 value; }}");
+
         var changes = _checker.Compare(old, current).Changes;
+
         changes.Should().ContainSingle();
         changes[0].Recommendation!.ToLowerInvariant().Should().Contain(expected);
         var direct = before == "optional" && after == "required" || before == "required" && after == "optional";
@@ -276,6 +331,7 @@ public class CompatibilityRegressionTests
         var optional = await Parse("namespace Test struct Record { 0: int32 value; }");
         _checker.Compare(empty, optional).HasBreakingChanges.Should().BeFalse();
         _checker.Compare(optional, empty).HasBreakingChanges.Should().BeFalse();
+
         var required = await Parse("namespace Test struct Record { 0: required int32 value; }");
         _checker.Compare(required, empty).Changes.Should().ContainSingle(c => c.Id == DiagnosticIds.FieldRemoved && c.Severity == ChangeSeverity.Error);
     }
@@ -288,7 +344,9 @@ public class CompatibilityRegressionTests
     {
         var old = await Parse($"namespace Test struct Record {{ 0: {before} value; }}");
         var current = await Parse($"namespace Test struct Record {{ 0: {after} value; }}");
+
         var result = _checker.Compare(old, current);
+
         result.HasBreakingChanges.Should().BeFalse();
         result.Changes.Should().Contain(c => c.Id == DiagnosticIds.FieldType && c.Severity == ChangeSeverity.Warning);
     }
@@ -299,7 +357,9 @@ public class CompatibilityRegressionTests
         var scalar = await Parse("namespace Test struct Record { 0: int32 value; }");
         var nothing = await Parse("namespace Test struct Record { 0: int32 value = nothing; }");
         var nullable = await Parse("namespace Test struct Record { 0: nullable<int32> value; }");
+
         var changes = _checker.Compare(scalar, nothing).Changes;
+
         changes.Should().Contain(c => c.Id == DiagnosticIds.NothingDefault && c.Severity == ChangeSeverity.Error);
         changes.Should().ContainSingle();
         changes.Should().NotContain(c => c.Id == DiagnosticIds.FieldType);
@@ -313,6 +373,7 @@ public class CompatibilityRegressionTests
         var pinned = await Parse("namespace Test struct Record { [JsonName(\"original\")] 0: int32 renamed; }");
         var changes = _checker.Compare(old, pinned).Changes;
         changes.Should().BeEmpty();
+
         var changed = await Parse("namespace Test struct Record { [JsonName(\"changed\")] 0: int32 original; }");
         _checker.Compare(old, changed).Changes.Should().ContainSingle(c => c.Id == DiagnosticIds.TextName && c.Category == ChangeCategory.BreakingText);
     }
@@ -352,6 +413,7 @@ public class CompatibilityRegressionTests
         var old = await Parse("namespace csharp App namespace Wire struct Record { 0: int32 value; }");
         var reordered = await Parse("namespace Wire namespace csharp App struct Record { 0: int32 value; }");
         _checker.Compare(old, reordered).Changes.Should().BeEmpty();
+
         var current = await Parse("namespace csharp NewApp namespace Wire struct Record { 0: int32 value; }");
         _checker.Compare(old, current).Changes.Should().BeEmpty();
     }
@@ -373,8 +435,10 @@ public class CompatibilityRegressionTests
         var old = await Parse("namespace Test struct Record<T> { 0: T value; }");
         var renamed = await Parse("namespace Test struct Record<U> { 0: U value; }");
         _checker.Compare(old, renamed).Changes.Should().BeEmpty();
+
         var arity = await Parse("namespace Test struct Record<T, U> { 0: T value; }");
         _checker.Compare(old, arity).Changes.Should().BeEmpty();
+
         var constraint = await Parse("namespace Test struct Record<T : value> { 0: T value; }");
         _checker.Compare(old, constraint).Changes.Should().BeEmpty();
     }
@@ -386,8 +450,10 @@ public class CompatibilityRegressionTests
         var old = await Parse(text);
         var current = await Parse(text.Replace("Box<int8>", "Box<int16>"));
         _checker.Compare(old, current).HasBreakingChanges.Should().BeFalse();
+
         var breaking = await Parse(text.Replace("Box<int8>", "Box<string>"));
         _checker.Compare(old, breaking).HasBreakingChanges.Should().BeTrue();
+
         var unusedOld = await Parse(text.Replace("0: T value;", ""));
         var unusedNew = await Parse(text.Replace("0: T value;", "").Replace("Box<int8>", "Box<string>"));
         _checker.Compare(unusedOld, unusedNew).Changes.Should().BeEmpty();
@@ -413,8 +479,14 @@ public class CompatibilityRegressionTests
         var current = await Parse($"namespace Test struct Box<T> {{ 0: int32 value; }} struct Record {{ 0: Box<{type}> box; }}");
         var result = _checker.Compare(old, current);
         result.HasBreakingChanges.Should().Be(breaking);
-        if (breaking) result.Changes.Should().ContainSingle(c => c.Id == DiagnosticIds.FieldType && c.Location == "Test.Record.box.value");
-        else result.Changes.Should().BeEmpty();
+        if (breaking)
+        {
+            result.Changes.Should().ContainSingle(c => c.Id == DiagnosticIds.FieldType && c.Location == "Test.Record.box.value");
+        }
+        else
+        {
+            result.Changes.Should().BeEmpty();
+        }
     }
 
     [Fact]
@@ -456,8 +528,14 @@ public class CompatibilityRegressionTests
         var current = await Parse(text.Replace("Base<int32>", "Base<string>"));
         var result = _checker.Compare(old, current);
         result.HasBreakingChanges.Should().Be(breaking);
-        if (breaking) result.Changes.Should().ContainSingle(c => c.Id == DiagnosticIds.BaseType && c.Category == ChangeCategory.BreakingWire);
-        else result.Changes.Should().BeEmpty();
+        if (breaking)
+        {
+            result.Changes.Should().ContainSingle(c => c.Id == DiagnosticIds.BaseType && c.Category == ChangeCategory.BreakingWire);
+        }
+        else
+        {
+            result.Changes.Should().BeEmpty();
+        }
     }
 
     [Fact]
@@ -478,8 +556,14 @@ public class CompatibilityRegressionTests
         var current = await Parse($"namespace Test struct New {{ 0: {type} value; }} struct Record {{ 0: New payload; }}");
         var result = _checker.Compare(old, current);
         result.HasBreakingChanges.Should().Be(breaking);
-        if (breaking) result.Changes.Should().ContainSingle(c => c.Id == DiagnosticIds.FieldType && c.Location == "Test.Record.payload.value");
-        else result.Changes.Should().OnlyContain(c => c.Category == ChangeCategory.Compatible);
+        if (breaking)
+        {
+            result.Changes.Should().ContainSingle(c => c.Id == DiagnosticIds.FieldType && c.Location == "Test.Record.payload.value");
+        }
+        else
+        {
+            result.Changes.Should().OnlyContain(c => c.Category == ChangeCategory.Compatible);
+        }
     }
 
     [Theory]
@@ -510,6 +594,7 @@ public class CompatibilityRegressionTests
         var old = await Parse(schema);
         var moved = await Parse(schema.Replace("Before", "After"));
         _checker.Compare(old, moved).Changes.Should().BeEmpty();
+
         var changed = await Parse(schema.Replace("Before", "After").Replace("int32", "string"));
         _checker.Compare(old, changed).Changes.Should().ContainSingle(c => c.Id == DiagnosticIds.FieldType && c.Location == "Before.Inner.value");
     }
@@ -517,7 +602,11 @@ public class CompatibilityRegressionTests
     [Fact]
     public void GenericConstraintValidationStillRejectsMalformedPublicAst()
     {
-        var constrained = Structure() with { Name = "Box", TypeParameters = [new TypeParam("T", TypeConstraint.Value)] };
+        var constrained = Structure() with
+        {
+            Name = "Box",
+            TypeParameters = [new TypeParam("T", TypeConstraint.Value)]
+        };
         var schema = Root(constrained, Structure(Field(type: new BondType.TypeReference(constrained, [BondType.String.Instance]))));
         _checker.Compare(Root(), schema).Changes.Should().ContainSingle(c =>
             c.Category == ChangeCategory.InvalidSchema && c.Description.Contains("value constraint"));
@@ -538,6 +627,7 @@ public class CompatibilityRegressionTests
         var old = await Parse("namespace Test enum State { A = 1, Alias = 1 } struct Record { 0: State state = A; }");
         var current = await Parse("namespace Test enum State { A = 1, Alias = 1 } struct Record { 0: State state = Alias; }");
         _checker.Compare(old, current).Changes.Should().BeEmpty();
+
         var removed = await Parse("namespace Test enum State { Alias = 1 } struct Record { 0: State state = Alias; }");
         _checker.Compare(old, removed).Changes.Should().ContainSingle(c => c.Id == DiagnosticIds.EnumMemberRemoved && c.Category == ChangeCategory.Compatible);
         _checker.Compare(old, removed).HasBreakingChanges.Should().BeFalse();
@@ -573,12 +663,21 @@ public class CompatibilityRegressionTests
     {
         var declaration = new EnumDeclaration
         {
-            Name = "State", Namespaces = Structure().Namespaces, Attributes = [],
+            Name = "State",
+            Namespaces = Structure().Namespaces,
+            Attributes = [],
             Constants = [new("A", uint.MaxValue), new("B", null)]
         };
-        var normalized = declaration with { Constants = [new("A", -1), new("B", 0)] };
+        var normalized = declaration with
+        {
+            Constants = [new("A", -1), new("B", 0)]
+        };
         _checker.Compare(Root(declaration), Root(normalized)).Changes.Should().BeEmpty();
-        var overflow = declaration with { Constants = [new("A", int.MaxValue), new("B", null)] };
+
+        var overflow = declaration with
+        {
+            Constants = [new("A", int.MaxValue), new("B", null)]
+        };
         _checker.Compare(Root(), Root(overflow)).Changes.Should().ContainSingle(c => c.Id == DiagnosticIds.EnumOverflow && c.Category == ChangeCategory.InvalidSchema);
     }
 
@@ -594,6 +693,7 @@ public class CompatibilityRegressionTests
         result.Changes.Should().OnlyContain(c => DiagnosticIds.All.Contains(c.Id));
         result.MaxSeverity.Should().Be(ChangeSeverity.Error);
         result.ExitCode.Should().Be(1);
+
         var suppressed = _checker.Compare(old, current, new CompatibilityOptions
         {
             SuppressedDiagnosticIds = new HashSet<string> { DiagnosticIds.FieldType, DiagnosticIds.RequiredFieldAdded }
@@ -601,6 +701,7 @@ public class CompatibilityRegressionTests
         suppressed.Changes.Should().HaveCount(result.Changes.Count).And.OnlyContain(c => c.IsSuppressed);
         suppressed.ExitCode.Should().Be(0);
         suppressed.MaxSeverity.Should().Be(ChangeSeverity.Info);
+
         ((Action)(() => _checker.Compare(old, current, new CompatibilityOptions { SuppressedDiagnosticIds = new HashSet<string> { "BOND9999" } })))
             .Should().Throw<ArgumentException>().WithMessage("*BOND9999*");
     }
@@ -612,6 +713,7 @@ public class CompatibilityRegressionTests
             "IncludeImports", "AllowUnresolvedTypes", "SuppressedDiagnosticIds");
         typeof(CompatibilityOptions).GetMethod("ForProtocols").Should().BeNull();
         Enum.GetNames<ChangeCategory>().Should().NotContain("BreakingSource");
+
         var old = await Parse("namespace Test struct Record { 0: optional int32 value; }");
         var current = await Parse("namespace Test struct Record { 0: required int32 renamed; }");
         var result = _checker.Compare(old, current);

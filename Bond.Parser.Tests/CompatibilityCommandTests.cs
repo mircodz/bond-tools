@@ -20,6 +20,7 @@ public sealed class CompatibilityCommandTests : IDisposable
     public async Task RuleIdsAreDiscoverableWithoutInputSchemas()
     {
         var result = await Breaking("--list-rules");
+
         AssertSuccess(result);
         Assert.Contains("BOND0002", result.Output);
         Assert.Contains("BOND0301", result.Output);
@@ -33,6 +34,7 @@ public sealed class CompatibilityCommandTests : IDisposable
     public async Task HelpExposesOnlyTheFixedProtocolScope()
     {
         var result = await Breaking("--help");
+
         AssertSuccess(result);
         Assert.Contains("Compact/Fast Binary and Simple JSON", result.Output);
         Assert.DoesNotContain("--protocols", result.Output);
@@ -54,6 +56,7 @@ public sealed class CompatibilityCommandTests : IDisposable
             [xmlns("urn:new")]
             struct Item { 0: int32 id; }
             """);
+
         AssertSuccess(await Breaking(current, "--against", old));
     }
 
@@ -70,6 +73,7 @@ public sealed class CompatibilityCommandTests : IDisposable
             struct Box<T, U : value> { 0: int32 value; }
             struct Root { 0: Box<int32, bool> box; }
             """);
+
         AssertSuccess(await Breaking(current, "--against", old));
     }
 
@@ -83,7 +87,9 @@ public sealed class CompatibilityCommandTests : IDisposable
         var timestamp = new DateTime(2001, 1, 1, 0, 0, 0, DateTimeKind.Utc);
         File.SetLastWriteTimeUtc(old, timestamp);
         File.SetLastWriteTimeUtc(input, timestamp);
+
         AssertSuccess(await Breaking(input, "--against", old));
+
         Assert.Equal(previous, File.ReadAllText(old));
         Assert.Equal(current, File.ReadAllText(input));
         Assert.Equal(timestamp, File.GetLastWriteTimeUtc(old));
@@ -97,8 +103,10 @@ public sealed class CompatibilityCommandTests : IDisposable
         var old = Write("old.bond", "namespace Example struct Item { 0: int32 id; }");
         var current = Write("new.bond", "namespace Example struct Item { 0: int32 id; 1: string label; }");
         AssertSuccess(await Breaking("--against", old, current));
+
         Write("new.bond", "namespace Example struct Item { 0: int32 id; 1: required string label; }");
         var breaking = await Breaking(current, "--against", old, "--error-format=json");
+
         Assert.Equal(1, breaking.ExitCode);
         using var failed = JsonDocument.Parse(breaking.Output);
         Assert.False(failed.RootElement.GetProperty("compatible").GetBoolean());
@@ -108,11 +116,13 @@ public sealed class CompatibilityCommandTests : IDisposable
 
         var suppressed = await Breaking(current, "--against", old,
             "--suppress", "BOND0102", "--error-format=json");
+
         Assert.Equal(0, suppressed.ExitCode);
         using var accepted = JsonDocument.Parse(suppressed.Output);
         Assert.True(accepted.RootElement.GetProperty("compatible").GetBoolean());
         Assert.Contains(accepted.RootElement.GetProperty("changes").EnumerateArray(),
             change => change.GetProperty("id").GetString() == "BOND0102" && change.GetProperty("suppressed").GetBoolean());
+
         Assert.Equal(2, (await Breaking(current, "--against", old, "--suppress=BOND9999")).ExitCode);
     }
 
@@ -126,10 +136,12 @@ public sealed class CompatibilityCommandTests : IDisposable
             namespace Example struct Item { [JsonName("wire_name")] 0: string label; }
             """);
         AssertSuccess(await Breaking(current, "--against", old));
+
         Write("new.bond", """
             namespace Example struct Item { [JsonName("new_name")] 0: string name; }
             """);
         var changed = await Breaking(current, "--against", old, "--error-format=json");
+
         Assert.Equal(1, changed.ExitCode);
         using var result = JsonDocument.Parse(changed.Output);
         Assert.Contains(result.RootElement.GetProperty("changes").EnumerateArray(),
@@ -153,6 +165,7 @@ public sealed class CompatibilityCommandTests : IDisposable
                 1: string name;
             }
             """);
+
         AssertSuccess(await Breaking(current, "--against", previous));
     }
 
@@ -165,8 +178,10 @@ public sealed class CompatibilityCommandTests : IDisposable
             """);
         Write("schema files/shared.bond", "namespace Example struct Item { 0: int32 value; }");
         await CommitReference();
+
         Write("schema files/shared.bond", "namespace Example struct Item { 0: string value; }");
         var result = await Breaking(input, "--against", ".git#branch=main", "--error-format=json");
+
         Assert.Equal(1, result.ExitCode);
         using var json = JsonDocument.Parse(result.Output);
         Assert.Contains(json.RootElement.GetProperty("changes").EnumerateArray(),
@@ -178,8 +193,10 @@ public sealed class CompatibilityCommandTests : IDisposable
     {
         var input = Write("root.bond", "import \"missing.bond\"\nnamespace Example struct Root {}");
         await CommitReference();
+
         Write("missing.bond", "namespace Example struct Imported {}");
         var result = await Breaking(input, "--against", ".git#branch=main", "--error-format=json");
+
         Assert.Equal(2, result.ExitCode);
         Assert.Contains("missing.bond", result.Error);
     }
@@ -197,6 +214,7 @@ public sealed class CompatibilityCommandTests : IDisposable
     {
         var input = Write("item.bond", "namespace Example struct Item {}");
         var result = await Breaking(input, "--against", input, option, "--error-format=json");
+
         Assert.Equal(2, result.ExitCode);
         Assert.Empty(result.Output);
         using var json = JsonDocument.Parse(result.Error);
@@ -221,7 +239,11 @@ public sealed class CompatibilityCommandTests : IDisposable
             RedirectStandardOutput = true,
             RedirectStandardError = true
         };
-        foreach (var argument in arguments) start.ArgumentList.Add(argument);
+        foreach (var argument in arguments)
+        {
+            start.ArgumentList.Add(argument);
+        }
+
         using var process = Process.Start(start)!;
         var output = process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken);
         var error = process.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken);

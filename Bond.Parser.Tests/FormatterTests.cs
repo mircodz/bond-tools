@@ -361,9 +361,12 @@ public class FormatterTests
                 Third = 3, // last
             }
             """);
+
         var result = BondFormatter.Format(input, "<inline>");
+
         result.Success.Should().BeTrue(string.Join("; ", result.Errors));
         result.FormattedText.Should().Be(expected);
+
         var repeated = BondFormatter.Format(result.FormattedText!, "<inline>");
         repeated.Success.Should().BeTrue();
         repeated.FormattedText.Should().Be(expected);
@@ -384,12 +387,15 @@ public class FormatterTests
             }; // enum end
             // end of file
             """;
+
         var result = BondFormatter.Format(input, "<inline>");
+
         result.Success.Should().BeTrue(string.Join("; ", result.Errors));
         result.FormattedText.Should().Contain("0: int32 id; // field");
         result.FormattedText.Should().Contain("First, // enum member");
         result.FormattedText.Should().Contain("// before closing");
         result.FormattedText.Should().EndWith("// end of file");
+
         var repeated = BondFormatter.Format(result.FormattedText!, "<inline>");
         repeated.Success.Should().BeTrue(string.Join("; ", repeated.Errors));
         repeated.FormattedText.Should().Be(result.FormattedText);

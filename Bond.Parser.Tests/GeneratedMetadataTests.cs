@@ -19,10 +19,12 @@ public sealed class GeneratedMetadataTests
     {
         var parsed = await ParserFacade.ParseStringAsync("namespace Example struct Item { 0: int32 value; }");
         Assert.True(parsed.Success);
+
         var plain = CSharpGenerator.Generate(parsed.Ast!, "input.bond");
         Assert.True(plain.Success);
         Assert.DoesNotContain("BondTools.Models", plain.Code!);
         Assert.DoesNotContain("__BondSchemaCatalog", plain.Code!);
+
         var plainAssembly = CSharpGeneratorTests.Compile(plain.Code!);
         Assert.Null(plainAssembly.GetType("Example.ItemSchema"));
 
@@ -33,6 +35,7 @@ public sealed class GeneratedMetadataTests
         Assert.True(generated.Success, string.Join("\n", generated.Errors.Select(error => error.Message)));
         Assert.DoesNotContain("IEquatable<", generated.Code!);
         Assert.DoesNotContain("DebuggerTypeProxy", generated.Code!);
+
         var assembly = CSharpGeneratorTests.Compile(generated.Code!);
         var model = assembly.GetType("Example.Item", throwOnError: true)!;
         Assert.Equal(new[] { typeof(IGeneratedSchemaProvider) }, model.GetInterfaces());
@@ -62,6 +65,7 @@ public sealed class GeneratedMetadataTests
             """);
         var assembly = CSharpGeneratorTests.Compile(code);
         var descriptor = Read(assembly, "Application.Models.RecordSchema");
+
         Assert.Equal("Record", descriptor.Name);
         Assert.Equal("Contracts", descriptor.Namespace);
         Assert.Equal("Contracts.Record", descriptor.FullName);
@@ -70,22 +74,27 @@ public sealed class GeneratedMetadataTests
         Assert.Equal(new[] { new SchemaAttribute("doc.category", "model"), new SchemaAttribute("doc.category", "second") },
             descriptor.Attributes);
         Assert.Equal(new ushort[] { 1, 3, 4, 5, 6, 7, 9 }, descriptor.Fields.Select(field => field.Id));
+
         var title = descriptor.Fields[0];
         Assert.Equal("title", title.Name);
         Assert.Equal(SchemaTypeKind.WString, title.Type.Kind);
         Assert.Equal("wide \u03bb", Assert.IsType<SchemaDefault.String>(title.DefaultValue).Value);
+
         var state = descriptor.Fields[1];
         Assert.Equal(SchemaFieldModifier.RequiredOptional, state.Modifier);
         Assert.Equal("Ready", Assert.IsType<SchemaDefault.Enum>(state.DefaultValue).Name);
+
         Assert.True(Assert.IsType<SchemaDefault.Boolean>(descriptor.Fields[2].DefaultValue).Value);
         Assert.Equal(long.MinValue, BitConverter.DoubleToInt64Bits(
             Assert.IsType<SchemaDefault.FloatingPoint>(descriptor.Fields[3].DefaultValue).Value));
         Assert.Equal(new BigInteger(long.MinValue), Assert.IsType<SchemaDefault.Integer>(descriptor.Fields[4].DefaultValue).Value);
         Assert.Null(descriptor.Fields[5].DefaultValue);
+
         var count = descriptor.Fields[6];
         Assert.Equal(SchemaFieldModifier.Required, count.Modifier);
         Assert.Equal(new BigInteger(ulong.MaxValue), Assert.IsType<SchemaDefault.Integer>(count.DefaultValue).Value);
         Assert.Equal(new SchemaAttribute("doc.unit", "items"), Assert.Single(count.Attributes));
+
         var enumeration = Assert.IsType<NamedSchemaType>(state.Type).Declaration;
         Assert.Same(Read(assembly, "Application.Models.StateSchema"), enumeration);
         Assert.Equal("Contracts.State", enumeration.FullName);
@@ -94,11 +103,14 @@ public sealed class GeneratedMetadataTests
     [Fact]
     public async Task EnumValuesRetainEffectiveAndDeclaredNumbersWithoutLoadingTheEnum()
     {
-        var descriptor = Read(CSharpGeneratorTests.Compile(await CSharpGeneratorTests.Generate("""
+        var code = await CSharpGeneratorTests.Generate("""
             namespace Example
             [kind("state")]
             enum State { Unknown = -2, Ready, Duplicate = -1, Last, Bits = 0xffffffff }
-            """)), "Example.StateSchema");
+            """);
+        var assembly = CSharpGeneratorTests.Compile(code);
+        var descriptor = Read(assembly, "Example.StateSchema");
+
         Assert.Equal(SchemaKind.Enum, descriptor.Kind);
         Assert.Equal(new[]
         {
@@ -115,7 +127,7 @@ public sealed class GeneratedMetadataTests
     [Fact]
     public async Task EverySupportedTypeRemainsSymbolicRatherThanCollapsingToItsClrType()
     {
-        var descriptor = Read(CSharpGeneratorTests.Compile(await CSharpGeneratorTests.Generate("""
+        var code = await CSharpGeneratorTests.Generate("""
             namespace Example
             struct Child {}
             struct Types {
@@ -143,7 +155,10 @@ public sealed class GeneratedMetadataTests
                 21: int32 absent = nothing;
                 22: bonded<Child> deferred;
             }
-            """)), "Example.TypesSchema");
+            """);
+        var assembly = CSharpGeneratorTests.Compile(code);
+        var descriptor = Read(assembly, "Example.TypesSchema");
+
         Assert.Equal(new[]
         {
             SchemaTypeKind.Int8, SchemaTypeKind.Int16, SchemaTypeKind.Int32, SchemaTypeKind.Int64,
@@ -153,6 +168,7 @@ public sealed class GeneratedMetadataTests
             SchemaTypeKind.List, SchemaTypeKind.Vector, SchemaTypeKind.Set, SchemaTypeKind.Map,
             SchemaTypeKind.Nullable, SchemaTypeKind.Maybe, SchemaTypeKind.Bonded
         }, descriptor.Fields.Select(field => field.Type.Kind));
+
         var map = Assert.IsType<MapSchemaType>(descriptor.Fields[19].Type);
         Assert.Equal(SchemaTypeKind.WString, map.KeyType.Kind);
         Assert.Equal(SchemaTypeKind.Int32, Assert.IsType<UnarySchemaType>(map.ValueType).ElementType.Kind);
@@ -161,6 +177,7 @@ public sealed class GeneratedMetadataTests
         Assert.Equal(SchemaFieldModifier.RequiredOptional, descriptor.Fields[14].EffectiveModifier);
         Assert.Equal("map<wstring, vector<int32>>", descriptor.Fields[19].Type.ToString());
         Assert.Same(SchemaDefault.Nothing.Instance, descriptor.Fields[21].DefaultValue);
+
         var bonded = Assert.IsType<UnarySchemaType>(descriptor.Fields[22].Type);
         Assert.Equal("Example.Child", Assert.IsType<NamedSchemaType>(bonded.ElementType).Declaration.FullName);
     }
@@ -168,7 +185,7 @@ public sealed class GeneratedMetadataTests
     [Fact]
     public async Task InheritanceAndViewsRetainOwnFieldsAndSourceSelections()
     {
-        var assembly = CSharpGeneratorTests.Compile(await CSharpGeneratorTests.Generate("""
+        var code = await CSharpGeneratorTests.Generate("""
             namespace Example
             struct Base<T> { 0: T inherited; }
             [source("not copied")]
@@ -179,8 +196,10 @@ public sealed class GeneratedMetadataTests
             }
             [view("own")]
             struct Selected view_of Record { number; item; number; missing; inherited }
-            """));
+            """);
+        var assembly = CSharpGeneratorTests.Compile(code);
         var descriptor = Read(assembly, "Example.SelectedSchema");
+
         Assert.True(descriptor.IsView);
         Assert.Equal(new[] { "Record" }, descriptor.ViewTarget);
         Assert.Equal(new[] { "number", "item", "number", "missing", "inherited" }, descriptor.ViewFields);
@@ -188,8 +207,10 @@ public sealed class GeneratedMetadataTests
         Assert.Equal(new SchemaAttribute("view", "own"), Assert.Single(descriptor.Attributes));
         Assert.Equal(new SchemaAttribute("field", "copied"), Assert.Single(descriptor.Fields[1].Attributes));
         Assert.Equal(SchemaTypeConstraint.Value, Assert.Single(descriptor.TypeParameters).Constraint);
+
         var bound = descriptor.Bind(new PrimitiveSchemaType(SchemaTypeKind.Int32));
         Assert.Equal(SchemaTypeKind.Int32, Assert.IsType<UnarySchemaType>(bound.Fields[0].Type).ElementType.Kind);
+
         var parent = Assert.IsType<NamedSchemaType>(bound.BaseType).Resolve();
         Assert.Equal("Example.Base", parent.FullName);
         Assert.Equal(SchemaTypeKind.Int32, Assert.Single(parent.Fields).Type.Kind);
@@ -201,7 +222,7 @@ public sealed class GeneratedMetadataTests
     [Fact]
     public async Task GenericAliasesBindSimultaneouslyAndPreserveSignedErasedArguments()
     {
-        var assembly = CSharpGeneratorTests.Compile(await CSharpGeneratorTests.Generate("""
+        var code = await CSharpGeneratorTests.Generate("""
             namespace Example
             using Pair<T, U> = map<T, vector<U>>;
             using Swap<T, U> = Pair<U, T>;
@@ -210,23 +231,28 @@ public sealed class GeneratedMetadataTests
                 0: Swap<T, U> swapped;
                 1: Erased<int32, -32> fixed_number;
             }
-            """));
+            """);
+        var assembly = CSharpGeneratorTests.Compile(code);
         var descriptor = Read(assembly, "Example.BoxSchema");
         var bound = descriptor.Bind(new PrimitiveSchemaType(SchemaTypeKind.Int32),
             new PrimitiveSchemaType(SchemaTypeKind.String));
+
         var swap = Assert.IsType<NamedSchemaType>(bound.Fields[0].Type);
         Assert.Equal(SchemaTypeKind.Alias, swap.Kind);
         Assert.Same(Assert.IsType<NamedSchemaType>(descriptor.Fields[0].Type).Declaration, swap.Declaration);
         Assert.Equal("Example.Swap", swap.Declaration.FullName);
         Assert.Null(assembly.GetType("Example.SwapSchema"));
+
         var pair = Assert.IsType<NamedSchemaType>(swap.Resolve().AliasedType);
         Assert.Equal(new[] { SchemaTypeKind.String, SchemaTypeKind.Int32 }, pair.TypeArguments.Select(type => type.Kind));
         var map = Assert.IsType<MapSchemaType>(pair.Resolve().AliasedType);
         Assert.Equal(SchemaTypeKind.String, map.KeyType.Kind);
         Assert.Equal(SchemaTypeKind.Int32, Assert.IsType<UnarySchemaType>(map.ValueType).ElementType.Kind);
+
         var erased = Assert.IsType<NamedSchemaType>(bound.Fields[1].Type);
         Assert.Equal(-32, Assert.IsType<IntegerArgumentSchemaType>(erased.TypeArguments[1]).Value);
         Assert.Equal(SchemaTypeKind.Int32, erased.Resolve().AliasedType!.Kind);
+
         Assert.Throws<ArgumentException>(() => descriptor.Bind(new PrimitiveSchemaType(SchemaTypeKind.Int32)));
         Assert.Throws<ArgumentException>(() => descriptor.Bind(new SchemaType[] { null!, null! }));
         Assert.Throws<ArgumentNullException>(() => descriptor.Bind(null!));
@@ -258,12 +284,14 @@ public sealed class GeneratedMetadataTests
         var descriptor = Read(assembly, "Example.NodeSchema");
         var self = Assert.IsType<NamedSchemaType>(descriptor.Fields[0].Type);
         Assert.Same(descriptor, self.Declaration);
+
         var bound = descriptor.Bind(new PrimitiveSchemaType(SchemaTypeKind.Int32));
         var other = Assert.IsType<NamedSchemaType>(Assert.IsType<UnarySchemaType>(bound.Fields[1].Type).ElementType).Resolve();
         var parent = Assert.IsType<NamedSchemaType>(Assert.IsType<UnarySchemaType>(other.Fields[0].Type).ElementType);
         Assert.Same(descriptor, parent.Declaration);
         Assert.Equal(SchemaTypeKind.Int32, Assert.Single(parent.Resolve().TypeArguments).Kind);
         Assert.Same(parent.Resolve(), parent.Resolve());
+
         Assert.DoesNotContain("RuntimeSchema", code);
         Assert.DoesNotContain("System.Reflection", code);
         Assert.DoesNotContain("System.Linq.Expressions", code);
@@ -303,16 +331,19 @@ public sealed class GeneratedMetadataTests
         Assert.Equal("global::Example.External<T>", external.Declaration.ClrName);
         Assert.Empty(external.Declaration.Fields);
         Assert.Null(external.Declaration.BaseType);
+
         var bound = external.Resolve();
         Assert.True(bound.IsForward);
         Assert.Same(external.Declaration, bound.Definition);
         Assert.Equal(SchemaTypeKind.Int32, Assert.Single(bound.TypeArguments).Kind);
         Assert.True(bound.AsType().Resolve().IsForward);
         Assert.Null(assembly.GetType("Example.ExternalSchema"));
+
         var node = Assert.IsType<NamedSchemaType>(Assert.IsType<UnarySchemaType>(holder.Fields[1].Type).ElementType).Resolve();
         Assert.False(node.IsForward);
         Assert.Same(Read(assembly, "Example.NodeSchema"), node.Definition);
         Assert.Equal(SchemaTypeKind.Int32, Assert.Single(node.Fields).Type.Kind);
+
         var empty = Assert.IsType<NamedSchemaType>(Assert.IsType<UnarySchemaType>(holder.Fields[2].Type).ElementType).Declaration;
         Assert.False(empty.IsForward);
         Assert.Empty(empty.Fields);
@@ -339,11 +370,14 @@ public sealed class GeneratedMetadataTests
         var holder = Read(CSharpGeneratorTests.Compile(code), "Example.HolderSchema");
         var erased = Assert.IsType<NamedSchemaType>(holder.Fields[0].Type);
         Assert.Equal("int", erased.Declaration.ClrName);
+
         var symbolic = Assert.IsType<NamedSchemaType>(Assert.Single(erased.TypeArguments)).Declaration;
         Assert.Equal("Example.Symbolic", symbolic.FullName);
         Assert.Null(symbolic.ClrName);
+
         var identity = Assert.IsType<NamedSchemaType>(symbolic.AliasedType);
         Assert.Equal(-32, Assert.IsType<IntegerArgumentSchemaType>(identity.Resolve().AliasedType).Value);
+
         var values = Assert.IsType<NamedSchemaType>(holder.Fields[1].Type);
         Assert.Equal("global::System.Collections.Generic.List<T>", values.Declaration.ClrName);
         Assert.Equal(-64, Assert.IsType<IntegerArgumentSchemaType>(values.TypeArguments[1]).Value);
@@ -376,6 +410,7 @@ public sealed class GeneratedMetadataTests
         Assert.DoesNotContain("Library.NodeSchema", root);
         Assert.DoesNotContain("Library.BaseSchema", root);
         Assert.DoesNotContain("Library.TextSchema", root);
+
         var importedCode = await GenerateWithImports(imported, new Dictionary<string, string>(),
             new CSharpGenerationOptions
             {
@@ -387,14 +422,17 @@ public sealed class GeneratedMetadataTests
         Assert.Equal("Library.Node", node.FullName);
         Assert.Equal(new[] { "children", "title" }, node.Fields.Select(field => field.Name));
         Assert.Same(node, Assert.IsType<NamedSchemaType>(Assert.IsType<UnarySchemaType>(node.Fields[0].Type).ElementType).Declaration);
+
         var title = Assert.IsType<NamedSchemaType>(descriptor.Fields[1].Type).Declaration;
         Assert.Same(Assert.IsType<NamedSchemaType>(node.Fields[1].Type).Declaration, title);
         Assert.Equal(SchemaKind.Alias, title.Kind);
         Assert.Equal(SchemaTypeKind.WString, title.AliasedType!.Kind);
         Assert.Equal("string", title.ClrName);
+
         var parent = Assert.IsType<NamedSchemaType>(descriptor.BaseType).Resolve();
         Assert.Equal("Library.State", Assert.IsType<NamedSchemaType>(Assert.Single(parent.Fields).Type).Declaration.FullName);
         Assert.Null(assembly.GetType("Library.TextSchema"));
+
         if (richImports)
         {
             var independent = Read(assembly, "Library.NodeSchema");
@@ -430,6 +468,7 @@ public sealed class GeneratedMetadataTests
         var local = Assert.IsType<NamedSchemaType>(descriptor.Fields[0].Type).Declaration;
         var importedModel = Assert.IsType<NamedSchemaType>(descriptor.Fields[1].Type).Declaration;
         var importedAlias = Assert.IsType<NamedSchemaType>(importedModel.Fields[0].Type).Declaration;
+
         Assert.Equal(local.FullName, importedAlias.FullName);
         Assert.NotSame(local, importedAlias);
         Assert.Equal(SchemaTypeKind.String, local.AliasedType!.Kind);
@@ -464,6 +503,7 @@ public sealed class GeneratedMetadataTests
         var rightModel = Assert.IsType<NamedSchemaType>(descriptor.Fields[1].Type).Declaration;
         var leftAlias = Assert.IsType<NamedSchemaType>(leftModel.Fields[0].Type).Declaration;
         var rightAlias = Assert.IsType<NamedSchemaType>(rightModel.Fields[0].Type).Declaration;
+
         Assert.Equal(leftAlias.FullName, rightAlias.FullName);
         Assert.Equal(leftAlias.AliasedType!.Kind, rightAlias.AliasedType!.Kind);
         Assert.NotSame(leftAlias, rightAlias);
@@ -473,7 +513,7 @@ public sealed class GeneratedMetadataTests
     [Fact]
     public async Task DescriptorCompanionsDoNotCollideWithSourceModelNames()
     {
-        var assembly = CSharpGeneratorTests.Compile(await CSharpGeneratorTests.Generate("""
+        var code = await CSharpGeneratorTests.Generate("""
             namespace Example
             struct Item { 0: ItemSchema value; 1: Text text; }
             struct ItemSchema {}
@@ -482,10 +522,13 @@ public sealed class GeneratedMetadataTests
             struct StateSchema {}
             using Text = string;
             struct TextSchema {}
-            """));
+            """);
+        var assembly = CSharpGeneratorTests.Compile(code);
+
         Assert.Equal("Item", Read(assembly, "Example.ItemSchema__").Name);
         Assert.Equal("ItemSchema", Read(assembly, "Example.ItemSchemaSchema").Name);
         Assert.Equal("State", Read(assembly, "Example.StateSchema_").Name);
+
         var item = Read(assembly, "Example.ItemSchema__");
         Assert.Equal("Text", Assert.IsType<NamedSchemaType>(item.Fields[1].Type).Declaration.Name);
         Assert.Null(assembly.GetType("Example.TextSchema_"));
@@ -501,6 +544,7 @@ public sealed class GeneratedMetadataTests
             struct Item { 0: __BondSchemaCatalog value; }
             """);
         Assert.Contains("file static class __BondSchemaCatalog___", code);
+
         var assembly = CSharpGeneratorTests.Compile(code);
         var descriptor = Read(assembly, "__BondSchemaCatalog__.ItemSchema");
         Assert.Equal("__BondSchemaCatalog", Assert.IsType<NamedSchemaType>(descriptor.Fields[0].Type).Declaration.Name);
@@ -515,9 +559,11 @@ public sealed class GeneratedMetadataTests
             using Erased<T, N> = T;
             """);
         Assert.True(parsed.Success);
+
         var options = new CSharpGenerationOptions { ModelFeatures = CSharpModelFeatures.Descriptors };
         var first = CSharpGenerator.Generate(parsed.Ast!, "first/input.bond", options);
         var second = CSharpGenerator.Generate(parsed.Ast!, "second/renamed.bond", options);
+
         Assert.True(first.Success, string.Join("\n", first.Errors.Select(error => error.Message)));
         Assert.Equal(first.Code, second.Code);
         Assert.Contains("file static class __BondSchemaCatalog_", first.Code!);
@@ -534,6 +580,7 @@ public sealed class GeneratedMetadataTests
             struct Item { 0: int32 id; 1: Timestamp created; }
             """);
         Assert.True(parsed.Success);
+
         var generated = CSharpGenerator.Generate(parsed.Ast!, "input.bond", new CSharpGenerationOptions
         {
             ModelFeatures = CSharpModelFeatures.Descriptors,
@@ -541,6 +588,7 @@ public sealed class GeneratedMetadataTests
             TypeMappings = ["Contracts.Timestamp=System.DateTime"]
         });
         Assert.True(generated.Success, string.Join("\n", generated.Errors.Select(error => error.Message)));
+
         var assembly = CSharpGeneratorTests.Compile(generated.Code!, """
             namespace Application
             {
@@ -554,6 +602,7 @@ public sealed class GeneratedMetadataTests
         var model = Read(assembly, "Application.ItemSchema");
         Assert.Equal("Contracts.Item", model.FullName);
         Assert.Equal("global::Application.Item", model.ClrName);
+
         var alias = Assert.IsType<NamedSchemaType>(model.Fields[1].Type).Declaration;
         Assert.Equal("Contracts.Timestamp", alias.FullName);
         Assert.EndsWith("System.DateTime", alias.ClrName, StringComparison.Ordinal);
@@ -563,14 +612,16 @@ public sealed class GeneratedMetadataTests
     [Fact]
     public async Task NamedDescriptorArgumentsCanBeSuppliedWithoutAnyClrTypeInformation()
     {
-        var assembly = CSharpGeneratorTests.Compile(await CSharpGeneratorTests.Generate("""
+        var code = await CSharpGeneratorTests.Generate("""
             namespace Example
             enum State { Ready }
             struct Box<T> { 0: T value; }
-            """));
+            """);
+        var assembly = CSharpGeneratorTests.Compile(code);
         var state = Read(assembly, "Example.StateSchema");
         var box = Read(assembly, "Example.BoxSchema");
         var bound = box.Bind(state.AsType());
+
         Assert.Same(state, Assert.IsType<NamedSchemaType>(bound.Fields[0].Type).Resolve());
         Assert.Same(box, bound.AsType().Declaration);
         Assert.Same(state, Assert.IsType<NamedSchemaType>(Assert.Single(bound.AsType().TypeArguments)).Declaration);
@@ -592,6 +643,7 @@ public sealed class GeneratedMetadataTests
         var descriptor = new SchemaDescriptor("Model", "Example", "Example.Model<T>", SchemaKind.Struct,
             fields, typeParameters: parameters, enumValues: values, attributes: attributes,
             isView: true, viewTarget: target, viewFields: selection);
+
         var arguments = new SchemaType[] { number };
         var calls = 0;
         var reference = new NamedSchemaType(SchemaTypeKind.Struct, "Model", "Example", () =>
@@ -601,12 +653,15 @@ public sealed class GeneratedMetadataTests
         }, arguments);
         var bound = descriptor.Bind(arguments);
         Assert.Equal(0, calls);
+
         attributes[0] = new SchemaAttribute("key", "changed");
         fields[0] = fields[1];
         parameters[0] = new TypeParameterDescriptor("Changed");
         values[0] = new EnumValueDescriptor("Changed", 2);
-        target[0] = selection[0] = "Changed";
+        target[0] = "Changed";
+        selection[0] = "Changed";
         arguments[0] = new PrimitiveSchemaType(SchemaTypeKind.String);
+
         Assert.Equal("original", Assert.Single(field.Attributes).Value);
         Assert.Equal("original", Assert.Single(descriptor.Attributes).Value);
         Assert.Equal(new ushort[] { 1, 9 }, descriptor.Fields.Select(value => value.Id));
@@ -619,6 +674,7 @@ public sealed class GeneratedMetadataTests
         Assert.Same(descriptor, reference.Declaration);
         Assert.Same(descriptor, reference.Declaration);
         Assert.Equal(1, calls);
+
         AssertFrozen(descriptor.Fields, field);
         AssertFrozen(descriptor.Attributes, attributes[0]);
         AssertFrozen(field.Attributes, attributes[0]);
@@ -651,9 +707,11 @@ public sealed class GeneratedMetadataTests
         var parsed = await ParserFacade.ParseStringAsync(source,
             (_, path) => Task.FromResult((path, imports[path])));
         Assert.True(parsed.Success, string.Join("\n", parsed.Errors.Select(error => error.Message)));
+
         var generated = CSharpGenerator.Generate(parsed.Ast!, "input.bond",
             options ?? new CSharpGenerationOptions { ModelFeatures = CSharpModelFeatures.Descriptors });
         Assert.True(generated.Success, string.Join("\n", generated.Errors.Select(error => error.Message)));
+
         return generated.Code!;
     }
 }

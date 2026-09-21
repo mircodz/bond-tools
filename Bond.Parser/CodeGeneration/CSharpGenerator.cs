@@ -42,6 +42,7 @@ public static partial class CSharpGenerator
     {
         ArgumentNullException.ThrowIfNull(ast);
         ArgumentNullException.ThrowIfNull(filePath);
+
         return new Emitter(ast, filePath, options ?? new CSharpGenerationOptions()).Generate();
     }
 
@@ -78,16 +79,25 @@ public static partial class CSharpGenerator
                 return new CSharpGenerationResult(null,
                     [new ParseError(error.Message, filePath, error.Location.Line, error.Location.Column)]);
             }
+
             Line(0, GeneratedHeader);
             Line(0, $"// bond-tools {Version}");
             if (options.GenerateModelFeatures)
+            {
                 Line(0, $"// BondTools.Models {Version}");
+            }
+
             Line(0, "#nullable disable");
             Line(0);
             foreach (var name in _usingNamespaces)
+            {
                 Line(0, $"using {name};");
+            }
+
             if (_usingNamespaces.Count != 0)
+            {
                 Line(0);
+            }
 
             foreach (var declaration in ast.Declarations)
             {
@@ -98,7 +108,10 @@ public static partial class CSharpGenerator
                         case StructDeclaration structure:
                             EmitStruct((StructDeclaration)Canonical(structure));
                             if (options.GenerateCloning || options.GenerateEquality || options.GenerateToString)
+                            {
                                 EmitModelCompanions((StructDeclaration)Canonical(structure));
+                            }
+
                             break;
                         case EnumDeclaration enumeration:
                             EmitEnum((EnumDeclaration)Canonical(enumeration));
@@ -129,6 +142,7 @@ public static partial class CSharpGenerator
                     _errors.Add(new ParseError(error.Message, filePath, error.Location.Line, error.Location.Column));
                 }
             }
+
             return new CSharpGenerationResult(_errors.Count == 0 ? _code.ToString() : null, _errors);
         }
 
@@ -141,41 +155,79 @@ public static partial class CSharpGenerator
             var callBaseConstructor = bases.Any(declaration =>
                 declaration.Fields.Any(field => IsMetaType(UnwrapAlias(field.Type, field.Location))));
             var name = Identifier(structure.Name, structure.Location, typeName: true);
-            var parameters = structure.TypeParameters.Length == 0 ? "" :
-                "<" + string.Join(", ", structure.TypeParameters.Select(parameter =>
-                    Identifier(parameter.Name, structure.Location, typeName: true))) + ">";
+
+            EmitStructDeclaration(structure, name);
+            var initializers = EmitStructProperties(structure, inheritedNames);
+            EmitStructConstructors(structure, name, callBaseConstructor, initializers);
+
+            if (options.GenerateModelFeatures)
+            {
+                EmitModelMembers(structure);
+            }
+
+            Line(1, "}");
+            Line(0, "}");
+            Line(0);
+        }
+
+        private void EmitStructDeclaration(StructDeclaration structure, string name)
+        {
+            var parameters = TypeArguments(structure.TypeParameters.Select(parameter =>
+                Identifier(parameter.Name, structure.Location, typeName: true)));
             var baseType = structure.BaseType == null ? "" :
                 " : " + MapType(structure.BaseType, structure.Location).Name;
             if (options.GenerateModelFeatures)
+            {
                 baseType += (baseType.Length == 0 ? " : " : ", ") + ModelInterfaces(structure);
+            }
+
             BeginNamespace(structure);
             EmitDocumentation(structure.LeadingTrivia, structure.TrailingTrivia, 1);
             EmitAttributes(structure.Attributes, 1);
             EmitNamespaceAttribute(structure);
             if (options.GenerateDebuggerSupport)
+            {
                 EmitModelAttributes(structure);
+            }
+
             Line(1, "[global::Bond.Schema]");
             Line(1, $"public partial class {name}{parameters}{baseType}");
             foreach (var parameter in structure.TypeParameters)
             {
                 if (parameter.Constraint == TypeConstraint.Value)
+                {
                     Line(2, $"where {Identifier(parameter.Name, structure.Location, typeName: true)} : struct");
+                }
             }
-            Line(1, "{");
 
+            Line(1, "{");
+        }
+
+        private List<(Field Field, string Value)> EmitStructProperties(
+            StructDeclaration structure, HashSet<string> inheritedNames)
+        {
             var initializers = new List<(Field Field, string Value)>();
             var fieldNames = new HashSet<string>(StringComparer.Ordinal);
             foreach (var field in structure.Fields.OrderBy(field => field.Ordinal))
             {
                 if (field.Name == structure.Name)
+                {
                     Fail("A C# property cannot have the same name as its enclosing type.", field.Location);
+                }
+
                 if (structure.TypeParameters.Any(parameter => parameter.Name == field.Name))
+                {
                     Fail("A C# property cannot have the same name as a type parameter.", field.Location);
+                }
+
                 if (!fieldNames.Add(field.Name))
+                {
                     Fail($"Duplicate C# property '{field.Name}'.", field.Location);
+                }
 
                 var type = MapType(field.Type, field.Location);
                 var initialValue = DefaultValue(field, type, structure);
+
                 EmitDocumentation(field.LeadingTrivia, field.TrailingTrivia, 2);
                 EmitAttributes(field.Attributes, 2);
                 Line(2, $"[global::Bond.Id({field.Ordinal.ToString(CultureInfo.InvariantCulture)})]");
@@ -184,60 +236,90 @@ public static partial class CSharpGenerator
                     ValidateAnnotatedType(field.Type, field.Location);
                     Line(2, $"[global::Bond.Type(typeof({type.SchemaType}))]");
                 }
+
                 if (IsMetaType(field.Type))
+                {
                     Line(2, "[global::Bond.RequiredOptional]");
+                }
                 else if (field.Modifier == FieldModifier.Required)
+                {
                     Line(2, "[global::Bond.Required]");
+                }
                 else if (field.Modifier == FieldModifier.RequiredOptional)
+                {
                     Line(2, "[global::Bond.RequiredOptional]");
+                }
+
                 var hiding = inheritedNames.Contains(field.Name) ? "new " : "";
                 Line(2, $"public {hiding}{type.Name} {Identifier(field.Name, field.Location)} {{ get; set; }}");
                 Line(0);
+
                 if (initialValue != null)
+                {
                     initializers.Add((field, initialValue));
+                }
             }
 
-            if (structure.Fields.Length != 0 || callBaseConstructor)
+            return initializers;
+        }
+
+        private void EmitStructConstructors(StructDeclaration structure, string name, bool callBaseConstructor,
+            IReadOnlyList<(Field Field, string Value)> initializers)
+        {
+            if (structure.Fields.Length == 0 && !callBaseConstructor)
             {
-                Line(2, $"public {name}()");
-                Line(3, $": this({Literal(IdlFullName(structure))}, {Literal(structure.Name)})");
-                Line(2, "{");
-                Line(2, "}");
-                Line(0);
-                Line(2, $"protected {name}(string fullName, string name)");
-                if (callBaseConstructor)
-                    Line(3, ": base(fullName, name)");
-                Line(2, "{");
-                foreach (var (field, value) in initializers)
-                    Line(3, $"this.{Identifier(field.Name, field.Location)} = {value};");
-                Line(2, "}");
+                return;
             }
 
-            if (options.GenerateModelFeatures)
-                EmitModelMembers(structure);
-            Line(1, "}");
-            Line(0, "}");
+            Line(2, $"public {name}()");
+            Line(3, $": this({Literal(IdlFullName(structure))}, {Literal(structure.Name)})");
+            Line(2, "{");
+            Line(2, "}");
             Line(0);
+
+            Line(2, $"protected {name}(string fullName, string name)");
+            if (callBaseConstructor)
+            {
+                Line(3, ": base(fullName, name)");
+            }
+
+            Line(2, "{");
+            foreach (var (field, value) in initializers)
+            {
+                Line(3, $"this.{Identifier(field.Name, field.Location)} = {value};");
+            }
+
+            Line(2, "}");
         }
 
         private void EmitEnum(EnumDeclaration enumeration)
         {
             if (enumeration.TypeParameters.Length != 0)
+            {
                 Fail("C# enums cannot have type parameters.", enumeration.Location);
+            }
+
             BeginNamespace(enumeration);
             EmitDocumentation(enumeration.LeadingTrivia, enumeration.TrailingTrivia, 1);
             EmitAttributes(enumeration.Attributes, 1);
             EmitNamespaceAttribute(enumeration);
             Line(1, $"public enum {Identifier(enumeration.Name, enumeration.Location, typeName: true)}");
             Line(1, "{");
+
             long nextValue = 0;
             var names = new HashSet<string>(StringComparer.Ordinal);
             foreach (var constant in enumeration.Constants)
             {
                 if (constant.Name == enumeration.Name || constant.Name == "value__")
+                {
                     Fail($"Enum member '{constant.Name}' cannot be represented in C#.", constant.Location);
+                }
+
                 if (!names.Add(constant.Name))
+                {
                     Fail($"Duplicate C# enum member '{constant.Name}'.", constant.Location);
+                }
+
                 var initializer = "";
                 if (constant.Value is long value)
                 {
@@ -248,10 +330,12 @@ public static partial class CSharpGenerator
                 {
                     Fail($"Implicit enum value '{constant.Name}' overflows the C# enum's signed 32-bit underlying type.", constant.Location);
                 }
+
                 EmitDocumentation(constant.LeadingTrivia, constant.TrailingTrivia, 2);
                 Line(2, $"{Identifier(constant.Name, constant.Location)}{initializer},");
                 nextValue++;
             }
+
             Line(1, "}");
             Line(0, "}");
             Line(0);
@@ -261,21 +345,36 @@ public static partial class CSharpGenerator
         {
             switch (type)
             {
-                case BondType.Int8: return Scalar("sbyte");
-                case BondType.Int16: return Scalar("short");
-                case BondType.Int32: return Scalar("int");
-                case BondType.Int64: return Scalar("long");
-                case BondType.UInt8: return Scalar("byte");
-                case BondType.UInt16: return Scalar("ushort");
-                case BondType.UInt32: return Scalar("uint");
-                case BondType.UInt64: return Scalar("ulong");
-                case BondType.Float: return Scalar("float");
-                case BondType.Double: return Scalar("double");
-                case BondType.Bool: return Scalar("bool");
-                case BondType.String: return new("string", "string", "\"\"");
-                case BondType.WString: return new("string", "global::Bond.Tag.wstring", "\"\"");
-                case BondType.MetaName: return new("string", "string", "name");
-                case BondType.MetaFullName: return new("string", "string", "fullName");
+                case BondType.Int8:
+                    return Scalar("sbyte");
+                case BondType.Int16:
+                    return Scalar("short");
+                case BondType.Int32:
+                    return Scalar("int");
+                case BondType.Int64:
+                    return Scalar("long");
+                case BondType.UInt8:
+                    return Scalar("byte");
+                case BondType.UInt16:
+                    return Scalar("ushort");
+                case BondType.UInt32:
+                    return Scalar("uint");
+                case BondType.UInt64:
+                    return Scalar("ulong");
+                case BondType.Float:
+                    return Scalar("float");
+                case BondType.Double:
+                    return Scalar("double");
+                case BondType.Bool:
+                    return Scalar("bool");
+                case BondType.String:
+                    return new("string", "string", "\"\"");
+                case BondType.WString:
+                    return new("string", "global::Bond.Tag.wstring", "\"\"");
+                case BondType.MetaName:
+                    return new("string", "string", "name");
+                case BondType.MetaFullName:
+                    return new("string", "string", "fullName");
                 case BondType.Blob:
                     return new("global::System.ArraySegment<byte>", "global::System.ArraySegment<byte>",
                         "new global::System.ArraySegment<byte>()", IsValueType: true, IsSchemaValueType: true);
@@ -288,70 +387,90 @@ public static partial class CSharpGenerator
                 case BondType.Map map:
                     return Collection("Dictionary", location, map.KeyType, map.ValueType);
                 case BondType.Nullable nullable:
-                {
-                    var element = MapType(nullable.ElementType, location);
-                    return new(element.Name + (element.IsScalar ? "?" : ""),
-                        $"global::Bond.Tag.nullable<{element.SchemaType}>",
-                        IsValueType: !element.IsScalar && element.IsValueType, IsCustom: element.IsCustom);
-                }
-                case BondType.Maybe maybe:
-                {
-                    var element = MapType(maybe.ElementType, location);
-                    var suffix = element.IsScalar ? "?" : "";
-                    // gbc retains an alias's annotation, without adding the "nothing" wrapper.
-                    var schemaSuffix = maybe.ElementType is BondType.TypeReference reference &&
-                        Canonical(reference.Declaration) is AliasDeclaration ? "" : suffix;
-                    return new(element.Name + suffix, element.SchemaType + schemaSuffix,
-                        IsValueType: suffix.Length == 0 && element.IsValueType,
-                        IsSchemaValueType: schemaSuffix.Length == 0 && element.IsSchemaValueType, IsCustom: element.IsCustom);
-                }
-                case BondType.Bonded bonded:
-                {
-                    var underlying = UnwrapAlias(bonded.StructType, location);
-                    if (underlying is not BondType.TypeParameter &&
-                        underlying is not BondType.TypeReference { Declaration: StructDeclaration or ForwardDeclaration })
-                        Fail("bonded<T> requires a struct or type parameter.", location);
-                    var element = MapType(bonded.StructType, location);
-                    return new($"global::Bond.IBonded<{element.Name}>", $"global::Bond.IBonded<{element.SchemaType}>",
-                        $"global::Bond.Bonded<{element.Name}>.Empty");
-                }
-                case BondType.TypeReference reference:
-                {
-                    var declaration = Canonical(reference.Declaration);
-                    ValidateTypeArguments(declaration, reference.TypeArguments, location);
-                    if (declaration is AliasDeclaration alias)
                     {
-                        ValidateAlias(alias);
-                        if (TryMapAlias(alias, reference.TypeArguments, location, out var custom))
-                            return custom;
-                        var mapped = MapType(Substitute(alias.AliasedType, alias, reference.TypeArguments), location);
-                        return alias.AliasedType is BondType.Blob
-                            ? mapped with { SchemaType = "global::Bond.Tag.blob", IsSchemaValueType = false }
-                            : mapped;
+                        var element = MapType(nullable.ElementType, location);
+                        return new(element.Name + (element.IsScalar ? "?" : ""),
+                            $"global::Bond.Tag.nullable<{element.SchemaType}>",
+                            IsValueType: !element.IsScalar && element.IsValueType, IsCustom: element.IsCustom);
                     }
-
-                    var arguments = reference.TypeArguments.Select(argument => MapType(argument, location)).ToArray();
-                    var name = QualifiedName(declaration) + TypeArguments(arguments.Select(argument => argument.Name));
-                    var schema = QualifiedName(declaration) + TypeArguments(arguments.Select(argument => argument.SchemaType));
-                    return declaration switch
+                case BondType.Maybe maybe:
                     {
-                        EnumDeclaration => new(name, name, IsScalar: true, IsValueType: true, IsSchemaValueType: true),
-                        StructDeclaration or ForwardDeclaration => new(name, schema, $"new {name}()"),
-                        _ => throw new GenerationException("Only structs and enums can be used as generated C# model types.", location)
-                    };
-                }
+                        var element = MapType(maybe.ElementType, location);
+                        var suffix = element.IsScalar ? "?" : "";
+
+                        // gbc retains an alias's annotation, without adding the "nothing" wrapper.
+                        var isAlias = maybe.ElementType is BondType.TypeReference reference &&
+                            Canonical(reference.Declaration) is AliasDeclaration;
+                        var schemaSuffix = isAlias ? "" : suffix;
+                        return new(element.Name + suffix, element.SchemaType + schemaSuffix,
+                            IsValueType: suffix.Length == 0 && element.IsValueType,
+                            IsSchemaValueType: schemaSuffix.Length == 0 && element.IsSchemaValueType, IsCustom: element.IsCustom);
+                    }
+                case BondType.Bonded bonded:
+                    {
+                        var underlying = UnwrapAlias(bonded.StructType, location);
+                        if (underlying is not BondType.TypeParameter &&
+                            underlying is not BondType.TypeReference { Declaration: StructDeclaration or ForwardDeclaration })
+                        {
+                            Fail("bonded<T> requires a struct or type parameter.", location);
+                        }
+
+                        var element = MapType(bonded.StructType, location);
+                        return new($"global::Bond.IBonded<{element.Name}>", $"global::Bond.IBonded<{element.SchemaType}>",
+                            $"global::Bond.Bonded<{element.Name}>.Empty");
+                    }
+                case BondType.TypeReference reference:
+                    return MapReferencedType(reference, location);
                 case BondType.TypeParameter parameter:
-                {
-                    var name = Identifier(parameter.Param.Name, location, typeName: true);
-                    var isScalar = parameter.Param.Constraint == TypeConstraint.Value;
-                    return new(name, isScalar ? "global::Bond.Tag.structT" : "global::Bond.Tag.classT",
-                        $"global::Bond.GenericFactory.Create<{name}>()", isScalar, isScalar, isScalar);
-                }
+                    {
+                        var name = Identifier(parameter.Param.Name, location, typeName: true);
+                        var isScalar = parameter.Param.Constraint == TypeConstraint.Value;
+                        return new(name, isScalar ? "global::Bond.Tag.structT" : "global::Bond.Tag.classT",
+                            $"global::Bond.GenericFactory.Create<{name}>()",
+                            IsScalar: isScalar, IsValueType: isScalar, IsSchemaValueType: isScalar);
+                    }
                 case BondType.IntTypeArg:
                     throw new GenerationException("Integer type arguments cannot be represented as C# types without a custom type mapping.", location);
                 default:
                     throw new GenerationException($"Type '{type}' is not resolved to a representable C# schema type.", location);
             }
+        }
+
+        private MappedType MapReferencedType(BondType.TypeReference reference, SourceLocation location)
+        {
+            var declaration = Canonical(reference.Declaration);
+            ValidateTypeArguments(declaration, reference.TypeArguments, location);
+            if (declaration is AliasDeclaration alias)
+            {
+                ValidateAlias(alias);
+                if (TryMapAlias(alias, reference.TypeArguments, location, out var custom))
+                {
+                    return custom;
+                }
+
+                var underlying = Substitute(alias.AliasedType, alias, reference.TypeArguments);
+                var mapped = MapType(underlying, location);
+                if (alias.AliasedType is BondType.Blob)
+                {
+                    return mapped with
+                    {
+                        SchemaType = "global::Bond.Tag.blob",
+                        IsSchemaValueType = false
+                    };
+                }
+
+                return mapped;
+            }
+
+            var arguments = reference.TypeArguments.Select(argument => MapType(argument, location)).ToArray();
+            var name = QualifiedName(declaration) + TypeArguments(arguments.Select(argument => argument.Name));
+            var schema = QualifiedName(declaration) + TypeArguments(arguments.Select(argument => argument.SchemaType));
+            return declaration switch
+            {
+                EnumDeclaration => new(name, name, IsScalar: true, IsValueType: true, IsSchemaValueType: true),
+                StructDeclaration or ForwardDeclaration => new(name, schema, $"new {name}()"),
+                _ => throw new GenerationException("Only structs and enums can be used as generated C# model types.", location)
+            };
         }
 
         private MappedType Collection(string name, SourceLocation location, params BondType[] arguments)
@@ -377,11 +496,18 @@ public static partial class CSharpGenerator
             {
                 var declaration = Canonical(reference.Declaration);
                 if (declaration is not AliasDeclaration alias)
-                    return reference with { Declaration = declaration };
+                {
+                    return reference with
+                    {
+                        Declaration = declaration
+                    };
+                }
+
                 ValidateAlias(alias);
                 ValidateTypeArguments(alias, reference.TypeArguments, location);
                 type = Substitute(alias.AliasedType, alias, reference.TypeArguments);
             }
+
             return type;
         }
 
@@ -390,26 +516,46 @@ public static partial class CSharpGenerator
             if (mapped.IsCustom && owner != null)
             {
                 if (field.DefaultValue is Default.Nothing || field.Type is BondType.Nullable or BondType.Maybe)
+                {
                     return null;
+                }
+
                 return CustomDefaultValue(field, mapped, owner);
             }
+
             if (field.Type is BondType.MetaName)
+            {
                 return "name";
+            }
+
             if (field.Type is BondType.MetaFullName)
+            {
                 return "fullName";
+            }
+
             if (field.DefaultValue == null)
+            {
                 return IsMetaType(UnwrapAlias(field.Type, field.Location)) ? null : mapped.InitialValue;
+            }
 
             var type = UnwrapAlias(field.Type, field.Location);
             if (field.DefaultValue is Default.Nothing && type is BondType.Maybe)
+            {
                 return null;
+            }
 
             if (type is BondType.TypeParameter || !TypeValidator.ValidateDefaultValue(type, field.DefaultValue))
+            {
                 Fail($"Invalid default value for field '{field.Name}'.", field.Location);
+            }
+
             if (field.DefaultValue is Default.Enum constant &&
                 type is BondType.TypeReference { Declaration: EnumDeclaration enumeration } &&
                 !enumeration.Constants.Any(member => member.Name == constant.Identifier))
+            {
                 Fail($"Enum '{enumeration.Name}' has no member '{constant.Identifier}'.", field.Location);
+            }
+
             return field.DefaultValue switch
             {
                 Default.Bool boolean => boolean.Value ? "true" : "false",
@@ -429,8 +575,12 @@ public static partial class CSharpGenerator
                 var number = float.Parse(value.ToString(CultureInfo.InvariantCulture), CultureInfo.InvariantCulture);
                 return FloatLiteral(number, type, location);
             }
+
             if (type is BondType.Double)
+            {
                 return FloatLiteral((double)value, type, location);
+            }
+
             var suffix = type switch
             {
                 BondType.UInt64 => "UL",
@@ -444,7 +594,10 @@ public static partial class CSharpGenerator
         private static string FloatLiteral(double value, BondType type, SourceLocation location)
         {
             if (!double.IsFinite(value) || (type is BondType.Float && !float.IsFinite((float)value)))
+            {
                 Fail("Floating-point default is outside the supported finite range.", location);
+            }
+
             return type is BondType.Float
                 ? ((float)value).ToString("R", CultureInfo.InvariantCulture) + "F"
                 : value.ToString("R", CultureInfo.InvariantCulture) + "D";
@@ -457,8 +610,11 @@ public static partial class CSharpGenerator
             {
                 if (!declarations.TryGetValue(declaration.QualifiedName, out var previous) ||
                     previous is ForwardDeclaration && declaration is not ForwardDeclaration)
+                {
                     declarations[declaration.QualifiedName] = declaration;
+                }
             }
+
             return declarations;
         }
 
@@ -474,9 +630,14 @@ public static partial class CSharpGenerator
             {
                 Identifier(parameter.Name, declaration.Location, typeName: true);
                 if (parameter.Name == declaration.Name || !names.Add(parameter.Name))
+                {
                     Fail($"Type parameter '{parameter.Name}' conflicts with another C# declaration.", declaration.Location);
+                }
+
                 if (parameter.Constraint is not TypeConstraint.None and not TypeConstraint.Value)
+                {
                     Fail($"Unsupported type constraint for '{parameter.Name}'.", declaration.Location);
+                }
             }
         }
 
@@ -484,18 +645,32 @@ public static partial class CSharpGenerator
             Declaration declaration, BondType[] arguments, SourceLocation location, bool annotated = false)
         {
             if (declaration.TypeParameters.Length != arguments.Length)
+            {
                 Fail($"Type '{declaration.Name}' requires {declaration.TypeParameters.Length} type arguments, not {arguments.Length}.", location);
+            }
+
             if (declaration is AliasDeclaration)
+            {
                 return;
+            }
+
             for (var index = 0; index < arguments.Length; index++)
             {
                 if (declaration.TypeParameters[index].Constraint != TypeConstraint.Value)
+                {
                     continue;
+                }
+
                 var argument = MapType(arguments[index], location);
+
                 // The consuming compiler resolves constraints on externally supplied CLR types.
                 if (!annotated && argument.IsCustom)
+                {
                     continue;
-                if (!(annotated ? argument.IsSchemaValueType : argument.IsValueType))
+                }
+
+                var isValueType = annotated ? argument.IsSchemaValueType : argument.IsValueType;
+                if (!isValueType)
                 {
                     var kind = annotated ? "schema annotation" : "type argument";
                     Fail($"The C# {kind} for '{declaration.TypeParameters[index].Name}' must be a non-nullable value type.", location);
@@ -514,19 +689,29 @@ public static partial class CSharpGenerator
                     ValidateAnnotatedType(Substitute(alias.AliasedType, alias, reference.TypeArguments), location);
                     return;
                 }
+
                 ValidateTypeArguments(declaration, reference.TypeArguments, location, annotated: true);
             }
+
             foreach (var child in Children(type))
+            {
                 ValidateAnnotatedType(child, location);
+            }
         }
 
         private void ValidateAlias(AliasDeclaration alias, HashSet<AliasDeclaration>? path = null)
         {
             if (_validatedAliases.Contains(alias))
+            {
                 return;
+            }
+
             path ??= new HashSet<AliasDeclaration>(ReferenceEqualityComparer.Instance);
             if (!path.Add(alias))
+            {
                 Fail("Circular aliases cannot be generated.", alias.Location);
+            }
+
             Visit(alias.AliasedType);
             path.Remove(alias);
             _validatedAliases.Add(alias);
@@ -534,9 +719,14 @@ public static partial class CSharpGenerator
             void Visit(BondType type)
             {
                 if (type is BondType.TypeReference reference && Canonical(reference.Declaration) is AliasDeclaration target)
+                {
                     ValidateAlias(target, path);
+                }
+
                 foreach (var child in Children(type))
+                {
                     Visit(child);
+                }
             }
         }
 
@@ -546,8 +736,11 @@ public static partial class CSharpGenerator
             foreach (var parameter in declaration.TypeParameters)
             {
                 if (!names.Add(parameter.Name))
+                {
                     Fail($"Duplicate type parameter '{parameter.Name}'.", declaration.Location);
+                }
             }
+
             return type.SubstituteTypeParameters(declaration.TypeParameters, arguments);
         }
 
@@ -574,12 +767,21 @@ public static partial class CSharpGenerator
                 var underlying = UnwrapAlias(type, structure.Location);
                 if (underlying is not BondType.TypeReference reference ||
                     reference.Declaration is not StructDeclaration and not ForwardDeclaration)
+                {
                     throw new GenerationException("A C# schema base must be a struct type.", structure.Location);
+                }
+
                 ValidateTypeArguments(reference.Declaration, reference.TypeArguments, structure.Location);
                 if (!visited.Add(reference.Declaration.QualifiedName))
+                {
                     Fail("Circular struct inheritance cannot be represented in C#.", structure.Location);
+                }
+
                 if (reference.Declaration is not StructDeclaration parent)
+                {
                     yield break;
+                }
+
                 yield return parent;
                 type = parent.BaseType == null ? null :
                     Substitute(parent.BaseType, parent, reference.TypeArguments);
@@ -594,7 +796,10 @@ public static partial class CSharpGenerator
             var identity = string.Join(".", name) + "." + declaration.Name + "`" +
                 declaration.TypeParameters.Length.ToString(CultureInfo.InvariantCulture);
             if (!_emittedTypes.Add(identity))
+            {
                 Fail($"Multiple schema declarations map to C# type '{identity}'.", declaration.Location);
+            }
+
             Line(0, $"namespace {string.Join(".", name.Select(part => Identifier(part, declaration.Location)))}");
             Line(0, "{");
         }
@@ -603,7 +808,9 @@ public static partial class CSharpGenerator
         {
             var idl = IdlNamespace(declaration);
             if (!idl.SequenceEqual(CSharpNamespace(declaration)))
+            {
                 Line(1, $"[global::Bond.Namespace({Literal(string.Join(".", idl))})]");
+            }
         }
 
         private static string[] IdlNamespace(Declaration declaration) =>
@@ -618,7 +825,10 @@ public static partial class CSharpGenerator
             var selected = declaration.Namespaces.FirstOrDefault(ns => ns.LanguageQualifier == Language.Cs) ??
                 declaration.Namespaces.FirstOrDefault(ns => ns.LanguageQualifier == null);
             if (selected == null || selected.Name.Length == 0)
+            {
                 throw new GenerationException($"Declaration '{declaration.Name}' requires a C# or unqualified namespace.", declaration.Location);
+            }
+
             return MapNamespace(selected.Name);
         }
 
@@ -630,10 +840,13 @@ public static partial class CSharpGenerator
         private string CompanionName(Declaration declaration, string suffix)
         {
             var name = declaration.Name + suffix;
-            var ns = CSharpNamespace(declaration);
+            var namespaceParts = CSharpNamespace(declaration);
             while (_declarations.Values.Any(candidate => candidate is StructDeclaration or EnumDeclaration
-                && candidate.Name == name && CSharpNamespace(candidate).SequenceEqual(ns)))
+                && candidate.Name == name && CSharpNamespace(candidate).SequenceEqual(namespaceParts)))
+            {
                 name += "_";
+            }
+
             return name;
         }
 
@@ -645,13 +858,18 @@ public static partial class CSharpGenerator
         private void EmitAttributes(Syntax.Attribute[] attributes, int indent)
         {
             foreach (var attribute in attributes)
+            {
                 Line(indent, $"[global::Bond.Attribute({Literal(string.Join(".", attribute.QualifiedName))}, {Literal(attribute.Value)})]");
+            }
         }
 
         private static string Identifier(string value, SourceLocation location, bool typeName = false)
         {
             if (value.Length == 0 || !IsIdentifierStart(value[0]) || value.Any(character => !IsIdentifierPart(character)))
+            {
                 Fail($"'{value}' is not a supported C# identifier.", location);
+            }
+
             var escape = ReservedKeywords.Contains(value)
                 || (typeName && value is "var" or "dynamic" or "nint" or "nuint" or "record" or "file" or "required" or "scoped");
             return escape ? "@" + value : value;
@@ -672,19 +890,31 @@ public static partial class CSharpGenerator
             {
                 switch (character)
                 {
-                    case '"': literal.Append("\\\""); break;
-                    case '\\': literal.Append("\\\\"); break;
+                    case '"':
+                        literal.Append("\\\"");
+                        break;
+                    case '\\':
+                        literal.Append("\\\\");
+                        break;
                     default:
                         if (character < ' ' || character > '~')
+                        {
                             literal.Append("\\u").Append(((int)character).ToString("x4", CultureInfo.InvariantCulture));
+                        }
                         else
+                        {
                             literal.Append(character);
+                        }
+
                         break;
                 }
             }
+
             return literal.Append('"').ToString();
         }
+
         private static void Fail(string message, SourceLocation location) => throw new GenerationException(message, location);
+
         private void Line(int indent, string value = "") => _code.Append(' ', indent * 4).Append(value).Append('\n');
     }
 }

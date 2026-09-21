@@ -22,18 +22,47 @@ public static partial class CSharpGenerator
             const CSharpModelFeatures coreFeatures = CSharpModelFeatures.Descriptors | CSharpModelFeatures.Cloning
                 | CSharpModelFeatures.Equality | CSharpModelFeatures.Debugger;
             if ((options.ModelFeatures & coreFeatures) == coreFeatures)
+            {
                 interfaces.Add(ModelSupport + "IGeneratedModel");
+            }
             else
             {
-                if (options.GenerateDescriptors) interfaces.Add(ModelSupport + "IGeneratedSchemaProvider");
-                if (options.GenerateCloning) interfaces.Add(ModelSupport + "IGeneratedCloneable");
-                if (options.GenerateEquality) interfaces.Add(ModelSupport + "IGeneratedEquatable");
-                if (options.GenerateDebuggerSupport) interfaces.Add(ModelSupport + "IGeneratedDebugView");
+                if (options.GenerateDescriptors)
+                {
+                    interfaces.Add(ModelSupport + "IGeneratedSchemaProvider");
+                }
+
+                if (options.GenerateCloning)
+                {
+                    interfaces.Add(ModelSupport + "IGeneratedCloneable");
+                }
+
+                if (options.GenerateEquality)
+                {
+                    interfaces.Add(ModelSupport + "IGeneratedEquatable");
+                }
+
+                if (options.GenerateDebuggerSupport)
+                {
+                    interfaces.Add(ModelSupport + "IGeneratedDebugView");
+                }
             }
-            if (options.GenerateToString) interfaces.Add(ModelSupport + "IGeneratedSummary");
-            if (options.GenerateCloning) interfaces.Add("global::System.ICloneable");
+
+            if (options.GenerateToString)
+            {
+                interfaces.Add(ModelSupport + "IGeneratedSummary");
+            }
+
+            if (options.GenerateCloning)
+            {
+                interfaces.Add("global::System.ICloneable");
+            }
+
             if (options.GenerateEquality && CanEmitDefaultEquality(structure))
+            {
                 interfaces.Add($"global::System.IEquatable<{ModelSelf(structure)}>");
+            }
+
             return string.Join(", ", interfaces);
         }
 
@@ -51,13 +80,18 @@ public static partial class CSharpGenerator
                     Identifier(parameter.Name, structure.Location, typeName: true)));
             var fields = options.GenerateCloning || options.GenerateEquality || options.GenerateDebuggerSupport
                 ? OperationFields(structure).ToArray() : [];
+
             string Local(string name)
             {
                 var candidate = "__bond" + name;
                 while (structure.TypeParameters.Any(parameter => parameter.Name == candidate))
+                {
                     candidate += "_";
+                }
+
                 return candidate;
             }
+
             var context = Local("Context");
             var clone = Local("Clone");
             var existing = Local("Existing");
@@ -68,8 +102,11 @@ public static partial class CSharpGenerator
 
             Line(0);
             if (options.GenerateDescriptors)
+            {
                 Line(2, $"{ModelSupport}SchemaDescriptor {ModelSupport}IGeneratedSchemaProvider.Descriptor => " +
                     $"{QualifiedCompanionName(structure, "Schema")}.Descriptor;");
+            }
+
             if (options.GenerateCloning)
             {
                 Line(2, $"object global::System.ICloneable.Clone() => {ModelSupport}ModelOperations.Clone(this);");
@@ -88,15 +125,20 @@ public static partial class CSharpGenerator
                     Line(3, $"(({field.Owner}){clone}).{name} = {operations}.Field{i}.Clone(" +
                         $"(({field.Owner})this).{name}, {context});");
                 }
+
                 Line(3, $"return {clone};");
                 Line(2, "}");
                 Line(0);
             }
+
             if (options.GenerateEquality)
             {
                 if (CanEmitDefaultEquality(structure))
+                {
                     Line(2, $"bool global::System.IEquatable<{self}>.Equals({self} {other}) => " +
                         $"{ModelSupport}ModelOperations.ValueEquals(this, {other});");
+                }
+
                 Line(2, $"bool {ModelSupport}IGeneratedEquatable.ValueEquals({ModelSupport}IGeneratedEquatable {other}, " +
                     $"{ModelSupport}EqualityContext {context})");
                 Line(2, "{");
@@ -110,6 +152,7 @@ public static partial class CSharpGenerator
                     Line(3, $"if (!{operations}.Field{i}.Equals((({field.Owner})this).{name}, " +
                         $"(({field.Owner}){right}).{name}, {context})) return false;");
                 }
+
                 Line(3, "return true;");
                 Line(2, "}");
                 Line(0);
@@ -126,10 +169,12 @@ public static partial class CSharpGenerator
                     Line(3, $"{hash} = {ModelSupport}HashContext.Combine({hash}, {operations}.Field{i}.GetHashCode(" +
                         $"(({field.Owner})this).{Identifier(field.Field.Name, field.Field.Location)}, {child}));");
                 }
+
                 Line(3, $"return {hash};");
                 Line(2, "}");
                 Line(0);
             }
+
             if (options.GenerateDebuggerSupport)
             {
                 Line(2, $"{ModelSupport}ModelDebugField[] {ModelSupport}IGeneratedDebugView.GetDebugFields()");
@@ -137,9 +182,12 @@ public static partial class CSharpGenerator
                 Line(3, $"return new {ModelSupport}ModelDebugField[]");
                 Line(3, "{");
                 foreach (var field in fields)
+                {
                     Line(4, $"new {ModelSupport}ModelDebugField({Literal(field.DeclaringName)}, {Literal(field.Field.Name)}, " +
                         $"{field.Field.Ordinal.ToString(CultureInfo.InvariantCulture)}, " +
                         $"(({field.Owner})this).{Identifier(field.Field.Name, field.Field.Location)}),");
+                }
+
                 Line(3, "};");
                 Line(2, "}");
             }
@@ -149,15 +197,22 @@ public static partial class CSharpGenerator
                 var hiding = BaseStructures(structure).Any(parent => CanEmitConvenience(parent, "Clone")) ? "new " : "";
                 Line(2, $"public {hiding}{self} Clone() => {ModelSupport}ModelOperations.Clone(this);");
             }
+
             if (options.GenerateEquality && CanEmitDefaultEquality(structure))
             {
                 Line(2, $"public bool Equals({self} {other}) => {ModelSupport}ModelOperations.ValueEquals(this, {other});");
                 Line(2, $"public override bool Equals(object {other}) => {ModelSupport}ModelOperations.ValueEquals<object>(this, {other});");
             }
+
             if (options.GenerateEquality && CanEmitDefaultEquality(structure))
+            {
                 Line(2, $"public override int GetHashCode() => {ModelSupport}ModelOperations.ValueHashCode(this);");
+            }
+
             if (options.GenerateToString)
+            {
                 EmitSummaryMembers(structure);
+            }
         }
 
         private bool CanEmitConvenience(StructDeclaration structure, string name) =>
@@ -172,26 +227,42 @@ public static partial class CSharpGenerator
         private void EmitModelCompanions(StructDeclaration structure)
         {
             var arguments = structure.TypeParameters.Select((parameter, index) =>
-                (BondType)new BondType.TypeParameter(parameter with { Name = "__T" + index })).ToArray();
+                (BondType)new BondType.TypeParameter(parameter with
+                {
+                    Name = "__T" + index
+                })).ToArray();
             var parameters = TypeArguments(arguments.Select(argument => MapType(argument, structure.Location).Name));
             var self = QualifiedName(structure) + parameters;
             var fields = OperationFields(structure, arguments).ToArray();
+
             Line(0, $"namespace {string.Join(".", CSharpNamespace(structure).Select(part => Identifier(part, structure.Location)))}");
             Line(0, "{");
             Line(1, $"public static class {Identifier(CompanionName(structure, "Operations"), structure.Location, typeName: true)}{parameters}");
             for (var i = 0; i < structure.TypeParameters.Length; i++)
+            {
                 if (structure.TypeParameters[i].Constraint == TypeConstraint.Value)
+                {
                     Line(2, $"where __T{i} : struct");
+                }
+            }
+
             Line(1, "{");
             if (options.GenerateCloning)
+            {
                 Line(2, $"public static {self} Clone({self} value) => {ModelSupport}ModelOperations.Clone(value);");
+            }
+
             if (options.GenerateEquality)
             {
                 Line(2, $"public static bool Equals({self} left, {self} right) => {ModelSupport}ModelOperations.ValueEquals(left, right);");
                 Line(2, $"public static int GetHashCode({self} value) => {ModelSupport}ModelOperations.ValueHashCode(value);");
             }
+
             if (options.GenerateToString)
+            {
                 EmitSummaryCompanionMembers(structure, self);
+            }
+
             if (options.GenerateCloning || options.GenerateEquality)
             {
                 for (var i = 0; i < fields.Length; i++)
@@ -202,6 +273,7 @@ public static partial class CSharpGenerator
                         $"{ModelAdapterExpression(field.Type, field.Field.Location)};");
                 }
             }
+
             if ((options.GenerateCloning || options.GenerateEquality)
                 && fields.Any(field => UsesMaterializedAdapter(field.Type, field.Field.Location)))
             {
@@ -218,6 +290,7 @@ public static partial class CSharpGenerator
                 Line(3, "public global::Bond.IBonded<__U> Convert<__U>() => this as global::Bond.IBonded<__U>;");
                 Line(2, "}");
             }
+
             Line(1, "}");
             Line(0, "}");
             Line(0);
@@ -233,12 +306,18 @@ public static partial class CSharpGenerator
             {
                 var reference = (BondType.TypeReference)UnwrapAlias(current, structure.Location);
                 if (Canonical(reference.Declaration) is not StructDeclaration declaration)
+                {
                     throw new GenerationException(
                         $"Cannot generate model operations for '{structure.Name}' because base '{reference.Declaration.QualifiedName}' " +
                         "has no schema definition. Include its .bond definition or disable these operations.", structure.Location);
+                }
+
                 var owner = MapType(reference, structure.Location).Name;
                 foreach (var field in declaration.Fields.OrderBy(field => field.Ordinal))
+                {
                     yield return new(owner, IdlFullName(declaration), field, Substitute(field.Type, declaration, reference.TypeArguments));
+                }
+
                 current = declaration.BaseType is null ? null : Substitute(declaration.BaseType, declaration, reference.TypeArguments);
             }
         }
@@ -248,9 +327,15 @@ public static partial class CSharpGenerator
             var mapped = MapType(type, location);
             var adapters = ModelSupport + "ModelAdapters.";
             if (mapped.IsCustom)
+            {
                 return $"{adapters}Value<{mapped.Name}>()";
+            }
+
             if (type is BondType.TypeReference reference && Canonical(reference.Declaration) is AliasDeclaration alias)
+            {
                 return ModelAdapterExpression(Substitute(alias.AliasedType, alias, reference.TypeArguments), location);
+            }
+
             if (type is BondType.TypeReference { TypeArguments.Length: > 0 } generic)
             {
                 var arguments = new List<string>();
@@ -259,14 +344,31 @@ public static partial class CSharpGenerator
                     var argumentName = MapType(argument, location).Name;
                     var adapter = ModelAdapterExpression(argument, location);
                     if (adapter != $"{adapters}Value<{argumentName}>()")
+                    {
                         arguments.Add($"{ModelSupport}ModelAdapterArgument.Create<{argumentName}>({adapter})");
+                    }
                 }
+
                 if (arguments.Count > 0)
+                {
                     return $"{adapters}WithArguments({adapters}Value<{mapped.Name}>(), {string.Join(", ", arguments)})";
+                }
             }
+
             string Element(BondType element) => ModelAdapterExpression(element, location);
+
             string Nullable(BondType element) => MapType(element, location).Name == mapped.Name
                 ? Element(element) : $"{adapters}Nullable({Element(element)})";
+
+            if (type is BondType.Bonded bonded)
+            {
+                var payloadType = MapType(bonded.StructType, location).Name;
+                return $"{adapters}Materialized<{mapped.Name}, {payloadType}>(" +
+                    $"static value => value is {ModelSupport}IMaterializedModelValue<{payloadType}> materialized ? materialized.Value : value.Deserialize(), " +
+                    $"static value => new __MaterializedBonded<{payloadType}>(value), " +
+                    $"{Element(bonded.StructType)})";
+            }
+
             return type switch
             {
                 BondType.Vector vector => $"{adapters}List({Element(vector.ElementType)})",
@@ -276,10 +378,6 @@ public static partial class CSharpGenerator
                 BondType.Blob => adapters + "Blob",
                 BondType.Nullable nullable => Nullable(nullable.ElementType),
                 BondType.Maybe maybe => Nullable(maybe.ElementType),
-                BondType.Bonded bonded => $"{adapters}Materialized<{mapped.Name}, {MapType(bonded.StructType, location).Name}>(" +
-                    $"static value => value is {ModelSupport}IMaterializedModelValue<{MapType(bonded.StructType, location).Name}> materialized ? materialized.Value : value.Deserialize(), " +
-                    $"static value => new __MaterializedBonded<{MapType(bonded.StructType, location).Name}>(value), " +
-                    $"{Element(bonded.StructType)})",
                 _ => $"{adapters}Value<{mapped.Name}>()"
             };
         }
@@ -287,9 +385,15 @@ public static partial class CSharpGenerator
         private bool UsesMaterializedAdapter(BondType type, SourceLocation location)
         {
             if (MapType(type, location).IsCustom)
+            {
                 return false;
+            }
+
             if (type is BondType.TypeReference reference && Canonical(reference.Declaration) is AliasDeclaration alias)
+            {
                 return UsesMaterializedAdapter(Substitute(alias.AliasedType, alias, reference.TypeArguments), location);
+            }
+
             return type is BondType.Bonded || Children(type).Any(child => UsesMaterializedAdapter(child, location));
         }
     }

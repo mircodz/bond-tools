@@ -28,6 +28,7 @@ public class CodegenParserParityTests
         var result = await ParserFacade.ParseFileAsync(
             Path.Combine(AppContext.BaseDirectory, "Fixtures", fixture),
             cancellationToken: TestContext.Current.CancellationToken);
+
         result.Success.Should().BeTrue(string.Join("; ", result.Errors.Select(e => e.Message)));
         result.Ast!.ResolvedDeclarations.Should().NotBeEmpty();
         JsonSerializer.Serialize(result.Ast, BondJsonSerializerOptions.GetOptions()).Should().NotBeNullOrEmpty();
@@ -64,6 +65,7 @@ public class CodegenParserParityTests
         view.Fields[1].Modifier.Should().Be(FieldModifier.RequiredOptional);
         view.Fields[1].DefaultValue.Should().Be(new Default.Integer(42));
         view.BaseType.Should().Be(source.BaseType);
+
         var smaller = ast.Declarations.OfType<StructDeclaration>().Single(d => d.Name == "Smaller");
         smaller.Fields.Should().ContainSingle().Which.Name.Should().Be("item");
         smaller.TypeParameters.Should().Equal(view.TypeParameters);
@@ -95,11 +97,13 @@ public class CodegenParserParityTests
         ast.Declarations.Should().ContainSingle().Which.Name.Should().Be("Root");
         ast.ResolvedDeclarations.Select(d => d.QualifiedName).Should().BeEquivalentTo(
             "Application.Root", "Model.Middle", "Model.Items", "Model.Choice", "Storage.Base", "Storage.Identity");
+
         var middle = ast.ResolvedDeclarations.OfType<StructDeclaration>().Single(d => d.Name == "Middle");
         var baseType = middle.BaseType.Should().BeOfType<BondType.TypeReference>().Subject;
         baseType.Declaration.Should().BeOfType<StructDeclaration>()
             .Which.Fields[0].Type.ResolveAliases().Should().BeOfType<BondType.TypeParameter>();
         baseType.TypeArguments[0].ResolveAliases().Should().BeOfType<BondType.Vector>();
+
         var instantiated = middle.BaseType!.SubstituteTypeParameters(middle.TypeParameters, [BondType.Int32.Instance]);
         var argument = ((BondType.TypeReference)instantiated).TypeArguments[0].ResolveAliases();
         argument.Should().Be(new BondType.Vector(BondType.Int32.Instance));
@@ -138,10 +142,12 @@ public class CodegenParserParityTests
             """);
         ast.Declarations.Should().HaveCount(4);
         ast.ResolvedDeclarations.Should().HaveCount(2);
+
         var node = ast.ResolvedDeclarations.OfType<StructDeclaration>().Single(d => d.Name == "Node");
         var reference = ((BondType.Vector)node.Fields[0].Type).ElementType.Should().BeOfType<BondType.TypeReference>().Subject;
         reference.Declaration.Should().BeOfType<ForwardDeclaration>();
         reference.Declaration.QualifiedName.Should().Be(node.QualifiedName);
+
         var json = JsonSerializer.Serialize(ast, BondJsonSerializerOptions.GetOptions());
         json.Should().NotContain("resolvedDeclarations").And.NotContain("ResolvedDeclarations");
         using var document = JsonDocument.Parse(json);
@@ -165,8 +171,10 @@ public class CodegenParserParityTests
         var fields = ast.Declarations.OfType<StructDeclaration>().Single().Fields;
         fields[0].Type.ResolveAliases().Should().Be(BondType.UInt8.Instance);
         fields[1].Type.ResolveAliases().Should().Be(new BondType.Map(BondType.String.Instance, new BondType.Vector(BondType.Int32.Instance)));
+
         var maybe = fields[2].Type.Should().BeOfType<BondType.Maybe>().Subject;
         maybe.ElementType.ResolveAliases().Should().Be(BondType.Bool.Instance);
+
         var alias = ast.Declarations.OfType<AliasDeclaration>().First();
         alias.AliasedType.Should().BeOfType<BondType.TypeParameter>();
     }
@@ -274,8 +282,10 @@ public class CodegenParserParityTests
             ["right.bond"] = """import "shared.bond" namespace Model struct Right {}""",
             ["shared.bond"] = """import "root.bond" namespace Model struct Shared { 0: vector<Root> roots; }"""
         };
+
         var result = await ParserFacade.ParseContentAsync(files["root.bond"], "root.bond",
             (_, path) => Task.FromResult((path, files[path])));
+
         result.Success.Should().BeTrue(string.Join("; ", result.Errors.Select(e => e.Message)));
         result.Ast!.Declarations.Should().ContainSingle().Which.Name.Should().Be("Root");
         result.Ast.ResolvedDeclarations.Select(d => d.Name).Should().BeEquivalentTo("Root", "Left", "Right", "Shared");
@@ -337,6 +347,7 @@ public class CodegenParserParityTests
                 return Task.FromResult((requested, "namespace Imported"));
             });
         result.Success.Should().BeTrue();
+
         var currentFile = Path.Combine(AppContext.BaseDirectory, "Fixtures", "imports", "root.bond");
         var (canonical, content) = await DefaultImportResolver.Resolve(currentFile, path);
         canonical.Should().Be(Path.Combine(Path.GetDirectoryName(currentFile)!, "dir1", "dir2", "empty.bond"));

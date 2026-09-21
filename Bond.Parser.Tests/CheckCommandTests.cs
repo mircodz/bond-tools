@@ -64,8 +64,10 @@ public sealed class CheckCommandTests : IDisposable
         var imports = Path.Combine(_root, "imports");
 
         Assert.Equal(0, (await Run("-I", Path.Combine(_root, "missing"), input, "--import-dir=" + imports)).ExitCode);
+
         Write("imports/nested/value.bond", "namespace Example using Value = Missing;");
         var invalid = await Run(input, "-I=" + imports, "--error-format", "json");
+
         Assert.Equal(1, invalid.ExitCode);
         using var json = JsonDocument.Parse(invalid.Error);
         Assert.Equal(leaf, json.RootElement.GetProperty("errors")[0].GetProperty("file").GetString());
@@ -78,8 +80,10 @@ public sealed class CheckCommandTests : IDisposable
     public async Task MissingSchemasAndImportsAreInvalid()
     {
         Assert.Equal(1, (await Run(Path.Combine(_root, "missing.bond"))).ExitCode);
+
         var input = Write("root.bond", "import \"missing.bond\"\nnamespace Example struct Root {}");
         var missing = await Run(input);
+
         Assert.Equal(1, missing.ExitCode);
         Assert.Contains("missing.bond", missing.Error);
     }
@@ -97,6 +101,7 @@ public sealed class CheckCommandTests : IDisposable
     {
         var input = Write("item.bond", "namespace Example struct Item {}");
         var result = await Run(input, option);
+
         Assert.Equal(2, result.ExitCode);
         Assert.Empty(result.Output);
         Assert.NotEmpty(result.Error);
@@ -107,7 +112,9 @@ public sealed class CheckCommandTests : IDisposable
     {
         Assert.Equal(2, (await Run()).ExitCode);
         Assert.Equal(2, (await Run("one.bond", "two.bond")).ExitCode);
+
         var result = await Run("-I", "--error-format=json");
+
         Assert.Equal(2, result.ExitCode);
         using var json = JsonDocument.Parse(result.Error);
         Assert.Contains("requires a value", result.Error);
@@ -117,6 +124,7 @@ public sealed class CheckCommandTests : IDisposable
     public async Task HelpDescribesValidationNotAstOutput()
     {
         var result = await Run("--help");
+
         Assert.Equal(0, result.ExitCode);
         Assert.Contains("bond check", result.Output);
         Assert.Contains("syntax, types, and imports", result.Output);
@@ -130,16 +138,20 @@ public sealed class CheckCommandTests : IDisposable
     {
         var input = Write("item.bond", "namespace Example struct Item {}");
         var check = await RunProgram("check", input);
+
         Assert.Equal(0, check.ExitCode);
         Assert.Empty(check.Output);
         Assert.Empty(check.Error);
+
         var help = await RunProgram("--help");
         Assert.Contains("bond check", help.Output);
         Assert.DoesNotContain("bond parse", help.Output);
+
         Assert.Equal(1, (await RunProgram("parse", input)).ExitCode);
         var oldHelp = await RunProgram("parse", "--help");
         Assert.Equal(1, oldHelp.ExitCode);
         Assert.Contains("unknown command 'parse'", oldHelp.Error);
+
         Assert.Equal(0, (await RunProgram("format", "--help")).ExitCode);
     }
 
@@ -173,8 +185,15 @@ public sealed class CheckCommandTests : IDisposable
             "exec", "--runtimeconfig", Path.ChangeExtension(tests, ".runtimeconfig.json"),
             "--depsfile", Path.ChangeExtension(tests, ".deps.json"), typeof(Program).Assembly.Location
         })
+        {
             start.ArgumentList.Add(argument);
-        foreach (var argument in args) start.ArgumentList.Add(argument);
+        }
+
+        foreach (var argument in args)
+        {
+            start.ArgumentList.Add(argument);
+        }
+
         using var process = Process.Start(start) ?? throw new InvalidOperationException("Could not start the CLI.");
         var output = process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken);
         var error = process.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken);

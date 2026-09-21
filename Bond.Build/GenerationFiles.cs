@@ -18,7 +18,10 @@ internal static class BuildFiles
     internal static string FullPath(string path, string? baseDirectory = null)
     {
         if (string.IsNullOrWhiteSpace(path) || path.Any(char.IsControl))
+        {
             throw new InvalidDataException("Bond paths must be nonempty and cannot contain control characters.");
+        }
+
         return baseDirectory == null ? Path.GetFullPath(path) : Path.GetFullPath(path, baseDirectory);
     }
 
@@ -30,10 +33,16 @@ internal static class BuildFiles
     internal static string OutputPath(string root, string relative)
     {
         if (!IsRelativeChild(relative))
+        {
             throw new InvalidDataException("A Bond output path escapes its intermediate directory.");
+        }
+
         var path = FullPath(relative, root);
         if (!IsRelativeChild(Path.GetRelativePath(root, path)))
+        {
             throw new InvalidDataException("A Bond output path escapes its intermediate directory.");
+        }
+
         return path;
     }
 
@@ -45,9 +54,18 @@ internal static class BuildFiles
 
     internal static async Task<byte[]?> ReadIfPresentAsync(string path, CancellationToken cancellationToken)
     {
-        try { return await File.ReadAllBytesAsync(path, cancellationToken); }
-        catch (FileNotFoundException) { return null; }
-        catch (DirectoryNotFoundException) { return null; }
+        try
+        {
+            return await File.ReadAllBytesAsync(path, cancellationToken);
+        }
+        catch (FileNotFoundException)
+        {
+            return null;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return null;
+        }
     }
 
     internal static string Text(byte[] bytes)
@@ -63,25 +81,44 @@ internal static class BuildFiles
         while (current != null)
         {
             FileAttributes? attributes = null;
-            try { attributes = File.GetAttributes(current); }
-            catch (FileNotFoundException) { }
-            catch (DirectoryNotFoundException) { }
+            try
+            {
+                attributes = File.GetAttributes(current);
+            }
+            catch (FileNotFoundException)
+            {
+            }
+            catch (DirectoryNotFoundException)
+            {
+            }
+
             if (attributes is { } existing)
             {
                 if ((existing & FileAttributes.ReparsePoint) != 0)
+                {
                     throw new IOException($"Bond output paths cannot be symbolic links: {current}");
+                }
+
                 if (((existing & FileAttributes.Directory) != 0) != directory)
+                {
                     throw new IOException($"Bond output path has the wrong file/directory kind: {current}");
+                }
             }
+
             var parent = Path.GetDirectoryName(current);
             if (parent != null && Directory.Exists(parent))
             {
                 var name = Path.GetFileName(current);
                 foreach (var entry in Directory.EnumerateFileSystemEntries(parent))
+                {
                     if (string.Equals(Path.GetFileName(entry), name, StringComparison.OrdinalIgnoreCase)
                         && !string.Equals(Path.GetFileName(entry), name, StringComparison.Ordinal))
+                    {
                         throw new IOException($"Bond output path collides with an existing entry (case-insensitive): {current}");
+                    }
+                }
             }
+
             current = parent;
             directory = true;
         }
@@ -92,12 +129,18 @@ internal static class BuildFiles
         EnsureSafePath(path, directory: false);
         var bytes = await ReadIfPresentAsync(path, cancellationToken);
         if (bytes == null)
+        {
             return null;
+        }
+
         var text = Text(bytes);
         if (text != CSharpGenerator.GeneratedHeader
             && !text.StartsWith(CSharpGenerator.GeneratedHeader + "\n", StringComparison.Ordinal)
             && !text.StartsWith(CSharpGenerator.GeneratedHeader + "\r\n", StringComparison.Ordinal))
+        {
             throw new IOException($"Refusing to overwrite or remove a non-generated file: {path}");
+        }
+
         return bytes;
     }
 
@@ -106,7 +149,10 @@ internal static class BuildFiles
         EnsureSafePath(path, directory: false);
         var existing = await ReadIfPresentAsync(path, cancellationToken);
         if (existing != null && existing.AsSpan().SequenceEqual(bytes))
+        {
             return;
+        }
+
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var temporary = path + "." + Guid.NewGuid().ToString("N") + ".new";
         try
@@ -117,6 +163,7 @@ internal static class BuildFiles
                 await stream.WriteAsync(bytes, cancellationToken);
                 await stream.FlushAsync(cancellationToken);
             }
+
             EnsureSafePath(path, directory: false);
             File.Move(temporary, path, overwrite: true);
         }

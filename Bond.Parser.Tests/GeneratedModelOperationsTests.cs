@@ -361,12 +361,14 @@ public sealed class GeneratedModelOperationsTests
             struct Container { 0: ExternalValue value; 1: vector<ExternalValue> values; }
             """);
         Assert.True(parsed.Success);
+
         var generated = CSharpGenerator.Generate(parsed.Ast!, "operations.bond", new CSharpGenerationOptions
         {
             ModelFeatures = CSharpModelFeatures.All,
             TypeMappings = ["Models.ExternalValue=global::External"]
         });
         Assert.True(generated.Success, string.Join("\n", generated.Errors.Select(error => error.Message)));
+
         Run(generated.Code!, """
             var source = new Models.Container { value = new External { Number = 8 } };
             source.values.Add(source.value);
@@ -420,6 +422,7 @@ public sealed class GeneratedModelOperationsTests
                 }
             }
             """ + extraSource;
+
         var assembly = CSharpGeneratorTests.Compile(generated, checks);
         try
         {

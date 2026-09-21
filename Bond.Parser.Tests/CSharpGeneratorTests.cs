@@ -50,6 +50,7 @@ public sealed class CSharpGeneratorTests
         var expected = Write(reference, referenceValue, protocol, (ushort)version, framed);
         var actual = Write(generated, generatedValue, protocol, (ushort)version, framed);
         Assert.Equal(expected, actual);
+
         var fromReference = Read(generated, expected, protocol, (ushort)version, framed);
         var fromGenerated = Read(reference, actual, protocol, (ushort)version, framed);
         Assert.Equal(expected, Write(generated, fromReference, protocol, (ushort)version, framed));
@@ -89,6 +90,7 @@ public sealed class CSharpGeneratorTests
         Assert.Null(((ArraySegment<byte>)type.GetProperty("bytes")!.GetValue(value)!).Array);
         var schema = SchemaJson(type);
         Assert.Contains("\"nothing\":true", schema);
+
         var data = Write(type, value, "compact", 2, false);
         Assert.Equal(data, Write(type, Read(type, data, "compact", 2, false), "compact", 2, false));
         Assert.Throws<ArgumentException>(() => Write(type, value, "simple", 2, false));
@@ -303,6 +305,7 @@ public sealed class CSharpGeneratorTests
     {
         var parsed = await ParserFacade.ParseStringAsync(schema);
         Assert.True(parsed.Success, string.Join("\n", parsed.Errors.Select(error => error.Message)));
+
         var result = CSharpGenerator.Generate(parsed.Ast!, "input.bond",
             new CSharpGenerationOptions { ModelFeatures = CSharpModelFeatures.All });
         Assert.True(result.Success, string.Join("\n", result.Errors.Select(error => error.Message)));
@@ -318,14 +321,17 @@ public sealed class CSharpGeneratorTests
                 typeof(SimpleJsonWriter).Assembly.Location,
                 typeof(global::BondTools.Models.SchemaDescriptor).Assembly.Location
             ]).Distinct(StringComparer.Ordinal);
+
         var compilation = CSharpCompilation.Create(
             "GeneratedContracts_" + Guid.NewGuid().ToString("N"),
             sources.Select((source, index) => CSharpSyntaxTree.ParseText(source, path: $"generated_{index}.cs")),
             paths.Select(path => MetadataReference.CreateFromFile(path)),
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+
         using var output = new MemoryStream();
         var result = compilation.Emit(output);
         Assert.True(result.Success, string.Join("\n", result.Diagnostics));
+
         // Bond resolves alias converters by assembly-qualified name in the default context.
         output.Position = 0;
         return AssemblyLoadContext.Default.LoadFromStream(output);
@@ -342,6 +348,7 @@ public sealed class CSharpGeneratorTests
                 "[Bond.Id(13)] public Bond.IBonded<Detail> deferred { get; set; } = Bond.Bonded<Detail>.Empty;",
                 "", StringComparison.Ordinal);
         }
+
         var assembly = Compile(await Generate(schema), reference);
         return (assembly.GetType("GeneratedContracts.Product", true)!, assembly.GetType("ReferenceContracts.Product", true)!);
     }
@@ -376,17 +383,29 @@ public sealed class CSharpGeneratorTests
         {
             case "compact":
                 var compact = new CompactBinaryWriter<OutputBuffer>(output, version);
-                if (framed) compact.WriteVersion();
+                if (framed)
+                {
+                    compact.WriteVersion();
+                }
+
                 new global::Bond.Serializer<CompactBinaryWriter<OutputBuffer>>(type).Serialize(value, compact);
                 break;
             case "fast":
                 var fast = new FastBinaryWriter<OutputBuffer>(output);
-                if (framed) fast.WriteVersion();
+                if (framed)
+                {
+                    fast.WriteVersion();
+                }
+
                 new global::Bond.Serializer<FastBinaryWriter<OutputBuffer>>(type).Serialize(value, fast);
                 break;
             case "simple":
                 var simple = new SimpleBinaryWriter<OutputBuffer>(output, version);
-                if (framed) simple.WriteVersion();
+                if (framed)
+                {
+                    simple.WriteVersion();
+                }
+
                 new global::Bond.Serializer<SimpleBinaryWriter<OutputBuffer>>(type).Serialize(value, simple);
                 break;
             case "json":
@@ -409,6 +428,7 @@ public sealed class CSharpGeneratorTests
             default:
                 throw new ArgumentOutOfRangeException(nameof(protocol));
         }
+
         return output.Data.ToArray();
     }
 
@@ -420,6 +440,7 @@ public sealed class CSharpGeneratorTests
             input.ReadUInt16();
             Assert.Equal(version, input.ReadUInt16());
         }
+
         return protocol switch
         {
             "compact" => new global::Bond.Deserializer<CompactBinaryReader<InputBuffer>>(type)

@@ -9,10 +9,13 @@ public sealed class ModelDebugField(string declaringType, string name, ushort id
 {
     /// <summary>The declaring schema type, disambiguating inherited hidden fields.</summary>
     public string DeclaringType { get; } = declaringType;
+
     /// <summary>The schema field name.</summary>
     public string Name { get; } = name;
+
     /// <summary>The wire field identifier.</summary>
     public ushort Id { get; } = id;
+
     /// <summary>The immediate value, without enumerating, formatting, cloning, or deserializing it.</summary>
     [DebuggerBrowsable(DebuggerBrowsableState.Collapsed)]
     public object? Value { get; } = value;

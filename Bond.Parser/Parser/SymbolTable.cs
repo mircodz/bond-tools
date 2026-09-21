@@ -16,7 +16,7 @@ public class SymbolTable
     private readonly List<Declaration> _boundDeclarations = [];
     private readonly HashSet<string> _processedImports = [];
     private readonly Dictionary<Declaration, (IReadOnlyList<AliasDeclaration> Aliases, string? File)> _contexts =
-        new(System.Collections.Generic.ReferenceEqualityComparer.Instance);
+        new(ReferenceEqualityComparer.Instance);
 
     internal IEnumerable<Declaration> Declarations => _globalDeclarations.Concat(_aliases).Concat(_forwards);
     internal IEnumerable<Declaration> BoundDeclarations => _boundDeclarations;
@@ -25,9 +25,14 @@ public class SymbolTable
     {
         _contexts[declaration] = (aliases, filePath);
         if (declaration is AliasDeclaration alias)
+        {
             _aliases.Add(alias);
+        }
+
         if (declaration is ForwardDeclaration forward)
+        {
             _forwards.Add(forward);
+        }
     }
 
     internal IReadOnlyList<AliasDeclaration>? GetAliases(Declaration declaration) =>
@@ -40,7 +45,9 @@ public class SymbolTable
     {
         _boundDeclarations.Add(resolved);
         if (_contexts.TryGetValue(original, out var context))
+        {
             _contexts[resolved] = context;
+        }
     }
 
     /// <summary>
@@ -66,9 +73,13 @@ public class SymbolTable
         if (duplicates.Count > 0)
         {
             if (declaration is not StructDeclaration || duplicates.Any(d => d is StructDeclaration))
+            {
                 return;
+            }
+
             _globalDeclarations.RemoveAll(duplicates.Contains);
         }
+
         _globalDeclarations.Add(declaration);
     }
 
@@ -76,7 +87,10 @@ public class SymbolTable
     public Declaration? FindSymbol(string[] qualifiedName, Namespace[] currentNamespaces, IReadOnlyList<AliasDeclaration> aliases)
     {
         var alias = FindAlias(qualifiedName, currentNamespaces, aliases);
-        if (alias != null) return alias;
+        if (alias != null)
+        {
+            return alias;
+        }
 
         if (qualifiedName.Length == 1)
         {
@@ -119,51 +133,77 @@ public class SymbolTable
     private static bool TryReconcile(Declaration existing, Declaration newDeclaration)
     {
         if (existing is ForwardDeclaration forward && newDeclaration is StructDeclaration structure)
+        {
             return structure.IsView || ParametersMatch(forward.TypeParameters, newDeclaration.TypeParameters);
+        }
 
         if (existing is StructDeclaration structure2 && newDeclaration is ForwardDeclaration forward2)
+        {
             return structure2.IsView || ParametersMatch(existing.TypeParameters, forward2.TypeParameters);
+        }
 
         if (existing is ForwardDeclaration && newDeclaration is ForwardDeclaration)
+        {
             return ParametersMatch(existing.TypeParameters, newDeclaration.TypeParameters);
+        }
 
         return EquivalentDeclarations(existing, newDeclaration);
     }
 
     internal static bool ParametersMatch(TypeParam[] a, TypeParam[] b)
     {
-        if (a.Length != b.Length) return false;
+        if (a.Length != b.Length)
+        {
+            return false;
+        }
+
         for (int i = 0; i < a.Length; i++)
         {
-            if (a[i].Constraint != b[i].Constraint) return false;
+            if (a[i].Constraint != b[i].Constraint)
+            {
+                return false;
+            }
         }
+
         return true;
     }
 
     internal static bool EquivalentDeclarations(Declaration left, Declaration right)
     {
-        if (left.Name != right.Name || !left.TypeParameters.SequenceEqual(right.TypeParameters)
+        if (left.Name != right.Name
+            || !left.TypeParameters.SequenceEqual(right.TypeParameters)
             || left.Namespaces.Length != right.Namespaces.Length
             || !left.Namespaces.Zip(right.Namespaces).All(pair =>
-                pair.First.LanguageQualifier == pair.Second.LanguageQualifier && pair.First.Name.SequenceEqual(pair.Second.Name)))
+                pair.First.LanguageQualifier == pair.Second.LanguageQualifier
+                && pair.First.Name.SequenceEqual(pair.Second.Name)))
+        {
             return false;
+        }
 
         return (left, right) switch
         {
             (StructDeclaration a, StructDeclaration b) =>
-                a.IsView == b.IsView && (a.ViewTarget ?? []).SequenceEqual(b.ViewTarget ?? [])
-                && a.ViewFields.SequenceEqual(b.ViewFields) && a.BaseType == b.BaseType
+                a.IsView == b.IsView
+                && (a.ViewTarget ?? []).SequenceEqual(b.ViewTarget ?? [])
+                && a.ViewFields.SequenceEqual(b.ViewFields)
+                && a.BaseType == b.BaseType
                 && AttributesMatch(a.Attributes, b.Attributes)
-                && a.Fields.Length == b.Fields.Length && a.Fields.Zip(b.Fields).All(pair =>
-                    pair.First.Name == pair.Second.Name && pair.First.Ordinal == pair.Second.Ordinal
-                    && pair.First.Modifier == pair.Second.Modifier && pair.First.Type == pair.Second.Type
+                && a.Fields.Length == b.Fields.Length
+                && a.Fields.Zip(b.Fields).All(pair =>
+                    pair.First.Name == pair.Second.Name
+                    && pair.First.Ordinal == pair.Second.Ordinal
+                    && pair.First.Modifier == pair.Second.Modifier
+                    && pair.First.Type == pair.Second.Type
                     && pair.First.DefaultValue == pair.Second.DefaultValue
                     && AttributesMatch(pair.First.Attributes, pair.Second.Attributes)),
-            (EnumDeclaration a, EnumDeclaration b) => AttributesMatch(a.Attributes, b.Attributes)
+            (EnumDeclaration a, EnumDeclaration b) =>
+                AttributesMatch(a.Attributes, b.Attributes)
                 && a.Constants.Select(c => (c.Name, c.Value)).SequenceEqual(b.Constants.Select(c => (c.Name, c.Value))),
             (AliasDeclaration a, AliasDeclaration b) => a.AliasedType == b.AliasedType,
-            (ServiceDeclaration a, ServiceDeclaration b) => a.BaseType == b.BaseType
-                && AttributesMatch(a.Attributes, b.Attributes) && a.Methods.Length == b.Methods.Length
+            (ServiceDeclaration a, ServiceDeclaration b) =>
+                a.BaseType == b.BaseType
+                && AttributesMatch(a.Attributes, b.Attributes)
+                && a.Methods.Length == b.Methods.Length
                 && a.Methods.Zip(b.Methods).All(pair => MethodsMatch(pair.First, pair.Second)),
             (ForwardDeclaration, ForwardDeclaration) => true,
             _ => false
@@ -174,11 +214,18 @@ public class SymbolTable
         left.Length == right.Length && left.Zip(right).All(pair =>
             pair.First.Value == pair.Second.Value && pair.First.QualifiedName.SequenceEqual(pair.Second.QualifiedName));
 
-    private static bool MethodsMatch(Method left, Method right) =>
-        left.Name == right.Name && AttributesMatch(left.Attributes, right.Attributes) && ((left, right) switch
+    private static bool MethodsMatch(Method left, Method right)
+    {
+        if (left.Name != right.Name || !AttributesMatch(left.Attributes, right.Attributes))
+        {
+            return false;
+        }
+
+        return (left, right) switch
         {
             (FunctionMethod a, FunctionMethod b) => a.InputType == b.InputType && a.ResultType == b.ResultType,
             (EventMethod a, EventMethod b) => a.InputType == b.InputType,
             _ => false
-        });
+        };
+    }
 }

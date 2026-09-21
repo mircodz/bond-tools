@@ -26,6 +26,7 @@ public sealed class GeneratedSummaryTests
         var value = New(assembly, "Example.Order");
         Set(value, "id", 42);
         Set(value, "status", Enum.Parse(assembly.GetType("Example.State", true)!, "Submitted"));
+
         Assert.Equal("Order { id = 42, status = Submitted }", value.ToString());
         Assert.IsAssignableFrom<IGeneratedSummary>(value);
         Assert.False(value is IGeneratedCloneable or IGeneratedEquatable or IGeneratedSchemaProvider or IGeneratedDebugView);
@@ -55,6 +56,7 @@ public sealed class GeneratedSummaryTests
         ((IDictionary)value.GetType().GetProperty("scores")!.GetValue(value)!).Add("a", 9);
         Set(value, "bytes", new ArraySegment<byte>([1, 2, 255]));
         Set(value, "text", "line\n\"quoted\"\\tail");
+
         var text = value.ToString()!;
         Assert.Contains("child = Child { name = \"Ada\" }", text);
         Assert.Contains("numbers = [7]", text);
@@ -81,6 +83,7 @@ public sealed class GeneratedSummaryTests
         var root = New(assembly, "Example.Node");
         Set(root, "next", root);
         Assert.Contains("cycle", root.ToString()!, StringComparison.OrdinalIgnoreCase);
+
         Set(root, "next", null);
         var child = New(assembly, "Example.Node");
         Set(child, "text", "shared");
@@ -88,8 +91,12 @@ public sealed class GeneratedSummaryTests
         children.Add(child);
         children.Add(child);
         Assert.DoesNotContain("cycle", root.ToString()!, StringComparison.OrdinalIgnoreCase);
+
         for (var index = 0; index < 100; index++)
+        {
             children.Add(child);
+        }
+
         Set(root, "text", new string('x', 10000));
         var summary = root.ToString()!;
         Assert.True(summary.Length <= 2048);
@@ -104,6 +111,7 @@ public sealed class GeneratedSummaryTests
             Set(current, "next", next);
             current = next;
         }
+
         Assert.True(root.ToString()!.Length <= 2048);
     }
 
@@ -139,6 +147,7 @@ public sealed class GeneratedSummaryTests
         var bonded = New(assembly, "CountingBonded");
         Set(value, "first", bonded);
         ((IList)value.GetType().GetProperty("values")!.GetValue(value)!).Add(bonded);
+
         Assert.NotEmpty(value.ToString()!);
         Assert.Equal(0, bonded.GetType().GetField("Calls")!.GetValue(null));
 
@@ -176,6 +185,7 @@ public sealed class GeneratedSummaryTests
         Assert.Equal(ModelSummary.Format(awkward), companion.GetMethod("ToString", [awkward.GetType()])!
             .Invoke(null, [awkward]));
         Assert.Contains("ToString { id = 0 }", ModelSummary.Format(New(assembly, "Example.ToString")));
+
         var generic = Activator.CreateInstance(assembly.GetType("Example.Generic`1", true)!.MakeGenericType(typeof(int)))!;
         Set(generic, "value", 8);
         Assert.Contains("value = 8", ModelSummary.Format(generic));
@@ -191,6 +201,7 @@ public sealed class GeneratedSummaryTests
             var assembly = await Compile("namespace Example struct Numbers { 0: double value = 1.25; }");
             var value = New(assembly, "Example.Numbers");
             Assert.Equal("Numbers { value = 1.25 }", value.ToString());
+
             Set(value, "value", double.NaN);
             Assert.Equal("Numbers { value = NaN }", value.ToString());
         }
@@ -208,6 +219,7 @@ public sealed class GeneratedSummaryTests
         Assert.Equal(16, values.Moves);
         Assert.True(values.Disposed);
         Assert.Contains("...", summary);
+
         var text = ModelSummary.Format(Enumerable.Repeat(new string('x', 160), 100).ToArray());
         Assert.True(text.Length <= 2048);
         Assert.EndsWith("...", text);
@@ -217,10 +229,19 @@ public sealed class GeneratedSummaryTests
     {
         public int Moves { get; private set; }
         public bool Disposed { get; private set; }
+
         public object Current => Moves;
+
         public IEnumerator GetEnumerator() => this;
-        public bool MoveNext() { Moves++; return true; }
+
+        public bool MoveNext()
+        {
+            Moves++;
+            return true;
+        }
+
         public void Reset() => throw new NotSupportedException();
+
         public void Dispose() => Disposed = true;
     }
 
@@ -228,11 +249,13 @@ public sealed class GeneratedSummaryTests
     {
         var parsed = await ParserFacade.ParseStringAsync(schema);
         Assert.True(parsed.Success, string.Join("\n", parsed.Errors.Select(error => error.Message)));
+
         var result = CSharpGenerator.Generate(parsed.Ast!, "summary.bond",
             new CSharpGenerationOptions { ModelFeatures = CSharpModelFeatures.StringRepresentation });
         Assert.True(result.Success, string.Join("\n", result.Errors.Select(error => error.Message)));
         Assert.DoesNotContain("IModelAdapter", result.Code!);
         Assert.DoesNotContain("SchemaDescriptor", result.Code!);
+
         return CSharpGeneratorTests.Compile(result.Code!, extra);
     }
 

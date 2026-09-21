@@ -37,31 +37,59 @@ internal static class SchemaContractValidation
     internal static SchemaContract Normalize(SchemaContract document)
     {
         ValidateContract(document);
+
+        var declarations = document.Declarations
+            .OrderBy(declaration => declaration.Name, StringComparer.Ordinal)
+            .Select(NormalizeDeclaration);
+
         return document with
         {
-            Declarations = ReadOnly(document.Declarations.OrderBy(d => d.Name, StringComparer.Ordinal).Select(d => d with
-            {
-                Constraints = ReadOnly(d.Constraints),
-                BaseType = d.BaseType is null ? null : Freeze(d.BaseType),
-                Fields = ReadOnly(d.Fields.OrderBy(f => f.Ordinal).Select(f => f with
-                {
-                    Type = Freeze(f.Type), Default = CanonicalDefault(f.Default)
-                })),
-                Constants = ReadOnly(d.Constants.OrderBy(c => c.Name, StringComparer.Ordinal)),
-                Methods = ReadOnly(d.Methods.OrderBy(m => m.Name, StringComparer.Ordinal).Select(m => m with
-                {
-                    Input = Freeze(m.Input), Result = Freeze(m.Result)
-                }))
-            }))
+            Declarations = ReadOnly(declarations)
         };
     }
 
-    private static TypeShape Freeze(TypeShape type) => type with { Arguments = ReadOnly(type.Arguments.Select(Freeze)) };
+    private static ContractDeclaration NormalizeDeclaration(ContractDeclaration declaration)
+    {
+        var fields = declaration.Fields
+            .OrderBy(field => field.Ordinal)
+            .Select(field => field with
+            {
+                Type = Freeze(field.Type),
+                Default = CanonicalDefault(field.Default)
+            });
+        var methods = declaration.Methods
+            .OrderBy(method => method.Name, StringComparer.Ordinal)
+            .Select(method => method with
+            {
+                Input = Freeze(method.Input),
+                Result = Freeze(method.Result)
+            });
+
+        return declaration with
+        {
+            Constraints = ReadOnly(declaration.Constraints),
+            BaseType = declaration.BaseType is null ? null : Freeze(declaration.BaseType),
+            Fields = ReadOnly(fields),
+            Constants = ReadOnly(declaration.Constants.OrderBy(constant => constant.Name, StringComparer.Ordinal)),
+            Methods = ReadOnly(methods)
+        };
+    }
+
+    private static TypeShape Freeze(TypeShape type) => type with
+    {
+        Arguments = ReadOnly(type.Arguments.Select(Freeze))
+    };
 
     private static ContractDefault CanonicalDefault(ContractDefault value) => value.Kind switch
     {
-        "integer" => value with { Value = BigInteger.Parse(value.Value, CultureInfo.InvariantCulture).ToString(CultureInfo.InvariantCulture) },
-        "float" => value with { Value = double.Parse(value.Value, CultureInfo.InvariantCulture).ToString("R", CultureInfo.InvariantCulture) },
+        "integer" => value with
+        {
+            Value = BigInteger.Parse(value.Value, CultureInfo.InvariantCulture).ToString(CultureInfo.InvariantCulture)
+        },
+        "float" => value with
+        {
+            Value = double.Parse(value.Value, CultureInfo.InvariantCulture).ToString("R", CultureInfo.InvariantCulture)
+        },
         _ => value
     };
 
@@ -72,66 +100,86 @@ internal static class SchemaContractValidation
         foreach (var declaration in document.Declarations!)
         {
             Require(declaration is not null && ValidName(declaration.Name), "Invalid declaration name.");
-            var d = declaration!;
-            if (!declarations.TryAdd(d.Name, d))
-                throw Invalid($"Duplicate declaration '{d.Name}'.", d.Name, DiagnosticIds.DuplicateDeclaration);
-            Require(d.Kind is "struct" or "forward" or "enum" or "service", $"Invalid declaration kind '{d.Kind}'.", d.Name);
-            Require(d.Constraints is not null && d.Constraints.All(c => c is "none" or "value"),
-                "Invalid generic constraints.", d.Name);
-            Require(d.Fields is not null && d.Constants is not null && d.Methods is not null, "Missing declaration members.", d.Name);
-            Require(d.Kind == "struct" || d.Fields!.Count == 0, "Only structs can have fields.", d.Name);
-            Require(d.Kind == "enum" || d.Constants!.Count == 0, "Only enums can have constants.", d.Name);
-            Require(d.Kind != "enum" || d.Constraints.Count == 0, "Enums cannot have generic parameters.", d.Name);
-            Require(d.Kind == "service" || d.Methods!.Count == 0, "Only services can have methods.", d.Name);
-            Require(d.Kind is "struct" or "service" || d.BaseType is null, "Invalid base type.", d.Name);
+            if (!declarations.TryAdd(declaration.Name, declaration))
+            {
+                throw Invalid($"Duplicate declaration '{declaration.Name}'.", declaration.Name, DiagnosticIds.DuplicateDeclaration);
+            }
+
+            Require(declaration.Kind is "struct" or "forward" or "enum" or "service",
+                $"Invalid declaration kind '{declaration.Kind}'.", declaration.Name);
+            Require(declaration.Constraints is not null && declaration.Constraints.All(constraint => constraint is "none" or "value"),
+                "Invalid generic constraints.", declaration.Name);
+            Require(declaration.Fields is not null && declaration.Constants is not null && declaration.Methods is not null,
+                "Missing declaration members.", declaration.Name);
+            Require(declaration.Kind == "struct" || declaration.Fields.Count == 0, "Only structs can have fields.", declaration.Name);
+            Require(declaration.Kind == "enum" || declaration.Constants.Count == 0, "Only enums can have constants.", declaration.Name);
+            Require(declaration.Kind != "enum" || declaration.Constraints.Count == 0, "Enums cannot have generic parameters.", declaration.Name);
+            Require(declaration.Kind == "service" || declaration.Methods.Count == 0, "Only services can have methods.", declaration.Name);
+            Require(declaration.Kind is "struct" or "service" || declaration.BaseType is null, "Invalid base type.", declaration.Name);
+
             var ordinals = new HashSet<int>();
             var names = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var field in d.Fields!)
+            foreach (var field in declaration.Fields)
             {
-                Require(field is not null && ValidName(field.Name, qualified: false), "Invalid field name.", d.Name);
-                var f = field!;
-                Require(f.Ordinal >= 0 && f.Ordinal <= ushort.MaxValue && f.JsonName is not null, "Invalid field ordinal or JSON name.", d.Name);
-                if (!ordinals.Add(f.Ordinal) || !names.Add(f.Name))
-                    throw Invalid($"Duplicate field ordinal or name '{f.Ordinal}: {f.Name}'.", d.Name, DiagnosticIds.DuplicateField);
-                Require(f.Modifier is "optional" or "required" or "required_optional", "Invalid field modifier.", d.Name);
-                ValidateDefault(f.Default, d.Name + "." + f.Name);
+                Require(field is not null && ValidName(field.Name, qualified: false), "Invalid field name.", declaration.Name);
+                Require(field.Ordinal >= 0 && field.Ordinal <= ushort.MaxValue && field.JsonName is not null,
+                    "Invalid field ordinal or JSON name.", declaration.Name);
+                if (!ordinals.Add(field.Ordinal) || !names.Add(field.Name))
+                {
+                    throw Invalid($"Duplicate field ordinal or name '{field.Ordinal}: {field.Name}'.", declaration.Name, DiagnosticIds.DuplicateField);
+                }
+
+                Require(field.Modifier is "optional" or "required" or "required_optional", "Invalid field modifier.", declaration.Name);
+                ValidateDefault(field.Default, declaration.Name + "." + field.Name);
             }
+
             names.Clear();
-            foreach (var constant in d.Constants!)
+            foreach (var constant in declaration.Constants)
             {
-                Require(constant is not null && ValidName(constant.Name, qualified: false), "Invalid enum member.", d.Name);
-                if (!names.Add(constant!.Name))
-                    throw Invalid($"Duplicate enum member '{constant.Name}'.", d.Name, DiagnosticIds.DuplicateEnumMember);
+                Require(constant is not null && ValidName(constant.Name, qualified: false), "Invalid enum member.", declaration.Name);
+                if (!names.Add(constant.Name))
+                {
+                    throw Invalid($"Duplicate enum member '{constant.Name}'.", declaration.Name, DiagnosticIds.DuplicateEnumMember);
+                }
             }
+
             names.Clear();
-            foreach (var method in d.Methods!)
+            foreach (var method in declaration.Methods)
             {
-                Require(method is not null && ValidName(method.Name, qualified: false), "Invalid method name.", d.Name);
-                if (!names.Add(method!.Name))
-                    throw Invalid($"Duplicate method '{method.Name}'.", d.Name, DiagnosticIds.DuplicateMethod);
-                Require(method.Kind is "function" or "event", "Invalid method kind.", d.Name);
+                Require(method is not null && ValidName(method.Name, qualified: false), "Invalid method name.", declaration.Name);
+                if (!names.Add(method.Name))
+                {
+                    throw Invalid($"Duplicate method '{method.Name}'.", declaration.Name, DiagnosticIds.DuplicateMethod);
+                }
+
+                Require(method.Kind is "function" or "event", "Invalid method kind.", declaration.Name);
             }
         }
-        foreach (var d in declarations.Values)
+
+        foreach (var declaration in declarations.Values)
         {
-            if (d.BaseType is not null)
+            if (declaration.BaseType is not null)
             {
-                ValidateType(d.BaseType, d, document, declarations);
-                Require(d.BaseType.Kind == (d.Kind == "service" ? "service" : "struct")
-                    || document.AllowsUnresolvedTypes && d.BaseType.Kind == "unresolved", "Invalid inheritance type.", d.Name);
+                ValidateType(declaration.BaseType, declaration, document, declarations);
+                Require(declaration.BaseType.Kind == (declaration.Kind == "service" ? "service" : "struct")
+                    || document.AllowsUnresolvedTypes && declaration.BaseType.Kind == "unresolved", "Invalid inheritance type.", declaration.Name);
             }
-            foreach (var f in d.Fields)
+
+            foreach (var field in declaration.Fields)
             {
-                ValidateType(f.Type, d, document, declarations);
-                Require(f.Type.Kind is not ("integer" or "void" or "stream" or "service"), "Invalid field type.", d.Name + "." + f.Name);
-                ValidateFieldDefault(f, d.Name + "." + f.Name);
+                ValidateType(field.Type, declaration, document, declarations);
+                Require(field.Type.Kind is not ("integer" or "void" or "stream" or "service"),
+                    "Invalid field type.", declaration.Name + "." + field.Name);
+                ValidateFieldDefault(field, declaration.Name + "." + field.Name);
             }
-            foreach (var m in d.Methods)
+
+            foreach (var method in declaration.Methods)
             {
-                ValidateType(m.Input, d, document, declarations);
-                ValidateType(m.Result, d, document, declarations);
+                ValidateType(method.Input, declaration, document, declarations);
+                ValidateType(method.Result, declaration, document, declarations);
             }
         }
+
         ValidateInheritance(declarations);
     }
 
@@ -139,32 +187,41 @@ internal static class SchemaContractValidation
         Dictionary<string, ContractDeclaration> declarations, int depth = 0)
     {
         Require(type is not null && depth < 64 && type.Arguments is not null, "Invalid or excessively nested type expression.", owner.Name);
-        var t = type!;
-        var count = t.Arguments.Count;
-        if (t.Kind is "struct" or "enum" or "service" or "unresolved")
+
+        var argumentCount = type.Arguments.Count;
+        if (type.Kind is "struct" or "enum" or "service" or "unresolved")
         {
-            Require(ValidName(t.Name) && t.Integer is null, "Invalid named type.", owner.Name);
-            if (t.Kind == "unresolved")
-                Require(document.AllowsUnresolvedTypes, $"Unresolved type '{t.Name}'.", owner.Name, DiagnosticIds.UnresolvedType);
-            else if (declarations.TryGetValue(t.Name!, out var target))
+            Require(ValidName(type.Name) && type.Integer is null, "Invalid named type.", owner.Name);
+            if (type.Kind == "unresolved")
             {
-                Require(t.Kind == (target.Kind == "forward" ? "struct" : target.Kind), $"Type kind does not match '{t.Name}'.", owner.Name);
-                Require(count == target.Constraints.Count, $"Type '{t.Name}' has the wrong number of generic arguments.", owner.Name);
+                Require(document.AllowsUnresolvedTypes, $"Unresolved type '{type.Name}'.", owner.Name, DiagnosticIds.UnresolvedType);
+            }
+            else if (declarations.TryGetValue(type.Name!, out var target))
+            {
+                Require(type.Kind == (target.Kind == "forward" ? "struct" : target.Kind), $"Type kind does not match '{type.Name}'.", owner.Name);
+                Require(argumentCount == target.Constraints.Count, $"Type '{type.Name}' has the wrong number of generic arguments.", owner.Name);
                 if (target.Kind == "forward" && !document.AllowsUnresolvedTypes)
-                    throw Invalid($"No complete definition for '{t.Name}'; its layout cannot be established.", owner.Name, DiagnosticIds.IncompleteDefinition);
+                {
+                    throw Invalid($"No complete definition for '{type.Name}'; its layout cannot be established.", owner.Name, DiagnosticIds.IncompleteDefinition);
+                }
             }
             else
+            {
                 Require(!document.IncludesImports || document.AllowsUnresolvedTypes,
-                    $"Missing definition for type '{t.Name}'.", owner.Name, DiagnosticIds.UnresolvedType);
+                    $"Missing definition for type '{type.Name}'.", owner.Name, DiagnosticIds.UnresolvedType);
+            }
         }
-        else if (t.Kind is "parameter" or "integer")
+        else if (type.Kind is "parameter" or "integer")
         {
-            Require(t.Name is null && t.Integer is not null && count == 0, "Invalid generic argument.", owner.Name);
-            if (t.Kind == "parameter") Require(t.Integer >= 0 && t.Integer < owner.Constraints.Count, "Invalid generic parameter position.", owner.Name);
+            Require(type.Name is null && type.Integer is not null && argumentCount == 0, "Invalid generic argument.", owner.Name);
+            if (type.Kind == "parameter")
+            {
+                Require(type.Integer >= 0 && type.Integer < owner.Constraints.Count, "Invalid generic parameter position.", owner.Name);
+            }
         }
         else
         {
-            var expected = t.Kind switch
+            var expectedArgumentCount = type.Kind switch
             {
                 "map" => 2,
                 "list" or "vector" or "set" or "nullable" or "maybe" or "bonded" or "stream" => 1,
@@ -172,18 +229,33 @@ internal static class SchemaContractValidation
                     or "float" or "double" or "string" or "wstring" or "bool" or "blob" or "meta_name" or "meta_full_name" or "void" => 0,
                 _ => -1
             };
-            Require(expected >= 0 && count == expected && t.Name is null && t.Integer is null, $"Invalid type '{t.Kind}'.", owner.Name);
+            Require(expectedArgumentCount >= 0 && argumentCount == expectedArgumentCount && type.Name is null && type.Integer is null,
+                $"Invalid type '{type.Kind}'.", owner.Name);
         }
-        foreach (var argument in t.Arguments) ValidateType(argument, owner, document, declarations, depth + 1);
-        if (t.Kind is "struct" or "enum" or "service" && declarations.TryGetValue(t.Name!, out var definition))
+
+        foreach (var argument in type.Arguments)
+        {
+            ValidateType(argument, owner, document, declarations, depth + 1);
+        }
+
+        if (type.Kind is "struct" or "enum" or "service" && declarations.TryGetValue(type.Name!, out var definition))
+        {
             for (var i = 0; i < definition.Constraints.Count; i++)
+            {
                 if (definition.Constraints[i] == "value")
-                    Require(IsValueType(t.Arguments[i], owner)
-                            || document.AllowsUnresolvedTypes && t.Arguments[i].Kind == "unresolved",
-                        $"Type argument {i} for '{t.Name}' does not satisfy its value constraint.", owner.Name);
-        if (t.Kind is not ("struct" or "enum" or "service" or "unresolved"))
-            Require(t.Arguments.All(a => a.Kind is not ("integer" or "void" or "service" or "stream")),
+                {
+                    Require(IsValueType(type.Arguments[i], owner)
+                            || document.AllowsUnresolvedTypes && type.Arguments[i].Kind == "unresolved",
+                        $"Type argument {i} for '{type.Name}' does not satisfy its value constraint.", owner.Name);
+                }
+            }
+        }
+
+        if (type.Kind is not ("struct" or "enum" or "service" or "unresolved"))
+        {
+            Require(type.Arguments.All(argument => argument.Kind is not ("integer" or "void" or "service" or "stream")),
                 "Invalid container element type.", owner.Name);
+        }
     }
 
     private static bool IsValueType(TypeShape type, ContractDeclaration owner) => type.Kind is
@@ -201,8 +273,12 @@ internal static class SchemaContractValidation
             while (!complete.Contains(current.Name))
             {
                 Require(active.Add(current.Name), $"Cyclic inheritance involving '{current.Name}'.", current.Name);
-                if (current.BaseType?.Name is not { } name || !declarations.TryGetValue(name, out current!)) break;
+                if (current.BaseType?.Name is not { } name || !declarations.TryGetValue(name, out current!))
+                {
+                    break;
+                }
             }
+
             complete.UnionWith(active);
         }
     }
@@ -211,7 +287,7 @@ internal static class SchemaContractValidation
     {
         var type = field.Type;
         var value = field.Default;
-        var expected = type.Kind switch
+        var expectedKind = type.Kind switch
         {
             "int8" or "int16" or "int32" or "int64" or "uint8" or "uint16" or "uint32" or "uint64" or "enum" => "integer",
             "float" or "double" => "float",
@@ -225,14 +301,17 @@ internal static class SchemaContractValidation
             "unresolved" => value.Kind,
             _ => "empty"
         };
-        Require(value.Kind == expected, $"Default kind '{value.Kind}' does not match type '{type.Kind}'.", location);
+        Require(value.Kind == expectedKind, $"Default kind '{value.Kind}' does not match type '{type.Kind}'.", location);
+
         if (value.Kind == "integer" && type.Kind != "unresolved")
         {
             var number = BigInteger.Parse(value.Value, CultureInfo.InvariantCulture);
             var width = type.Kind switch
             {
-                "int8" or "uint8" => 8, "int16" or "uint16" => 16,
-                "int32" or "uint32" or "enum" => 32, _ => 64
+                "int8" or "uint8" => 8,
+                "int16" or "uint16" => 16,
+                "int32" or "uint32" or "enum" => 32,
+                _ => 64
             };
             var unsigned = type.Kind.StartsWith("uint", StringComparison.Ordinal);
             var maximum = (BigInteger.One << (unsigned ? width : width - 1)) - 1;
@@ -261,8 +340,12 @@ internal static class SchemaContractValidation
             && part.All(c => char.IsLetterOrDigit(c) || c == '_'))
         && (qualified || !name.Contains('.'));
 
-    internal static void Require([DoesNotReturnIf(false)] bool condition, string message, string location = "schema", string id = DiagnosticIds.InvalidSchema)
+    internal static void Require([DoesNotReturnIf(false)] bool condition, string message,
+        string location = "schema", string id = DiagnosticIds.InvalidSchema)
     {
-        if (!condition) throw Invalid(message, location, id);
+        if (!condition)
+        {
+            throw Invalid(message, location, id);
+        }
     }
 }

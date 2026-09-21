@@ -47,7 +47,10 @@ public sealed class CSharpMappingFeatureTests
         Assert.Equal(features.HasFlag(CSharpModelFeatures.Equality),
             type.GetMethod("GetHashCode", Type.EmptyTypes)!.DeclaringType == type);
         if (features == CSharpModelFeatures.None)
+        {
             Assert.DoesNotContain("BondTools.Models", result.Code!);
+        }
+
         var value = Activator.CreateInstance(type)!;
         type.GetProperty("id")!.SetValue(value, 42);
         if (features.HasFlag(CSharpModelFeatures.Cloning))
@@ -294,6 +297,7 @@ public sealed class CSharpMappingFeatureTests
             var output = Path.Combine(root, "generated");
             await File.WriteAllTextAsync(input, "namespace Example struct Item { 0: int32 id; }",
                 TestContext.Current.CancellationToken);
+
             using var standardOutput = new StringWriter();
             using var standardError = new StringWriter();
             var exitCode = await GenerateCommand.RunAsync(
@@ -301,6 +305,7 @@ public sealed class CSharpMappingFeatureTests
                 standardOutput, standardError, TestContext.Current.CancellationToken);
             Assert.Equal(0, exitCode);
             Assert.Equal("", standardError.ToString());
+
             var code = await File.ReadAllTextAsync(Path.Combine(output, "item.g.cs"),
                 TestContext.Current.CancellationToken);
             var assembly = Compile(code);
@@ -335,6 +340,7 @@ public sealed class CSharpMappingFeatureTests
                 TestContext.Current.CancellationToken);
             await File.WriteAllTextAsync(otherInput, "namespace Example struct Other { 0: int32 id; }",
                 TestContext.Current.CancellationToken);
+
             using var standardOutput = new StringWriter();
             using var standardError = new StringWriter();
             var exitCode = await GenerateCommand.RunAsync(
@@ -346,6 +352,7 @@ public sealed class CSharpMappingFeatureTests
                 standardOutput, standardError, TestContext.Current.CancellationToken);
             Assert.Equal(0, exitCode);
             Assert.Empty(standardError.ToString());
+
             var sources = new List<string>();
             foreach (var file in new[] { "item.g.cs", "other.g.cs" })
             {
@@ -355,6 +362,7 @@ public sealed class CSharpMappingFeatureTests
                     code.Split('\n').Where(line => line.StartsWith("using ", StringComparison.Ordinal)));
                 sources.Add(code);
             }
+
             sources.Add("""
                 namespace Application {
                     public static class BondTypeAliasConverter {
@@ -365,6 +373,7 @@ public sealed class CSharpMappingFeatureTests
                     }
                 }
                 """);
+
             var assembly = Compile(sources.ToArray());
             foreach (var name in new[] { "Application.Item", "Application.Other" })
             {
@@ -373,6 +382,7 @@ public sealed class CSharpMappingFeatureTests
                 Assert.True(typeof(ICloneable).IsAssignableFrom(type));
                 Assert.NotNull(type.GetCustomAttribute<DebuggerTypeProxyAttribute>());
             }
+
             var item = assembly.GetType("Application.Item", true)!;
             Assert.Equal(typeof(DateTime), item.GetProperty("created")!.PropertyType);
             Assert.Equal(DateTime.UnixEpoch, item.GetProperty("created")!.GetValue(Activator.CreateInstance(item)));
@@ -401,6 +411,7 @@ public sealed class CSharpMappingFeatureTests
             var output = Path.Combine(root, "generated");
             await File.WriteAllTextAsync(input, "namespace Example struct Item {}",
                 TestContext.Current.CancellationToken);
+
             using var standardOutput = new StringWriter();
             using var standardError = new StringWriter();
             var exitCode = await GenerateCommand.RunAsync(

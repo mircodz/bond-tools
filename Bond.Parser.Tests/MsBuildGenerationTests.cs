@@ -26,8 +26,10 @@ public sealed class MsBuildGenerationTests(MsBuildPackageFixture packages) : ICl
             new XElement("BondNamespaceMapping", new XAttribute("Include", "Demo.Contracts=Demo.Generated")),
             new XElement("BondTypeMapping", new XAttribute("Include", "demo.Timestamp=System.DateTime")),
             new XElement("BondUsing", new XAttribute("Include", "System.Collections.Generic")));
+
         (await project.Build()).AssertSuccess();
         Assert.Equal(2, project.GeneratedFiles().Length);
+
         var run = await project.Run();
         run.AssertSuccess();
         Assert.Contains("demo.OrderCreated", run.Output);
@@ -47,11 +49,13 @@ public sealed class MsBuildGenerationTests(MsBuildPackageFixture packages) : ICl
             System.Console.WriteLine(item);
             """);
         project.Configure(new XElement("Bond", new XAttribute("Include", "item.bond"), new XAttribute("ToString", "true")));
+
         (await project.Build()).AssertSuccess();
         var output = File.ReadAllText(Assert.Single(project.GeneratedFiles()));
         Assert.Contains("override string ToString()", output);
         Assert.DoesNotContain("SchemaDescriptor", output);
         Assert.DoesNotContain("IModelAdapter", output);
+
         var run = await project.Run();
         run.AssertSuccess();
         Assert.Contains("Item { id = 42 }", run.Output);
@@ -106,6 +110,7 @@ public sealed class MsBuildGenerationTests(MsBuildPackageFixture packages) : ICl
         Assert.Equal("An item <with> documentation & details.",
             documentation.Descendants("member").Single(member => (string?)member.Attribute("name") == "T:Application.Item")
                 .Element("summary")!.Value.Trim());
+
         var run = await project.Run();
         run.AssertSuccess();
         Assert.Contains("consumer succeeded", run.Output);
@@ -137,6 +142,7 @@ public sealed class MsBuildGenerationTests(MsBuildPackageFixture packages) : ICl
         project.Configure(
             new XElement("Bond", new XAttribute("Include", "Schemas/root.bond")),
             new XElement("BondImportDirectory", new XAttribute("Include", "Imports")));
+
         (await project.Build()).AssertSuccess();
         var generated = Assert.Single(project.GeneratedFiles());
         Assert.Contains("public int value", File.ReadAllText(generated));
@@ -149,6 +155,7 @@ public sealed class MsBuildGenerationTests(MsBuildPackageFixture packages) : ICl
         project.Write("Schemas/wrapper.bond", "namespace Contracts using Value = string;");
         (await project.Build()).AssertSuccess();
         Assert.Contains("public string value", File.ReadAllText(generated));
+
         File.Delete(Path.Combine(project.Root, "Schemas/wrapper.bond"));
         (await project.Build()).AssertSuccess();
         Assert.Contains("public long value", File.ReadAllText(generated));
@@ -170,10 +177,12 @@ public sealed class MsBuildGenerationTests(MsBuildPackageFixture packages) : ICl
         project.Write("One/model.bond", "namespace One struct First { 0: int32 id; }");
         project.Write("Two/model.bond", "namespace Two struct Second { 0: int32 id; }");
         project.Configure(new XElement("Bond", new XAttribute("Include", "**/*.bond")));
+
         (await project.Build()).AssertSuccess();
         var generated = project.GeneratedFiles();
         Assert.Equal(2, generated.Length);
         Assert.All(generated, path => Assert.StartsWith(project.Artifacts, path));
+
         var removedOutput = generated.Single(path => File.ReadAllText(path).Contains("class Second", StringComparison.Ordinal));
         var remainingOutput = generated.Single(path => path != removedOutput);
         File.Delete(Path.Combine(project.Root, "Two/model.bond"));
@@ -184,6 +193,7 @@ public sealed class MsBuildGenerationTests(MsBuildPackageFixture packages) : ICl
         project.Configure();
         (await project.Build()).AssertSuccess();
         Assert.Empty(project.GeneratedFiles());
+
         project.Configure(new XElement("Bond", new XAttribute("Include", "One/model.bond")));
         (await project.Build()).AssertSuccess();
         var unrelated = Path.Combine(Path.GetDirectoryName(Assert.Single(project.GeneratedFiles()))!, "keep.txt");
@@ -202,8 +212,10 @@ public sealed class MsBuildGenerationTests(MsBuildPackageFixture packages) : ICl
         (await project.Build()).AssertSuccess();
         var output = Assert.Single(project.GeneratedFiles());
         var original = File.ReadAllText(output);
+
         project.Write("item.bond", "namespace Contracts struct Item { 0: string id; }");
         project.Write("invalid.bond", "namespace Contracts struct Invalid { 0: Missing value; }");
+
         var failure = await project.Build();
         Assert.NotEqual(0, failure.ExitCode);
         Assert.Contains("invalid.bond", failure.Output);
@@ -212,6 +224,7 @@ public sealed class MsBuildGenerationTests(MsBuildPackageFixture packages) : ICl
 
         File.Delete(Path.Combine(project.Root, "invalid.bond"));
         File.WriteAllText(output, "user content");
+
         var overwrite = await project.Build();
         Assert.NotEqual(0, overwrite.ExitCode);
         Assert.Equal("user content", File.ReadAllText(output));
@@ -229,6 +242,7 @@ public sealed class MsBuildGenerationTests(MsBuildPackageFixture packages) : ICl
         var relative = Path.GetRelativePath(project.Root, Path.Combine(linked, "root.bond"));
         project.Configure(new XElement("Bond", new XAttribute("Include", relative),
             new XAttribute("Link", "Schemas/root.bond")));
+
         (await project.Build()).AssertSuccess();
         var output = Assert.Single(project.GeneratedFiles());
         Assert.Contains("public long value", File.ReadAllText(output));
@@ -279,14 +293,19 @@ public sealed class MsBuildPackageFixture : IAsyncLifetime
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
         while (directory != null && !File.Exists(Path.Combine(directory.FullName, "Bond.sln")))
+        {
             directory = directory.Parent;
+        }
+
         _repository = directory?.FullName ?? throw new DirectoryNotFoundException("Repository root not found.");
         Root = Path.Combine(_repository, "out", "build integration", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(Root);
         _version = CSharpGenerator.Version;
         _runtimeVersion = XDocument.Load(Path.Combine(_repository, "Directory.Packages.props"))
-            .Descendants("PackageVersion").Single(item => (string?)item.Attribute("Include") == "Bond.Runtime.CSharp")
+            .Descendants("PackageVersion")
+            .Single(item => (string?)item.Attribute("Include") == "Bond.Runtime.CSharp")
             .Attribute("Version")!.Value;
+
         var configuration = new DirectoryInfo(AppContext.BaseDirectory).Name.StartsWith("release", StringComparison.OrdinalIgnoreCase)
             ? "Release" : "Debug";
         foreach (var project in new[] { "Bond.Build", "Bond.Models" })
@@ -301,7 +320,10 @@ public sealed class MsBuildPackageFixture : IAsyncLifetime
     public ValueTask DisposeAsync()
     {
         if (Directory.Exists(Root))
+        {
             Directory.Delete(Root, recursive: true);
+        }
+
         return ValueTask.CompletedTask;
     }
 
@@ -322,22 +344,26 @@ public sealed class MsBuildPackageFixture : IAsyncLifetime
             _fixture = fixture;
             _version = version;
             _runtimeVersion = runtimeVersion;
+
             Root = Path.Combine(fixture.Root, "consumer " + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(Root);
             new XDocument(new XElement("Project", new XElement("PropertyGroup",
                 new XElement("ArtifactsPath", Artifacts))))
                 .Save(Path.Combine(Root, "Directory.Build.props"));
             Write("Directory.Packages.props", "<Project />");
-            new XDocument(new XElement("configuration",
-                new XElement("packageSources", new XElement("clear"),
-                    new XElement("add", new XAttribute("key", "local"), new XAttribute("value", Path.Combine(fixture.Root, "feed"))),
-                    new XElement("add", new XAttribute("key", "nuget.org"), new XAttribute("value", "https://api.nuget.org/v3/index.json"))),
-                new XElement("packageSourceMapping",
-                    new XElement("packageSource", new XAttribute("key", "local"),
-                        new XElement("package", new XAttribute("pattern", "BondTools.*"))),
-                    new XElement("packageSource", new XAttribute("key", "nuget.org"),
-                        new XElement("package", new XAttribute("pattern", "*"))))))
-                .Save(Path.Combine(Root, "NuGet.Config"));
+
+            var packageSources = new XElement("packageSources",
+                new XElement("clear"),
+                new XElement("add", new XAttribute("key", "local"), new XAttribute("value", Path.Combine(fixture.Root, "feed"))),
+                new XElement("add", new XAttribute("key", "nuget.org"), new XAttribute("value", "https://api.nuget.org/v3/index.json")));
+            var sourceMapping = new XElement("packageSourceMapping",
+                new XElement("packageSource", new XAttribute("key", "local"),
+                    new XElement("package", new XAttribute("pattern", "BondTools.*"))),
+                new XElement("packageSource", new XAttribute("key", "nuget.org"),
+                    new XElement("package", new XAttribute("pattern", "*"))));
+
+            var nugetConfig = new XDocument(new XElement("configuration", packageSources, sourceMapping));
+            nugetConfig.Save(Path.Combine(Root, "NuGet.Config"));
         }
 
         public void Write(string path, string content)
@@ -362,8 +388,11 @@ public sealed class MsBuildPackageFixture : IAsyncLifetime
                     new XAttribute("Version", _runtimeVersion)));
             if (items.Any(item => item.Name == "Bond" &&
                 new[] { "Descriptors", "Clone", "Equality", "Debugger", "ToString" }.Any(name => (string?)item.Attribute(name) == "true")))
+            {
                 references.Add(new XElement("PackageReference", new XAttribute("Include", "BondTools.Models"),
                     new XAttribute("Version", _version)));
+            }
+
             new XDocument(new XElement("Project", new XAttribute("Sdk", "Microsoft.NET.Sdk"),
                 properties, references, new XElement("ItemGroup", items))).Save(ProjectFile);
         }
@@ -396,12 +425,18 @@ public sealed class MsBuildPackageFixture : IAsyncLifetime
             RedirectStandardError = true
         };
         foreach (var argument in arguments)
+        {
             start.ArgumentList.Add(argument);
+        }
+
         start.Environment["MSBUILDDISABLENODEREUSE"] = "1";
         start.Environment["DOTNET_CLI_USE_MSBUILD_SERVER"] = "0";
         start.Environment["UseSharedCompilation"] = "false";
         if (packages != null)
+        {
             start.Environment["NUGET_PACKAGES"] = packages;
+        }
+
         using var process = Process.Start(start) ?? throw new InvalidOperationException("Could not start dotnet.");
         var stdout = process.StandardOutput.ReadToEndAsync(timeout.Token);
         var stderr = process.StandardError.ReadToEndAsync(timeout.Token);
@@ -413,7 +448,10 @@ public sealed class MsBuildPackageFixture : IAsyncLifetime
         catch (OperationCanceledException)
         {
             if (!process.HasExited)
+            {
                 process.Kill(entireProcessTree: true);
+            }
+
             throw;
         }
     }

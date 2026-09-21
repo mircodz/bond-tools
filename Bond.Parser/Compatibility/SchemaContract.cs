@@ -39,9 +39,21 @@ internal sealed record TypeShape(string Kind, string? Name, long? Integer, IRead
 
     public override string ToString()
     {
-        var name = Name ?? (Kind is "integer" or "parameter"
-            ? (Kind == "parameter" ? "$" : "") + Integer?.ToString(System.Globalization.CultureInfo.InvariantCulture)
-            : Kind);
+        string name;
+        if (Name is not null)
+        {
+            name = Name;
+        }
+        else if (Kind is "integer" or "parameter")
+        {
+            var prefix = Kind == "parameter" ? "$" : "";
+            name = prefix + Integer?.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        }
+        else
+        {
+            name = Kind;
+        }
+
         return Arguments.Count == 0 ? name : $"{name}<{string.Join(", ", Arguments)}>";
     }
 }

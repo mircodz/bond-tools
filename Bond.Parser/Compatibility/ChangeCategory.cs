@@ -21,7 +21,12 @@ public enum ChangeCategory
     InvalidSchema,
 }
 
-public enum ChangeSeverity { Info, Warning, Error }
+public enum ChangeSeverity
+{
+    Info,
+    Warning,
+    Error
+}
 
 public record SchemaChange(
     ChangeCategory Category,
@@ -31,26 +36,29 @@ public record SchemaChange(
 )
 {
     public string Id { get; init; } = DiagnosticIds.Unclassified;
+
     public ChangeSeverity Severity { get; init; } =
         Category == ChangeCategory.Compatible ? ChangeSeverity.Info : ChangeSeverity.Error;
+
     public bool IsSuppressed { get; init; }
 
     public override string ToString()
     {
-        var categoryStr = Category switch
+        var categoryLabel = Category switch
         {
-            ChangeCategory.Compatible    => "COMPATIBLE",
-            ChangeCategory.BreakingWire  => "BREAKING-WIRE",
-            ChangeCategory.BreakingText  => "BREAKING-TEXT",
+            ChangeCategory.Compatible => "COMPATIBLE",
+            ChangeCategory.BreakingWire => "BREAKING-WIRE",
+            ChangeCategory.BreakingText => "BREAKING-TEXT",
             ChangeCategory.InvalidSchema => "INVALID-SCHEMA",
-            _                            => "UNKNOWN"
+            _ => "UNKNOWN"
         };
 
-        var result = $"[{categoryStr}] {Id}{(IsSuppressed ? " (suppressed)" : "")} {Location}: {Description}";
+        var result = $"[{categoryLabel}] {Id}{(IsSuppressed ? " (suppressed)" : "")} {Location}: {Description}";
         if (Recommendation != null)
         {
             result += $"\n  → {Recommendation}";
         }
+
         return result;
     }
 }

@@ -46,13 +46,16 @@ public sealed class CSharpGeneratorParityTests
                     Enum.GetValues(generated).Cast<object>().Select(Convert.ToInt32));
                 continue;
             }
+
             Assert.Equal(reference.BaseType?.ToString(), generated.BaseType?.ToString());
             Assert.Equal(PropertySignatures(reference), PropertySignatures(generated));
             Assert.Equal(ConstructorSignatures(reference), ConstructorSignatures(generated));
             Assert.Equal(reference.GetGenericArguments().Select(type => type.GenericParameterAttributes),
                 generated.GetGenericArguments().Select(type => type.GenericParameterAttributes));
             if (reference.GetCustomAttribute<global::Bond.SchemaAttribute>() == null)
+            {
                 continue;
+            }
 
             foreach (var useValueTypes in new[] { false, true })
             {
@@ -61,7 +64,9 @@ public sealed class CSharpGeneratorParityTests
                 Assert.Equal(SchemaJson(referenceType), SchemaJson(generatedType));
                 CompareProtocolBehavior(generatedType, referenceType);
                 if (!reference.IsGenericTypeDefinition)
+                {
                     break;
+                }
             }
         }
     }
@@ -219,10 +224,21 @@ public sealed class CSharpGeneratorParityTests
         Compile(await Generate("namespace Example " + declarations));
     }
 
-    private static Type CloseGenericType(Type type, bool useValueTypes) =>
-        !type.IsGenericTypeDefinition ? type : type.MakeGenericType(type.GetGenericArguments()
-            .Select(parameter => useValueTypes || parameter.GenericParameterAttributes.HasFlag(GenericParameterAttributes.NotNullableValueTypeConstraint)
-                ? typeof(int) : typeof(string)).ToArray());
+    private static Type CloseGenericType(Type type, bool useValueTypes)
+    {
+        if (!type.IsGenericTypeDefinition)
+        {
+            return type;
+        }
+
+        var arguments = type.GetGenericArguments().Select(parameter =>
+        {
+            var useValueType = useValueTypes || parameter.GenericParameterAttributes.HasFlag(
+                GenericParameterAttributes.NotNullableValueTypeConstraint);
+            return useValueType ? typeof(int) : typeof(string);
+        }).ToArray();
+        return type.MakeGenericType(arguments);
+    }
 
     private static IEnumerable<string> PropertySignatures(Type type) =>
         type.GetProperties(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)
@@ -231,7 +247,11 @@ public sealed class CSharpGeneratorParityTests
 
     private static IEnumerable<string> ConstructorSignatures(Type type) =>
         type.GetConstructors(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
-            .Select(constructor => $"{constructor.IsPublic}:{constructor.IsFamily}:{string.Join(",", constructor.GetParameters().Select(parameter => parameter.ParameterType.ToString()))}")
+            .Select(constructor =>
+            {
+                var parameters = constructor.GetParameters().Select(parameter => parameter.ParameterType.ToString());
+                return $"{constructor.IsPublic}:{constructor.IsFamily}:{string.Join(",", parameters)}";
+            })
             .OrderBy(signature => signature, StringComparer.Ordinal);
 
     private static void CompareProtocolBehavior(Type generated, Type reference)
@@ -253,7 +273,9 @@ public sealed class CSharpGeneratorParityTests
                 Assert.IsType<ArgumentException>(referenceError);
                 continue;
             }
+
             Assert.Equal(expected, actual);
+
             object? referenceRead = null;
             object? generatedRead = null;
             referenceError = Record.Exception(() => referenceRead = Read(reference, actual!, protocol, version, false));
@@ -264,6 +286,7 @@ public sealed class CSharpGeneratorParityTests
                 Assert.IsType<NotImplementedException>(referenceError);
                 continue;
             }
+
             Assert.Equal(expected, Write(generated, generatedRead!, protocol, version, false));
             Assert.Equal(actual, Write(reference, referenceRead!, protocol, version, false));
         }
@@ -278,11 +301,14 @@ public sealed class CSharpGeneratorParityTests
             var path = File.Exists(local) ? local : Path.Combine(Fixtures, "imports", relative);
             return (path, await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken));
         };
+
         var parsed = await ParserFacade.ParseFileAsync(Path.Combine(Fixtures, fixture + ".bond"), resolver,
             TestContext.Current.CancellationToken);
         Assert.True(parsed.Success, string.Join("\n", parsed.Errors.Select(error => error.Message)));
+
         var result = CSharpGenerator.Generate(parsed.Ast!, fixture + ".bond");
         Assert.True(result.Success, string.Join("\n", result.Errors.Select(error => error.Message)));
+
         var reference = await File.ReadAllTextAsync(
             Path.Combine(Fixtures, "CodegenReference", fixture + ".cs.txt"), TestContext.Current.CancellationToken);
         var supplementary = fixture switch

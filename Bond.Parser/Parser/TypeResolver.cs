@@ -25,15 +25,25 @@ public static class TypeResolver
                 .GroupBy(d => d.QualifiedName)
                 .Select(group => group.LastOrDefault(d => d is not ForwardDeclaration) ?? group.Last())
                 .ToArray();
-            return ast with { Declarations = declarations, ResolvedDeclarations = environment };
+
+            return ast with
+            {
+                Declarations = declarations,
+                ResolvedDeclarations = environment
+            };
         }
 
         private Declaration ResolveDeclaration(Declaration declaration)
         {
             if (_resolved.TryGetValue(declaration, out var existing))
+            {
                 return existing;
+            }
+
             if (!_active.Add(declaration))
+            {
                 throw new SemanticErrorException($"Cyclic definition of '{declaration.Name}'", declaration.Location);
+            }
 
             try
             {
@@ -42,20 +52,28 @@ public static class TypeResolver
                     StructDeclaration { IsView: true } view => ResolveView(view),
                     StructDeclaration structure => structure with
                     {
-                        BaseType = structure.BaseType is null ? null : ResolveType(structure.BaseType, structure, structure.Location),
+                        BaseType = structure.BaseType is null
+                            ? null
+                            : ResolveType(structure.BaseType, structure, structure.Location),
                         Fields = structure.Fields.Select(field => field with
                         {
                             Type = ResolveType(field.Type, structure, field.Location)
                         }).ToArray()
                     },
-                    AliasDeclaration alias => alias with { AliasedType = ResolveType(alias.AliasedType, alias, alias.Location) },
+                    AliasDeclaration alias => alias with
+                    {
+                        AliasedType = ResolveType(alias.AliasedType, alias, alias.Location)
+                    },
                     ServiceDeclaration service => service with
                     {
-                        BaseType = service.BaseType is null ? null : ResolveType(service.BaseType, service, service.Location),
+                        BaseType = service.BaseType is null
+                            ? null
+                            : ResolveType(service.BaseType, service, service.Location),
                         Methods = service.Methods.Select(method => ResolveMethod(method, service)).ToArray()
                     },
                     _ => declaration
                 };
+
                 _resolved.Add(declaration, result);
                 symbols.SetResolvedContext(declaration, result);
                 return result;
@@ -73,14 +91,25 @@ public static class TypeResolver
         private StructDeclaration ResolveView(StructDeclaration view)
         {
             if (view.ViewTarget is null)
+            {
                 throw new SemanticErrorException($"View '{view.Name}' has no target struct", view.Location);
+            }
+
             if (view.TypeParameters.Length != 0)
+            {
                 throw new SemanticErrorException("A view inherits its type parameters from its target struct", view.Location);
+            }
+
             var target = FindSymbol(view.ViewTarget, view);
             if (target is not StructDeclaration structure)
+            {
                 throw new SemanticErrorException($"View '{view.Name}' requires a defined struct target", view.Location);
+            }
+
             if (_active.Contains(structure))
+            {
                 throw new SemanticErrorException($"Cyclic view definition involving '{view.Name}'", view.Location);
+            }
 
             var source = (StructDeclaration)ResolveDeclaration(structure);
             return view with
@@ -132,9 +161,13 @@ public static class TypeResolver
             if (declaration is null)
             {
                 if (type.TypeArguments.Length == 0 && TryResolvePrimitive(type.QualifiedName, out var primitive))
+                {
                     return primitive;
+                }
+
                 throw new SemanticErrorException($"Type '{string.Join(".", type.QualifiedName)}' not found in symbol table", location);
             }
+
             return ResolveReference(declaration, type.TypeArguments, owner, location);
         }
 
@@ -144,16 +177,24 @@ public static class TypeResolver
             return symbols.FindSymbol(name, owner.Namespaces, localAliases ?? aliases);
         }
 
-        private BondType ResolveReference(Declaration declaration, BondType[] arguments, Declaration owner, SourceLocation location)
+        private BondType ResolveReference(
+            Declaration declaration,
+            BondType[] arguments,
+            Declaration owner,
+            SourceLocation location)
         {
             if (declaration is ForwardDeclaration)
+            {
                 declaration = FindSymbol(declaration.QualifiedName.Split('.'), owner) ?? declaration;
+            }
 
             var typeArguments = arguments.Select(argument => ResolveType(argument, owner, location)).ToArray();
+
             Declaration target;
-            if (declaration is StructDeclaration structure &&
-                (_active.Contains(structure) || owner is AliasDeclaration && !_resolved.ContainsKey(structure)
-                    || structure.IsView && HasActiveViewSource(structure)))
+            if (declaration is StructDeclaration structure
+                && (_active.Contains(structure)
+                    || (owner is AliasDeclaration && !_resolved.ContainsKey(structure))
+                    || (structure.IsView && HasActiveViewSource(structure))))
             {
                 // Keep recursive/forward references finite. The complete definition is in ResolvedDeclarations.
                 target = ToForward(structure, location);
@@ -161,15 +202,20 @@ public static class TypeResolver
             else
             {
                 if (_active.Contains(declaration))
+                {
                     throw new SemanticErrorException($"Cyclic definition of '{declaration.Name}'", location);
+                }
+
                 target = ResolveDeclaration(declaration);
             }
 
             if (typeArguments.Length != target.TypeParameters.Length)
+            {
                 throw new SemanticErrorException(
                     target.TypeParameters.Length == 0
                         ? $"Type '{target.Name}' is not a generic type"
                         : $"Type '{target.Name}' requires {target.TypeParameters.Length} type argument(s)", location);
+            }
 
             return new BondType.TypeReference(target, typeArguments);
         }
@@ -180,11 +226,18 @@ public static class TypeResolver
             while (view.IsView && view.ViewTarget is not null && visited.Add(view))
             {
                 if (FindSymbol(view.ViewTarget, view) is not StructDeclaration source)
+                {
                     return false;
+                }
+
                 if (_active.Contains(source))
+                {
                     return true;
+                }
+
                 view = source;
             }
+
             return false;
         }
 
@@ -194,11 +247,18 @@ public static class TypeResolver
             while (structure.IsView && structure.ViewTarget is not null)
             {
                 if (!visited.Add(structure))
+                {
                     throw new SemanticErrorException($"Cyclic view definition involving '{structure.Name}'", location);
+                }
+
                 if (FindSymbol(structure.ViewTarget, structure) is not StructDeclaration source)
+                {
                     throw new SemanticErrorException($"View '{structure.Name}' requires a defined struct target", location);
+                }
+
                 structure = source;
             }
+
             return structure.TypeParameters;
         }
 
@@ -213,7 +273,13 @@ public static class TypeResolver
 
     private static bool TryResolvePrimitive(string[] name, [NotNullWhen(true)] out BondType? primitive)
     {
-        primitive = name.Length == 1 ? name[0].ToLowerInvariant() switch
+        primitive = null;
+        if (name.Length != 1)
+        {
+            return false;
+        }
+
+        primitive = name[0].ToLowerInvariant() switch
         {
             "int8" => BondType.Int8.Instance,
             "int16" => BondType.Int16.Instance,
@@ -230,7 +296,8 @@ public static class TypeResolver
             "wstring" => BondType.WString.Instance,
             "blob" => BondType.Blob.Instance,
             _ => null
-        } : null;
+        };
+
         return primitive is not null;
     }
 }

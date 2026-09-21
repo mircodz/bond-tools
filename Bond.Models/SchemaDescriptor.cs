@@ -48,7 +48,9 @@ public sealed record EnumValueDescriptor(string Name, int Value, long? DeclaredV
 /// <summary>A declared default, never a constructed model, container, or inferred CLR default.</summary>
 public abstract record SchemaDefault
 {
-    private SchemaDefault() { }
+    private SchemaDefault()
+    {
+    }
 
     /// <summary>A Boolean source literal.</summary>
     public sealed record Boolean(bool Value) : SchemaDefault;
@@ -70,7 +72,10 @@ public abstract record SchemaDefault
     {
         /// <summary>The immutable nothing value.</summary>
         public static Nothing Instance { get; } = new();
-        private Nothing() { }
+
+        private Nothing()
+        {
+        }
     }
 }
 
@@ -92,17 +97,24 @@ public sealed class FieldDescriptor
 
     /// <summary>The IDL field ordinal.</summary>
     public ushort Id { get; }
+
     /// <summary>The declared IDL field name.</summary>
     public string Name { get; }
+
     /// <summary>The symbolic schema type, retaining aliases and nothing wrappers.</summary>
     public SchemaType Type { get; }
+
     /// <summary>The source presence modifier.</summary>
     public SchemaFieldModifier Modifier { get; }
+
     /// <summary>The wire modifier, including Bond's required_optional rule for metadata-name fields.</summary>
     public SchemaFieldModifier EffectiveModifier => Type.Kind is SchemaTypeKind.MetaName or SchemaTypeKind.MetaFullName
-        ? SchemaFieldModifier.RequiredOptional : Modifier;
+        ? SchemaFieldModifier.RequiredOptional
+        : Modifier;
+
     /// <summary>The declared default; null means no default was written.</summary>
     public SchemaDefault? DefaultValue { get; }
+
     /// <summary>The source attributes, in declaration order.</summary>
     public IReadOnlyList<SchemaAttribute> Attributes { get; }
 
@@ -117,21 +129,35 @@ public sealed class FieldDescriptor
 public sealed class SchemaDescriptor
 {
     /// <summary>Creates a declaration template, copying all supplied collections.</summary>
-    public SchemaDescriptor(string name, string @namespace, string? clrName, SchemaKind kind,
-        IEnumerable<FieldDescriptor>? fields = null, SchemaType? baseType = null,
+    public SchemaDescriptor(
+        string name,
+        string @namespace,
+        string? clrName,
+        SchemaKind kind,
+        IEnumerable<FieldDescriptor>? fields = null,
+        SchemaType? baseType = null,
         IEnumerable<TypeParameterDescriptor>? typeParameters = null,
-        IEnumerable<EnumValueDescriptor>? enumValues = null, IEnumerable<SchemaAttribute>? attributes = null,
-        SchemaType? aliasedType = null, bool isView = false, IEnumerable<string>? viewTarget = null,
-        IEnumerable<string>? viewFields = null, bool isForward = false)
+        IEnumerable<EnumValueDescriptor>? enumValues = null,
+        IEnumerable<SchemaAttribute>? attributes = null,
+        SchemaType? aliasedType = null,
+        bool isView = false,
+        IEnumerable<string>? viewTarget = null,
+        IEnumerable<string>? viewFields = null,
+        bool isForward = false)
     {
         Name = name ?? throw new ArgumentNullException(nameof(name));
         Namespace = @namespace ?? throw new ArgumentNullException(nameof(@namespace));
         ClrName = clrName;
         Kind = kind;
         IsForward = isForward;
-        Fields = SchemaCollections.Freeze(SchemaCollections.Freeze(fields).OrderBy(field => field.Id));
+
+        var declaredFields = SchemaCollections.Freeze(fields);
+        Fields = SchemaCollections.Freeze(declaredFields.OrderBy(field => field.Id));
         if (Fields.Select(field => field.Id).Distinct().Count() != Fields.Count)
+        {
             throw new ArgumentException("A schema cannot declare duplicate field ordinals.", nameof(fields));
+        }
+
         BaseType = baseType;
         TypeParameters = SchemaCollections.Freeze(typeParameters);
         EnumValues = SchemaCollections.Freeze(enumValues);
@@ -140,16 +166,23 @@ public sealed class SchemaDescriptor
         IsView = isView;
         ViewTarget = SchemaCollections.Freeze(viewTarget);
         ViewFields = SchemaCollections.Freeze(viewFields);
+
         TypeArguments = SchemaCollections.Freeze<SchemaType>(null);
         Definition = this;
     }
 
     private SchemaDescriptor(SchemaDescriptor definition, IReadOnlyList<SchemaType> arguments)
         : this(definition.Name, definition.Namespace, definition.ClrName, definition.Kind,
-            definition.Fields.Select(field => field.Substitute(arguments)),
-            definition.BaseType?.Substitute(arguments), definition.TypeParameters, definition.EnumValues,
-            definition.Attributes, definition.AliasedType?.Substitute(arguments), definition.IsView,
-            definition.ViewTarget, definition.ViewFields, definition.IsForward)
+            fields: definition.Fields.Select(field => field.Substitute(arguments)),
+            baseType: definition.BaseType?.Substitute(arguments),
+            typeParameters: definition.TypeParameters,
+            enumValues: definition.EnumValues,
+            attributes: definition.Attributes,
+            aliasedType: definition.AliasedType?.Substitute(arguments),
+            isView: definition.IsView,
+            viewTarget: definition.ViewTarget,
+            viewFields: definition.ViewFields,
+            isForward: definition.IsForward)
     {
         Definition = definition;
         TypeArguments = arguments;
@@ -157,43 +190,59 @@ public sealed class SchemaDescriptor
 
     /// <summary>The original IDL declaration name.</summary>
     public string Name { get; }
+
     /// <summary>The IDL namespace, unaffected by C# namespace and type mappings.</summary>
     public string Namespace { get; }
+
     /// <summary>The qualified IDL name. Alias identity is the descriptor, not this potentially shadowed name.</summary>
     public string FullName => Namespace.Length == 0 ? Name : Namespace + "." + Name;
+
     /// <summary>
     /// The mapped C# representation of the declaration template, including generic parameter names.
     /// Binding preserves this template name; actual schema arguments are available in TypeArguments.
     /// Null means the symbolic template has no representable CLR type, for example an erased integer argument alias.
     /// </summary>
     public string? ClrName { get; }
+
     /// <summary>The named declaration category.</summary>
     public SchemaKind Kind { get; }
+
     /// <summary>
     /// True when only a forward declaration is available. Its fields and base layout are unknown,
     /// not an empty struct definition, and are never discovered by inspecting the CLR type.
     /// </summary>
     public bool IsForward { get; }
+
     /// <summary>Own declared fields sorted by ordinal, excluding inherited fields; unavailable on forward declarations.</summary>
     public IReadOnlyList<FieldDescriptor> Fields { get; }
+
     /// <summary>The explicit symbolic base type, if any.</summary>
     public SchemaType? BaseType { get; }
+
     /// <summary>The declaration's generic parameters in source order.</summary>
     public IReadOnlyList<TypeParameterDescriptor> TypeParameters { get; }
+
     /// <summary>Enum members in declaration order, including repeated numeric values.</summary>
     public IReadOnlyList<EnumValueDescriptor> EnumValues { get; }
+
     /// <summary>Declaration attributes in source order.</summary>
     public IReadOnlyList<SchemaAttribute> Attributes { get; }
+
     /// <summary>The alias's symbolic target without erasing nested aliases.</summary>
     public SchemaType? AliasedType { get; }
+
     /// <summary>Whether this struct was declared as a view.</summary>
     public bool IsView { get; }
+
     /// <summary>The view target's qualified-name segments as written in the IDL.</summary>
     public IReadOnlyList<string> ViewTarget { get; }
+
     /// <summary>The view's field selection as written, including repeated or unmatched selectors.</summary>
     public IReadOnlyList<string> ViewFields { get; }
+
     /// <summary>The unbound declaration template; identical to this descriptor when unbound.</summary>
     public SchemaDescriptor Definition { get; }
+
     /// <summary>Explicitly supplied binding arguments; empty on a declaration template.</summary>
     public IReadOnlyList<SchemaType> TypeArguments { get; }
 
@@ -206,7 +255,10 @@ public sealed class SchemaDescriptor
     {
         ArgumentNullException.ThrowIfNull(arguments);
         if (arguments.Length != TypeParameters.Count)
+        {
             throw new ArgumentException("The number of schema arguments must match the declaration's parameters.", nameof(arguments));
+        }
+
         return arguments.Length == 0 ? Definition : new SchemaDescriptor(Definition, SchemaCollections.Freeze(arguments));
     }
 
@@ -217,10 +269,14 @@ public sealed class SchemaDescriptor
     public NamedSchemaType AsType(params SchemaType[] arguments)
     {
         ArgumentNullException.ThrowIfNull(arguments);
-        var supplied = arguments.Length == 0 && TypeArguments.Count != 0
-            ? TypeArguments : SchemaCollections.Freeze(arguments);
-        if (supplied.Count != TypeParameters.Count)
+        var suppliedArguments = arguments.Length == 0 && TypeArguments.Count != 0
+            ? TypeArguments
+            : SchemaCollections.Freeze(arguments);
+        if (suppliedArguments.Count != TypeParameters.Count)
+        {
             throw new ArgumentException("The number of schema arguments must match the declaration's parameters.", nameof(arguments));
+        }
+
         var kind = Kind switch
         {
             SchemaKind.Struct => SchemaTypeKind.Struct,
@@ -228,7 +284,7 @@ public sealed class SchemaDescriptor
             SchemaKind.Alias => SchemaTypeKind.Alias,
             _ => throw new InvalidOperationException("Unknown declaration kind.")
         };
-        return new NamedSchemaType(kind, Name, Namespace, () => Definition, supplied);
+        return new NamedSchemaType(kind, Name, Namespace, () => Definition, suppliedArguments);
     }
 }
 
@@ -238,7 +294,10 @@ internal static class SchemaCollections
     {
         var copy = values?.ToList() ?? new List<T>();
         if (copy.Any(value => value is null))
+        {
             throw new ArgumentException("Schema collections cannot contain null values.", nameof(values));
+        }
+
         return copy.AsReadOnly();
     }
 }

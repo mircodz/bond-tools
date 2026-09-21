@@ -15,7 +15,6 @@ public class ParserFacadeTests
 
     private static Task<(string, string)> MockImportResolver(string currentFile, string importPath)
     {
-        // Return empty Bond file for any import
         return Task.FromResult((importPath, "namespace Mock"));
     }
 

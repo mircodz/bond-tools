@@ -141,6 +141,7 @@ public sealed class CSharpDocumentationTests
         var code = await Generate(schema);
         Assert.Equal(code, await Generate(schema.Replace("\n", "\r\n", StringComparison.Ordinal)));
         Assert.DoesNotContain("\r", code);
+
         var docs = CompileDocumentation(code);
         Assert.Equal("""
             A <T> & "quoted" value > zero.
@@ -253,6 +254,7 @@ public sealed class CSharpDocumentationTests
         var paths = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!).Split(Path.PathSeparator)
             .Append(typeof(global::Bond.SchemaAttribute).Assembly.Location)
             .Distinct(StringComparer.Ordinal);
+
         var compilation = CSharpCompilation.Create(
             "DocumentedContracts",
             sources.Select(source => CSharpSyntaxTree.ParseText(source,
@@ -260,11 +262,13 @@ public sealed class CSharpDocumentationTests
             paths.Select(path => MetadataReference.CreateFromFile(path)),
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
                 .WithSpecificDiagnosticOptions(new Dictionary<string, ReportDiagnostic> { ["CS1591"] = ReportDiagnostic.Suppress }));
+
         using var assembly = new MemoryStream();
         using var documentation = new MemoryStream();
         var result = compilation.Emit(assembly, xmlDocumentationStream: documentation);
         Assert.True(result.Success, string.Join("\n", result.Diagnostics));
         Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Warning);
+
         documentation.Position = 0;
         return XDocument.Load(documentation, LoadOptions.PreserveWhitespace).Descendants("member")
             .ToDictionary(member => member.Attribute("name")!.Value, StringComparer.Ordinal);
@@ -276,6 +280,7 @@ public sealed class CSharpDocumentationTests
         var start = Array.FindIndex(lines, line => line.Trim(' ', '\t').Length != 0);
         var end = Array.FindLastIndex(lines, line => line.Trim(' ', '\t').Length != 0);
         lines = lines[start..(end + 1)];
+
         var margin = lines.Where(line => line.Trim(' ', '\t').Length != 0)
             .Min(line => line.Length - line.TrimStart(' ', '\t').Length);
         return string.Join("\n", lines.Select(line => line[Math.Min(margin, line.Length)..].TrimEnd(' ', '\t')));

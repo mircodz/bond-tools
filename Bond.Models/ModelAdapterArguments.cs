@@ -7,7 +7,12 @@ namespace BondTools.Models;
 /// <summary>Statically supplied operations for a closed generic model argument.</summary>
 public sealed class ModelAdapterArgument
 {
-    private ModelAdapterArgument(Type type, object adapter) => (Type, Adapter) = (type, adapter);
+    private ModelAdapterArgument(Type type, object adapter)
+    {
+        Type = type;
+        Adapter = adapter;
+    }
+
     internal Type Type { get; }
     internal object Adapter { get; }
 
@@ -24,8 +29,13 @@ internal sealed class ModelAdapterFrame(IReadOnlyList<ModelAdapterArgument> argu
     internal IModelAdapter<T>? Find<T>()
     {
         foreach (var argument in arguments)
+        {
             if (argument.Type == typeof(T))
+            {
                 return (IModelAdapter<T>)argument.Adapter;
+            }
+        }
+
         return parent?.Find<T>();
     }
 }
@@ -38,6 +48,7 @@ internal sealed class ArgumentModelAdapter<T> : IModelAdapter<T>
     internal ArgumentModelAdapter(IModelAdapter<T> inner, ModelAdapterArgument[] arguments)
     {
         _inner = inner;
+
         // Mask an outer registration for T before dispatching to the underlying adapter.
         _arguments = new[] { ModelAdapterArgument.Create(inner) }.Concat(arguments).ToArray();
     }
@@ -46,23 +57,41 @@ internal sealed class ArgumentModelAdapter<T> : IModelAdapter<T>
     {
         var previous = context.Adapters;
         context.Adapters = new ModelAdapterFrame(_arguments, previous);
-        try { return _inner.Clone(value, context); }
-        finally { context.Adapters = previous; }
+        try
+        {
+            return _inner.Clone(value, context);
+        }
+        finally
+        {
+            context.Adapters = previous;
+        }
     }
 
     public bool Equals(T left, T right, EqualityContext context)
     {
         var previous = context.Adapters;
         context.Adapters = new ModelAdapterFrame(_arguments, previous);
-        try { return _inner.Equals(left, right, context); }
-        finally { context.Adapters = previous; }
+        try
+        {
+            return _inner.Equals(left, right, context);
+        }
+        finally
+        {
+            context.Adapters = previous;
+        }
     }
 
     public int GetHashCode(T value, HashContext context)
     {
         var previous = context.Adapters;
         context.Adapters = new ModelAdapterFrame(_arguments, previous);
-        try { return _inner.GetHashCode(value, context); }
-        finally { context.Adapters = previous; }
+        try
+        {
+            return _inner.GetHashCode(value, context);
+        }
+        finally
+        {
+            context.Adapters = previous;
+        }
     }
 }

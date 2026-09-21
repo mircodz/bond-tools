@@ -30,6 +30,7 @@ public class JsonSnapshotTests
             {
                 continue;
             }
+
             var jsonPath = Path.ChangeExtension(bondPath, ".json");
             if (File.Exists(jsonPath))
             {

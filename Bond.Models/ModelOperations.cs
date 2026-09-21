@@ -46,8 +46,10 @@ public interface IModelAdapter<T>
 {
     /// <summary>Deep-clones a value using the shared graph context.</summary>
     T Clone(T value, CloneContext context);
+
     /// <summary>Compares actual values using the shared graph context.</summary>
     bool Equals(T left, T right, EqualityContext context);
+
     /// <summary>Hashes actual values, respecting the context's remaining depth.</summary>
     int GetHashCode(T value, HashContext context);
 }
@@ -70,8 +72,10 @@ public sealed class ModelAdapter<T>(
 {
     /// <inheritdoc />
     public T Clone(T value, CloneContext context) => clone(value, context);
+
     /// <inheritdoc />
     public bool Equals(T left, T right, EqualityContext context) => equals(left, right, context);
+
     /// <inheritdoc />
     public int GetHashCode(T value, HashContext context) => hash(value, context);
 }

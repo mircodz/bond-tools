@@ -17,6 +17,7 @@ public class CompatibilityTests
     {
         var result = await ParserFacade.ParseStringAsync(input);
         result.Success.Should().BeTrue($"parsing should succeed but got errors: {string.Join(", ", result.Errors.Select(e => e.Message))}");
+
         return result.Ast!;
     }
 
@@ -593,6 +594,7 @@ public class CompatibilityTests
             {
                 throw new FileNotFoundException($"Imported file not found: {importPath}", absolutePath);
             }
+
             return Task.FromResult((absolutePath, content));
         };
 
@@ -722,8 +724,7 @@ public class CompatibilityTests
     [Fact]
     public async Task AliasChange_VectorToList_IsCompatible()
     {
-        // vector<T> and list<T> share the same wire encoding; this was previously a
-        // false positive because CompareAliases used TypesEqual instead of ClassifyTypeChange.
+        // Unused aliases do not affect payloads; vector<T> and list<T> also share the wire encoding.
         var oldSchema = await ParseSchema("""
             namespace Test
             using Items = vector<int32>;

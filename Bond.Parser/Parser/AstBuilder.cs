@@ -253,7 +253,7 @@ public class AstBuilder : BondBaseVisitor<object?>
             ? (TypeParam[])Visit(context.typeParameters())!
             : [];
 
-        var loc = new SourceLocation(context.Start.Line, context.Start.Column + 1);
+        var location = new SourceLocation(context.Start.Line, context.Start.Column + 1);
         var leading = LeadingTriviaFor(context.Start);
         var trailing = TrailingTriviaFor(context.Stop);
 
@@ -262,11 +262,11 @@ public class AstBuilder : BondBaseVisitor<object?>
         Declaration result;
         if (context.structView() != null)
         {
-            result = VisitStructView(context.structView(), name, typeParams, attributes, loc, leading, trailing);
+            result = VisitStructView(context.structView(), name, typeParams, attributes, location, leading, trailing);
         }
         else if (context.structDef() != null)
         {
-            result = VisitStructDef(context.structDef(), name, typeParams, attributes, loc, leading, trailing);
+            result = VisitStructDef(context.structDef(), name, typeParams, attributes, location, leading, trailing);
         }
         else
         {
@@ -278,7 +278,14 @@ public class AstBuilder : BondBaseVisitor<object?>
         return result;
     }
 
-    private StructDeclaration VisitStructView(BondParser.StructViewContext context, string name, TypeParam[] typeParams, Syntax.Attribute[] attributes, SourceLocation loc, Trivia[] leading, Trivia? trailing)
+    private StructDeclaration VisitStructView(
+        BondParser.StructViewContext context,
+        string name,
+        TypeParam[] typeParams,
+        Syntax.Attribute[] attributes,
+        SourceLocation location,
+        Trivia[] leading,
+        Trivia? trailing)
     {
         return new StructDeclaration
         {
@@ -291,13 +298,20 @@ public class AstBuilder : BondBaseVisitor<object?>
             ViewTarget = (string[])Visit(context.qualifiedName())!,
             ViewFields = context.viewFieldList().identifier().Select(id => (string)Visit(id)!).ToArray(),
             Fields = [],
-            Location = loc,
+            Location = location,
             LeadingTrivia = leading,
             TrailingTrivia = trailing
         };
     }
 
-    private StructDeclaration VisitStructDef(BondParser.StructDefContext context, string name, TypeParam[] typeParams, Syntax.Attribute[] attributes, SourceLocation loc, Trivia[] leading, Trivia? trailing)
+    private StructDeclaration VisitStructDef(
+        BondParser.StructDefContext context,
+        string name,
+        TypeParam[] typeParams,
+        Syntax.Attribute[] attributes,
+        SourceLocation location,
+        Trivia[] leading,
+        Trivia? trailing)
     {
         var baseType = context.userType() != null
             ? (BondType)Visit(context.userType())!
@@ -316,7 +330,7 @@ public class AstBuilder : BondBaseVisitor<object?>
             TypeParameters = typeParams,
             BaseType = baseType,
             Fields = fields,
-            Location = loc,
+            Location = location,
             LeadingTrivia = leading,
             TrailingTrivia = trailing
         };
@@ -501,8 +515,11 @@ public class AstBuilder : BondBaseVisitor<object?>
 
         var ordinalValue = ParseInteger(context.fieldOrdinal().INTEGER_LITERAL().GetText());
         if (ordinalValue < ushort.MinValue || ordinalValue > ushort.MaxValue)
+        {
             throw new SemanticErrorException("Field ordinal must be within the range 0-65535",
                 new SourceLocation(context.Start.Line, context.Start.Column + 1));
+        }
+
         var ordinal = (ushort)ordinalValue;
 
         var modifier = context.modifier() != null
@@ -609,31 +626,37 @@ public class AstBuilder : BondBaseVisitor<object?>
             var elementType = (BondType)Visit(context.type())!;
             return new BondType.List(elementType);
         }
+
         if (context.BLOB() != null)
         {
             return BondType.Blob.Instance;
         }
+
         if (context.VECTOR() != null)
         {
             var elementType = (BondType)Visit(context.type())!;
             return new BondType.Vector(elementType);
         }
+
         if (context.NULLABLE() != null)
         {
             var elementType = (BondType)Visit(context.type())!;
             return new BondType.Nullable(elementType);
         }
+
         if (context.SET() != null)
         {
             var keyType = (BondType)Visit(context.keyType())!;
             return new BondType.Set(keyType);
         }
+
         if (context.MAP() != null)
         {
             var keyType = (BondType)Visit(context.keyType())!;
             var valueType = (BondType)Visit(context.type())!;
             return new BondType.Map(keyType, valueType);
         }
+
         if (context.BONDED() != null)
         {
             var structType = (BondType)Visit(context.userStructRef())!;
@@ -731,8 +754,10 @@ public class AstBuilder : BondBaseVisitor<object?>
     private static void RejectParameterArguments(BondParser.TypeArgsContext? arguments, IToken token)
     {
         if (arguments is not null)
+        {
             throw new SemanticErrorException("A type parameter cannot have type arguments",
                 new SourceLocation(token.Line, token.Column + 1));
+        }
     }
 
     public override BondType VisitTypeArg(BondParser.TypeArgContext context)
@@ -746,7 +771,9 @@ public class AstBuilder : BondBaseVisitor<object?>
         {
             var value = ParseInteger(context.INTEGER_LITERAL().GetText());
             if (context.MINUS() != null)
+            {
                 value = -value;
+            }
 
             return new BondType.IntTypeArg(unchecked((long)(ulong)(value & ulong.MaxValue)));
         }
@@ -777,14 +804,17 @@ public class AstBuilder : BondBaseVisitor<object?>
         {
             return new Default.Bool(true);
         }
+
         if (context.FALSE() != null)
         {
             return new Default.Bool(false);
         }
+
         if (context.NOTHING() != null)
         {
             return Default.Nothing.Instance;
         }
+
         if (context.STRING_LITERAL() != null)
         {
             var value = Unquote(context.STRING_LITERAL().GetText());
@@ -798,11 +828,13 @@ public class AstBuilder : BondBaseVisitor<object?>
             var value = double.Parse(context.FLOAT_LITERAL().GetText(), CultureInfo.InvariantCulture);
             return new Default.Float(isNegative ? -value : value);
         }
+
         if (context.INTEGER_LITERAL() != null)
         {
             var value = ParseInteger(context.INTEGER_LITERAL().GetText());
             return new Default.Integer(isNegative ? -value : value);
         }
+
         if (context.identifier() != null)
         {
             var identifier = (string)Visit(context.identifier())!;
@@ -826,79 +858,115 @@ public class AstBuilder : BondBaseVisitor<object?>
         return new Syntax.Attribute(name, value);
     }
 
-    private static string Unquote(string str)
+    private static string Unquote(string literal)
     {
-        if (str.Length >= 2 && str[0] == '"' && str[^1] == '"')
+        if (literal.Length < 2 || literal[0] != '"' || literal[^1] != '"')
         {
-            var value = new StringBuilder();
-            for (var i = 1; i < str.Length - 1; i++)
+            return literal;
+        }
+
+        var value = new StringBuilder();
+        for (var i = 1; i < literal.Length - 1; i++)
+        {
+            if (literal[i] != '\\')
             {
-                if (str[i] != '\\')
-                {
-                    value.Append(str[i]);
-                    continue;
-                }
-                var escape = str[++i];
-                switch (escape)
-                {
-                    case '"': value.Append('"'); break;
-                    case '\'': value.Append('\''); break;
-                    case '\\': value.Append('\\'); break;
-                    case 'n': value.Append('\n'); break;
-                    case 'r': value.Append('\r'); break;
-                    case 't': value.Append('\t'); break;
-                    case 'a': value.Append('\a'); break;
-                    case 'b': value.Append('\b'); break;
-                    case 'f': value.Append('\f'); break;
-                    case 'v': value.Append('\v'); break;
-                    case 'x':
-                    case 'o':
-                        AppendCodePoint(value, ReadEscapedNumber(str, ref i, escape == 'x' ? 16 : 8, i + 1));
-                        break;
-                    case >= '0' and <= '9':
-                        AppendCodePoint(value, ReadEscapedNumber(str, ref i, 10, i));
-                        break;
-                    case '^':
-                        if (i + 1 >= str.Length - 1 || str[i + 1] is < '@' or > '_')
-                            throw new FormatException("Invalid control escape in string literal.");
-                        value.Append((char)(str[++i] - '@'));
-                        break;
-                    case 'u':
-                    case 'U':
+                value.Append(literal[i]);
+                continue;
+            }
+
+            var escape = literal[++i];
+            switch (escape)
+            {
+                case '"':
+                    value.Append('"');
+                    break;
+                case '\'':
+                    value.Append('\'');
+                    break;
+                case '\\':
+                    value.Append('\\');
+                    break;
+                case 'n':
+                    value.Append('\n');
+                    break;
+                case 'r':
+                    value.Append('\r');
+                    break;
+                case 't':
+                    value.Append('\t');
+                    break;
+                case 'a':
+                    value.Append('\a');
+                    break;
+                case 'b':
+                    value.Append('\b');
+                    break;
+                case 'f':
+                    value.Append('\f');
+                    break;
+                case 'v':
+                    value.Append('\v');
+                    break;
+                case 'x':
+                case 'o':
+                    AppendCodePoint(value, ReadEscapedNumber(literal, ref i, escape == 'x' ? 16 : 8, i + 1));
+                    break;
+                case >= '0' and <= '9':
+                    AppendCodePoint(value, ReadEscapedNumber(literal, ref i, 10, i));
+                    break;
+                case '^':
+                    if (i + 1 >= literal.Length - 1 || literal[i + 1] is < '@' or > '_')
+                    {
+                        throw new FormatException("Invalid control escape in string literal.");
+                    }
+
+                    value.Append((char)(literal[++i] - '@'));
+                    break;
+                case 'u':
+                case 'U':
                     {
                         var digits = escape == 'U' ? 8 : 4;
-                        if (i + digits >= str.Length - 1
-                            || !uint.TryParse(str.AsSpan(i + 1, digits), NumberStyles.HexNumber,
+                        if (i + digits >= literal.Length - 1
+                            || !uint.TryParse(literal.AsSpan(i + 1, digits), NumberStyles.HexNumber,
                                 CultureInfo.InvariantCulture, out var codePoint))
+                        {
                             throw new FormatException($"Invalid '\\{escape}' escape in string literal.");
+                        }
+
                         if (escape == 'U')
                         {
                             if (codePoint > 0x10ffff || codePoint is >= 0xd800 and <= 0xdfff)
+                            {
                                 throw new FormatException("Invalid Unicode code point in string literal.");
+                            }
+
                             value.Append(char.ConvertFromUtf32((int)codePoint));
                         }
                         else
                         {
                             value.Append((char)codePoint);
                         }
+
                         i += digits;
                         break;
                     }
-                    default:
+                default:
                     {
-                        var named = NamedEscapes.FirstOrDefault(pair =>
-                            str.AsSpan(i, str.Length - 1 - i).StartsWith(pair.Key, StringComparison.Ordinal));
-                        if (named.Key is null)
+                        var namedEscape = NamedEscapes.FirstOrDefault(pair =>
+                            literal.AsSpan(i, literal.Length - 1 - i).StartsWith(pair.Key, StringComparison.Ordinal));
+                        if (namedEscape.Key is null)
+                        {
                             throw new FormatException($"Unsupported '\\{escape}' escape in string literal.");
-                        value.Append(named.Value);
-                        i += named.Key.Length - 1;
+                        }
+
+                        value.Append(namedEscape.Value);
+                        i += namedEscape.Key.Length - 1;
                         break;
                     }
-                }
             }
-            return value.ToString();
         }
-        return str;
+
+        return value.ToString();
     }
 
     private static readonly KeyValuePair<string, char>[] NamedEscapes =
@@ -927,13 +995,22 @@ public class AstBuilder : BondBaseVisitor<object?>
                 _ => -1
             };
             if (digit < 0 || digit >= numberBase)
+            {
                 break;
+            }
+
             value = value * (uint)numberBase + (uint)digit;
             if (value > 0x10ffff)
+            {
                 throw new FormatException("Invalid Unicode code point in string literal.");
+            }
         }
+
         if (cursor == start)
+        {
             throw new FormatException("An escaped character code in a string literal requires at least one digit.");
+        }
+
         index = cursor - 1;
         return value;
     }
@@ -941,9 +1018,13 @@ public class AstBuilder : BondBaseVisitor<object?>
     private static void AppendCodePoint(StringBuilder value, uint codePoint)
     {
         if (codePoint <= ushort.MaxValue)
+        {
             value.Append((char)codePoint);
+        }
         else
+        {
             value.Append(char.ConvertFromUtf32((int)codePoint));
+        }
     }
 
     private static BigInteger ParseInteger(string str)
@@ -957,11 +1038,9 @@ public class AstBuilder : BondBaseVisitor<object?>
         BigInteger value;
         if (str.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
         {
-            // Parse hex as unsigned by prepending "0" to ensure positive interpretation
+            // HexNumber treats the high bit as a sign bit; a leading zero keeps the magnitude positive.
             var hexDigits = str[2..];
-            // BigInteger.Parse with HexNumber treats high bit as sign bit
-            // Prepend "0" to force positive interpretation
-            value = BigInteger.Parse("0" + hexDigits, System.Globalization.NumberStyles.HexNumber);
+            value = BigInteger.Parse("0" + hexDigits, NumberStyles.HexNumber);
         }
         else if (str.StartsWith("0o", StringComparison.OrdinalIgnoreCase))
         {

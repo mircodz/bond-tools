@@ -8,23 +8,38 @@ namespace Bond.Parser.Compatibility;
 public sealed record CompatibilityOptions
 {
     public bool IncludeImports { get; init; } = true;
+
     public bool AllowUnresolvedTypes { get; init; }
+
     public IReadOnlySet<string>? SuppressedDiagnosticIds { get; init; }
 
     internal void Validate()
     {
-        if (SuppressedDiagnosticIds is null) return;
+        if (SuppressedDiagnosticIds is null)
+        {
+            return;
+        }
+
         foreach (var id in SuppressedDiagnosticIds.OrderBy(id => id, StringComparer.Ordinal))
+        {
             if (id is null || !DiagnosticIds.All.Contains(id))
+            {
                 throw new ArgumentException($"Unknown compatibility diagnostic ID '{id}'.", nameof(SuppressedDiagnosticIds));
+            }
+        }
     }
 }
 
 public sealed record CompatibilityResult(IReadOnlyList<SchemaChange> Changes)
 {
-    public ChangeSeverity MaxSeverity => Changes.Where(c => !c.IsSuppressed)
-        .Select(c => c.Severity).DefaultIfEmpty(ChangeSeverity.Info).Max();
-    public bool HasBreakingChanges => Changes.Any(c => !c.IsSuppressed && c.Severity == ChangeSeverity.Error);
+    public ChangeSeverity MaxSeverity => Changes
+        .Where(change => !change.IsSuppressed)
+        .Select(change => change.Severity)
+        .DefaultIfEmpty(ChangeSeverity.Info)
+        .Max();
+
+    public bool HasBreakingChanges => Changes.Any(change => !change.IsSuppressed && change.Severity == ChangeSeverity.Error);
+
     public int ExitCode => HasBreakingChanges ? 1 : 0;
 }
 

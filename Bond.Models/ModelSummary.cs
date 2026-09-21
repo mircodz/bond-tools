@@ -36,6 +36,7 @@ public static class ModelSummary
         private const int MaxItems = 16;
         private const int MaxStringLength = 160;
         private const int MaxLength = 2048;
+
         private readonly StringBuilder _text = new();
         private readonly HashSet<object> _path = new(ReferenceEqualityComparer.Instance);
 
@@ -49,6 +50,7 @@ public static class ModelSummary
                 _text.Length = MaxLength - 3;
                 _text.Append("...");
             }
+
             return _text.ToString();
         }
 
@@ -60,43 +62,90 @@ public static class ModelSummary
 
         private void Append(char value)
         {
-            if (!Full) _text.Append(value);
+            if (!Full)
+            {
+                _text.Append(value);
+            }
         }
 
         private void Write(object? value, int depth)
         {
-            if (Full) return;
+            if (Full)
+            {
+                return;
+            }
+
             switch (value)
             {
-                case null: Append("null"); return;
-                case string item: Quoted(item, '"'); return;
+                case null:
+                    Append("null");
+                    return;
+                case string item:
+                    Quoted(item, '"');
+                    return;
                 case char item:
                     Append('\'');
                     Escaped(item, '\'');
                     Append('\'');
                     return;
-                case bool item: Append(item ? "true" : "false"); return;
+                case bool item:
+                    Append(item ? "true" : "false");
+                    return;
                 case sbyte or byte or short or ushort or int or uint or long or ulong
                     or Int128 or UInt128 or IntPtr or UIntPtr or decimal:
                     Append(((IFormattable)value).ToString(null, CultureInfo.InvariantCulture));
                     return;
-                case float item: Append(item.ToString("R", CultureInfo.InvariantCulture)); return;
-                case double item: Append(item.ToString("R", CultureInfo.InvariantCulture)); return;
-                case Half item: Append(item.ToString("R", CultureInfo.InvariantCulture)); return;
-                case Enum item: Append(item.ToString("G")); return;
-                case Guid item: Append(item.ToString("D")); return;
-                case DateTime item: Append(item.ToString("O", CultureInfo.InvariantCulture)); return;
-                case DateTimeOffset item: Append(item.ToString("O", CultureInfo.InvariantCulture)); return;
-                case TimeSpan item: Append(item.ToString("c", CultureInfo.InvariantCulture)); return;
-                case DateOnly item: Append(item.ToString("O", CultureInfo.InvariantCulture)); return;
-                case TimeOnly item: Append(item.ToString("O", CultureInfo.InvariantCulture)); return;
-                case Uri item: Quoted(item.OriginalString, '"'); return;
-                case Version item: Append(item.ToString()); return;
-                case byte[] item: Blob(item); return;
-                case ArraySegment<byte> item: Blob(item.AsSpan()); return;
-                case Memory<byte> item: Blob(item.Span); return;
-                case ReadOnlyMemory<byte> item: Blob(item.Span); return;
-                case OpaqueValue item: TypeName(item.Name); return;
+                case float item:
+                    Append(item.ToString("R", CultureInfo.InvariantCulture));
+                    return;
+                case double item:
+                    Append(item.ToString("R", CultureInfo.InvariantCulture));
+                    return;
+                case Half item:
+                    Append(item.ToString("R", CultureInfo.InvariantCulture));
+                    return;
+                case Enum item:
+                    Append(item.ToString("G"));
+                    return;
+                case Guid item:
+                    Append(item.ToString("D"));
+                    return;
+                case DateTime item:
+                    Append(item.ToString("O", CultureInfo.InvariantCulture));
+                    return;
+                case DateTimeOffset item:
+                    Append(item.ToString("O", CultureInfo.InvariantCulture));
+                    return;
+                case TimeSpan item:
+                    Append(item.ToString("c", CultureInfo.InvariantCulture));
+                    return;
+                case DateOnly item:
+                    Append(item.ToString("O", CultureInfo.InvariantCulture));
+                    return;
+                case TimeOnly item:
+                    Append(item.ToString("O", CultureInfo.InvariantCulture));
+                    return;
+                case Uri item:
+                    Quoted(item.OriginalString, '"');
+                    return;
+                case Version item:
+                    Append(item.ToString());
+                    return;
+                case byte[] item:
+                    Blob(item);
+                    return;
+                case ArraySegment<byte> item:
+                    Blob(item.AsSpan());
+                    return;
+                case Memory<byte> item:
+                    Blob(item.Span);
+                    return;
+                case ReadOnlyMemory<byte> item:
+                    Blob(item.Span);
+                    return;
+                case OpaqueValue item:
+                    TypeName(item.Name);
+                    return;
             }
 
             if (value is not IGeneratedSummary && value is not IEnumerable)
@@ -104,11 +153,13 @@ public static class ModelSummary
                 TypeName(value.GetType().Name);
                 return;
             }
+
             if (!_path.Add(value))
             {
                 Append("<cycle>");
                 return;
             }
+
             try
             {
                 if (depth >= MaxDepth)
@@ -116,15 +167,23 @@ public static class ModelSummary
                     Append("...");
                     return;
                 }
+
                 switch (value)
                 {
-                    case IGeneratedSummary model: Model(model, depth); break;
-                    case IDictionary dictionary: Sequence(dictionary, depth, map: true); break;
-                    case IEnumerable sequence: Sequence(sequence, depth, map: false); break;
+                    case IGeneratedSummary model:
+                        Model(model, depth);
+                        break;
+                    case IDictionary dictionary:
+                        Sequence(dictionary, depth, map: true);
+                        break;
+                    case IEnumerable sequence:
+                        Sequence(sequence, depth, map: false);
+                        break;
                 }
             }
             finally
             {
+                // Shared values may appear again outside the current traversal path.
                 _path.Remove(value);
             }
         }
@@ -141,43 +200,74 @@ public static class ModelSummary
         {
             Append(model.SummaryName);
             Append(" {");
-            if (Full) return;
+            if (Full)
+            {
+                return;
+            }
+
             var fields = model.GetSummaryFields();
             var count = Math.Min(fields.Length, MaxItems);
-            var names = new HashSet<string>(StringComparer.Ordinal);
-            var duplicates = new HashSet<string>(StringComparer.Ordinal);
+            var seenNames = new HashSet<string>(StringComparer.Ordinal);
+            var duplicateNames = new HashSet<string>(StringComparer.Ordinal);
             for (var i = 0; i < count; i++)
-                if (!names.Add(fields[i].Name)) duplicates.Add(fields[i].Name);
+            {
+                if (!seenNames.Add(fields[i].Name))
+                {
+                    duplicateNames.Add(fields[i].Name);
+                }
+            }
 
             for (var i = 0; i < count && !Full; i++)
             {
                 var field = fields[i];
                 Append(i == 0 ? " " : ", ");
-                if (duplicates.Contains(field.Name))
+                if (duplicateNames.Contains(field.Name))
                 {
                     Append(field.DeclaringType);
                     Append('.');
                 }
+
                 Append(field.Name);
                 Append(" = ");
                 Write(field.Value, depth + 1);
             }
-            if (fields.Length > count) Append(", ...");
+
+            if (fields.Length > count)
+            {
+                Append(", ...");
+            }
+
             Append(" }");
         }
 
         private void Sequence(IEnumerable sequence, int depth, bool map)
         {
             Append(map ? "{" : "[");
-            if (Full) return;
+            if (Full)
+            {
+                return;
+            }
+
             var iterator = map ? ((IDictionary)sequence).GetEnumerator() : sequence.GetEnumerator();
             var count = 0;
             try
             {
                 while (count < MaxItems && !Full && iterator.MoveNext())
                 {
-                    Append(count == 0 ? map ? " " : "" : ", ");
-                    if (Full) break;
+                    if (count > 0)
+                    {
+                        Append(", ");
+                    }
+                    else if (map)
+                    {
+                        Append(' ');
+                    }
+
+                    if (Full)
+                    {
+                        break;
+                    }
+
                     if (map)
                     {
                         var entry = ((IDictionaryEnumerator)iterator).Entry;
@@ -186,16 +276,24 @@ public static class ModelSummary
                         Write(entry.Value, depth + 1);
                     }
                     else
+                    {
                         Write(iterator.Current, depth + 1);
+                    }
+
                     count++;
                 }
+
+                // Do not probe another item: even an infinite sequence must stop at MaxItems.
                 if (!Full && count == MaxItems && (sequence is not ICollection collection || collection.Count > count))
+                {
                     Append(", ...");
+                }
             }
             finally
             {
                 (iterator as IDisposable)?.Dispose();
             }
+
             Append(map ? " }" : "]");
         }
 
@@ -205,10 +303,19 @@ public static class ModelSummary
             var count = Math.Min(bytes.Length, MaxItems);
             for (var i = 0; i < count && !Full; i++)
             {
-                if (i != 0) Append(", ");
+                if (i != 0)
+                {
+                    Append(", ");
+                }
+
                 Append(bytes[i].ToString("X2", CultureInfo.InvariantCulture));
             }
-            if (bytes.Length > count) Append(", ...");
+
+            if (bytes.Length > count)
+            {
+                Append(", ...");
+            }
+
             Append(']');
         }
 
@@ -217,8 +324,15 @@ public static class ModelSummary
             Append(quote);
             var count = Math.Min(value.Length, MaxStringLength);
             for (var i = 0; i < count && !Full; i++)
+            {
                 Escaped(value[i], quote);
-            if (value.Length > count) Append("...");
+            }
+
+            if (value.Length > count)
+            {
+                Append("...");
+            }
+
             Append(quote);
         }
 
@@ -230,17 +344,36 @@ public static class ModelSummary
                 Append(value);
                 return;
             }
+
             switch (value)
             {
-                case '\\': Append(@"\\"); break;
-                case '\0': Append(@"\0"); break;
-                case '\a': Append(@"\a"); break;
-                case '\b': Append(@"\b"); break;
-                case '\f': Append(@"\f"); break;
-                case '\n': Append(@"\n"); break;
-                case '\r': Append(@"\r"); break;
-                case '\t': Append(@"\t"); break;
-                case '\v': Append(@"\v"); break;
+                case '\\':
+                    Append(@"\\");
+                    break;
+                case '\0':
+                    Append(@"\0");
+                    break;
+                case '\a':
+                    Append(@"\a");
+                    break;
+                case '\b':
+                    Append(@"\b");
+                    break;
+                case '\f':
+                    Append(@"\f");
+                    break;
+                case '\n':
+                    Append(@"\n");
+                    break;
+                case '\r':
+                    Append(@"\r");
+                    break;
+                case '\t':
+                    Append(@"\t");
+                    break;
+                case '\v':
+                    Append(@"\v");
+                    break;
                 default:
                     if (char.IsControl(value) || char.IsSurrogate(value) || value is '\u2028' or '\u2029')
                     {
@@ -248,7 +381,10 @@ public static class ModelSummary
                         Append(((ushort)value).ToString("x4", CultureInfo.InvariantCulture));
                     }
                     else
+                    {
                         Append(value);
+                    }
+
                     break;
             }
         }

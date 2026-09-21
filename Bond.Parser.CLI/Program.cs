@@ -1,8 +1,8 @@
 using System;
 using System.IO;
-using Bond.Parser.Formatting;
-using Bond.Parser.CodeGeneration;
 using System.Threading.Tasks;
+using Bond.Parser.CodeGeneration;
+using Bond.Parser.Formatting;
 
 namespace Bond.Parser.CLI;
 
@@ -15,14 +15,21 @@ public static class Program
             Console.WriteLine(CSharpGenerator.Version);
             return 0;
         }
+
         if (args.Length > 0 && args[0].Equals("generate", StringComparison.OrdinalIgnoreCase))
         {
             return await GenerateCommand.RunAsync(args[1..], Console.Out, Console.Error);
         }
+
         if (args.Length > 0 && args[0].Equals("breaking", StringComparison.OrdinalIgnoreCase))
+        {
             return await BreakingCommand.RunAsync(args[1..], Console.Out, Console.Error);
+        }
+
         if (args.Length > 0 && args[0].Equals("check", StringComparison.OrdinalIgnoreCase))
+        {
             return await CheckCommand.RunAsync(args[1..], Console.Out, Console.Error);
+        }
 
         if (args.Length == 0 || args[0] is "--help" or "-h")
         {
@@ -54,6 +61,7 @@ public static class Program
             ShowHelp();
             return 0;
         }
+
         var filePath = parsed.PositionalOrNull;
         if (filePath is null)
         {
@@ -84,6 +92,7 @@ public static class Program
                     Console.Error.WriteLine($"  in {error.FilePath}");
                 }
             }
+
             return 1;
         }
 
@@ -100,6 +109,7 @@ public static class Program
                 Console.Error.WriteLine($"{filePath} would be reformatted");
                 return 1;
             }
+
             return 0;
         }
 
@@ -118,7 +128,9 @@ public static class Program
         {
             Console.ForegroundColor = ConsoleColor.Red;
         }
+
         Console.Error.WriteLine(message);
+
         if (!Console.IsErrorRedirected)
         {
             Console.ResetColor();
@@ -170,7 +182,10 @@ public static class Program
     {
         private readonly string[] _args;
 
-        public Args(string[] args) { _args = args; }
+        public Args(string[] args)
+        {
+            _args = args;
+        }
 
         public string? PositionalOrNull
         {
@@ -178,8 +193,12 @@ public static class Program
             {
                 for (var i = 0; i < _args.Length; i++)
                 {
-                    if (!_args[i].StartsWith('-')) return _args[i];
+                    if (!_args[i].StartsWith('-'))
+                    {
+                        return _args[i];
+                    }
                 }
+
                 return null;
             }
         }
@@ -190,11 +209,14 @@ public static class Program
             {
                 foreach (var name in names)
                 {
-                    if (arg == name) return true;
+                    if (arg == name)
+                    {
+                        return true;
+                    }
                 }
             }
+
             return false;
         }
-
     }
 }
