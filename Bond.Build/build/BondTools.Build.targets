@@ -1,6 +1,5 @@
 <Project>
   <PropertyGroup>
-    <!-- Import candidates can appear without changing any existing input. -->
     <DisableFastUpToDateCheck>true</DisableFastUpToDateCheck>
   </PropertyGroup>
 

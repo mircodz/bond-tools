@@ -21,6 +21,7 @@
     <PackageReference Include="FluentAssertions" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="Newtonsoft.Json" />
     <PackageReference Include="xunit.v3" />
     <PackageReference Include="xunit.runner.visualstudio">
       <PrivateAssets>all</PrivateAssets>
@@ -39,7 +40,6 @@
     <ProjectReference Include="..\Bond.Parser.CLI\Bond.Parser.CLI.csproj" />
   </ItemGroup>
 
-  <!-- Copy schema fixtures into test output -->
   <ItemGroup>
     <Content Include="Fixtures\**\*.bond">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
