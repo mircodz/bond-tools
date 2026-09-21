@@ -23,13 +23,7 @@ public static class ModelAdapters
 
     /// <summary>Preserves nullable value semantics.</summary>
     public static IModelAdapter<T?> Nullable<T>(IModelAdapter<T> element) where T : struct =>
-        new ModelAdapter<T?>(
-            (value, context) => value.HasValue ? element.Clone(value.Value, context) : null,
-            (left, right, context) => left.HasValue == right.HasValue &&
-                (!left.HasValue || element.Equals(left.Value, right!.Value, context)),
-            (value, context) => !value.HasValue || context.RemainingDepth == 0
-                ? 0
-                : element.GetHashCode(value.Value, context));
+        new NullableAdapter<T>(element);
 
     /// <summary>Clones a vector and compares its elements in order.</summary>
     public static IModelAdapter<List<T>> List<T>(IModelAdapter<T> element) =>
@@ -57,17 +51,42 @@ public static class ModelAdapters
     /// <summary>
     /// Compares and clones actual lazy payload values. Reading a payload crosses into the original runtime,
     /// which may use reflection or deserialize. Each wrapper is materialized at most once per operation.
+    /// Covariant views share cloned payloads but may receive separate typed wrappers.
     /// </summary>
     public static IModelAdapter<TWrapper> Materialized<TWrapper, TValue>(
         Func<TWrapper, TValue> read, Func<TValue, TWrapper> wrap, IModelAdapter<TValue> value)
-        where TWrapper : class => new MaterializedAdapter<TWrapper, TValue>(read, wrap, value);
+        where TWrapper : class =>
+            new MaterializedAdapter<TWrapper, TValue>(read, (payload, _) => wrap(payload), value, defaultBinding: false);
 
-    private sealed class ValueAdapter<T> : IModelAdapter<T>
+    /// <summary>
+    /// Clones lazy payloads and supplies their captured typed operations to the wrapper factory.
+    /// The supplied adapter retains argument bindings, not graph caches, and can be used with fresh contexts.
+    /// The factory must retain the supplied payload and its value semantics, as generated bonded wrappers do.
+    /// </summary>
+    public static IModelAdapter<TWrapper> Materialized<TWrapper, TValue>(
+        Func<TWrapper, TValue> read, Func<TValue, IModelAdapter<TValue>, TWrapper> wrap, IModelAdapter<TValue> value)
+        where TWrapper : class =>
+            new MaterializedAdapter<TWrapper, TValue>(read, wrap, value, defaultBinding: true);
+
+    internal static object? EffectiveSemantics<T>(IModelAdapter<T> adapter, ModelAdapterFrame? arguments)
+    {
+        if (adapter is ValueAdapter<T>)
+        {
+            var selected = ModelOperations.Registered<T>() ?? arguments?.Find<T>();
+            return selected is null || ReferenceEquals(selected, adapter) ? null : ModelAdapterSemantics.For(selected);
+        }
+
+        return ModelAdapterSemantics.For(adapter);
+    }
+
+    private sealed class ValueAdapter<T> : IModelAdapter<T>, IModelAdapterSemantics
     {
         internal static readonly ValueAdapter<T> Instance = new();
+        public object? Semantics => null;
 
         public T Clone(T value, CloneContext context)
         {
+            using var scope = context.Traversal.Enter(null);
             if (value is null)
             {
                 return value;
@@ -75,12 +94,12 @@ public static class ModelAdapters
 
             if (ModelOperations.Registered<T>() is { } adapter)
             {
-                return adapter.Clone(value, context);
+                return ModelAdapterSemantics.Clone(adapter, value, context);
             }
 
             if (context.Adapters?.Find<T>() is { } contextual && !ReferenceEquals(contextual, this))
             {
-                return contextual.Clone(value, context);
+                return ModelAdapterSemantics.Clone(contextual, value, context);
             }
 
             if (value is IGeneratedCloneable model)
@@ -108,6 +127,7 @@ public static class ModelAdapters
 
         public bool Equals(T left, T right, EqualityContext context)
         {
+            using var scope = context.Traversal.Enter(null);
             if (ReferenceEquals(left, right))
             {
                 return true;
@@ -120,12 +140,12 @@ public static class ModelAdapters
 
             if (ModelOperations.Registered<T>() is { } adapter)
             {
-                return adapter.Equals(left, right, context);
+                return ModelAdapterSemantics.Equals(adapter, left, right, context);
             }
 
             if (context.Adapters?.Find<T>() is { } contextual && !ReferenceEquals(contextual, this))
             {
-                return contextual.Equals(left, right, context);
+                return ModelAdapterSemantics.Equals(contextual, left, right, context);
             }
 
             if (left is IGeneratedEquatable model)
@@ -154,6 +174,7 @@ public static class ModelAdapters
 
         public int GetHashCode(T value, HashContext context)
         {
+            using var scope = context.Traversal.Enter(null);
             if (value is null || context.RemainingDepth == 0)
             {
                 return 0;
@@ -161,12 +182,12 @@ public static class ModelAdapters
 
             if (ModelOperations.Registered<T>() is { } adapter)
             {
-                return adapter.GetHashCode(value, context);
+                return ModelAdapterSemantics.Hash(adapter, value, context);
             }
 
             if (context.Adapters?.Find<T>() is { } contextual && !ReferenceEquals(contextual, this))
             {
-                return contextual.GetHashCode(value, context);
+                return ModelAdapterSemantics.Hash(contextual, value, context);
             }
 
             if (value is IGeneratedEquatable model)
@@ -193,9 +214,10 @@ public static class ModelAdapters
         }
     }
 
-    private sealed class ImmutableAdapter<T> : IModelAdapter<T>
+    private sealed class ImmutableAdapter<T> : IModelAdapter<T>, IModelAdapterSemantics
     {
         internal static readonly ImmutableAdapter<T> Instance = new();
+        public object Semantics => typeof(ImmutableAdapter<T>);
 
         public T Clone(T value, CloneContext context) => value;
 
@@ -205,14 +227,35 @@ public static class ModelAdapters
             value is null || context.RemainingDepth == 0 ? 0 : EqualityComparer<T>.Default.GetHashCode(value);
     }
 
+    private sealed class NullableAdapter<T>(IModelAdapter<T> element) : IModelAdapter<T?>, IModelAdapterSemantics
+        where T : struct
+    {
+        public object? Semantics { get; } =
+            ModelAdapterSemantics.Compose(typeof(NullableAdapter<T>), ModelAdapterSemantics.For(element));
+
+        public T? Clone(T? value, CloneContext context) =>
+            value.HasValue ? ModelAdapterSemantics.Clone(element, value.Value, context) : null;
+
+        public bool Equals(T? left, T? right, EqualityContext context) =>
+            left.HasValue == right.HasValue &&
+            (!left.HasValue || ModelAdapterSemantics.Equals(element, left.Value, right!.Value, context));
+
+        public int GetHashCode(T? value, HashContext context) =>
+            !value.HasValue || context.RemainingDepth == 0 ? 0 : ModelAdapterSemantics.Hash(element, value.Value, context);
+    }
+
     private sealed class SequenceAdapter<TCollection, T>(
         IModelAdapter<T> element,
         Func<TCollection, TCollection> create,
         Action<TCollection, T> add,
-        bool unordered) : IModelAdapter<TCollection> where TCollection : class, ICollection<T>
+        bool unordered) : IModelAdapter<TCollection>, IModelAdapterSemantics where TCollection : class, ICollection<T>
     {
+        public object? Semantics { get; } =
+            ModelAdapterSemantics.Compose(typeof(SequenceAdapter<TCollection, T>), ModelAdapterSemantics.For(element));
+
         public TCollection Clone(TCollection value, CloneContext context)
         {
+            using var scope = context.Traversal.Enter(Semantics);
             if (value is null)
             {
                 return null!;
@@ -227,14 +270,16 @@ public static class ModelAdapters
             context.Register(value, clone);
             foreach (var item in value)
             {
-                add(clone, element.Clone(item, context));
+                add(clone, ModelAdapterSemantics.Clone(element, item, context));
             }
 
             return clone;
         }
 
-        public bool Equals(TCollection left, TCollection right, EqualityContext context) =>
-            context.CompareReferences(left, right, () =>
+        public bool Equals(TCollection left, TCollection right, EqualityContext context)
+        {
+            using var scope = context.Traversal.Enter(Semantics);
+            return context.CompareReferences(left, right, () =>
             {
                 if (left.Count != right.Count)
                 {
@@ -243,14 +288,16 @@ public static class ModelAdapters
 
                 if (unordered)
                 {
-                    return UnorderedEquals(left, right, context, element.Equals);
+                    return UnorderedEquals(left, right, context,
+                        (a, b, branch) => ModelAdapterSemantics.Equals(element, a, b, branch));
                 }
 
                 using var leftItems = left.GetEnumerator();
                 using var rightItems = right.GetEnumerator();
                 while (leftItems.MoveNext())
                 {
-                    if (!rightItems.MoveNext() || !element.Equals(leftItems.Current, rightItems.Current, context))
+                    if (!rightItems.MoveNext() ||
+                        !ModelAdapterSemantics.Equals(element, leftItems.Current, rightItems.Current, context))
                     {
                         return false;
                     }
@@ -258,9 +305,11 @@ public static class ModelAdapters
 
                 return !rightItems.MoveNext();
             });
+        }
 
         public int GetHashCode(TCollection value, HashContext context)
         {
+            using var scope = context.Traversal.Enter(Semantics);
             if (value is null || context.RemainingDepth == 0)
             {
                 return 0;
@@ -272,7 +321,7 @@ public static class ModelAdapters
                 var child = context.Descend();
                 foreach (var item in value)
                 {
-                    var itemHash = element.GetHashCode(item, child);
+                    var itemHash = ModelAdapterSemantics.Hash(element, item, child);
                     hash = unordered ? unchecked(hash + itemHash) : HashContext.Combine(hash, itemHash);
                 }
 
@@ -282,10 +331,14 @@ public static class ModelAdapters
     }
 
     private sealed class MapAdapter<TKey, TValue>(IModelAdapter<TKey> key, IModelAdapter<TValue> value)
-        : IModelAdapter<Dictionary<TKey, TValue>> where TKey : notnull
+        : IModelAdapter<Dictionary<TKey, TValue>>, IModelAdapterSemantics where TKey : notnull
     {
+        public object? Semantics { get; } = ModelAdapterSemantics.Compose(typeof(MapAdapter<TKey, TValue>),
+            ModelAdapterSemantics.For(key), ModelAdapterSemantics.For(value));
+
         public Dictionary<TKey, TValue> Clone(Dictionary<TKey, TValue> source, CloneContext context)
         {
+            using var scope = context.Traversal.Enter(Semantics);
             if (source is null)
             {
                 return null!;
@@ -300,14 +353,17 @@ public static class ModelAdapters
             context.Register(source, clone);
             foreach (var item in source)
             {
-                clone.Add(key.Clone(item.Key, context), value.Clone(item.Value, context));
+                clone.Add(ModelAdapterSemantics.Clone(key, item.Key, context),
+                    ModelAdapterSemantics.Clone(value, item.Value, context));
             }
 
             return clone;
         }
 
-        public bool Equals(Dictionary<TKey, TValue> left, Dictionary<TKey, TValue> right, EqualityContext context) =>
-            context.CompareReferences(left, right, () =>
+        public bool Equals(Dictionary<TKey, TValue> left, Dictionary<TKey, TValue> right, EqualityContext context)
+        {
+            using var scope = context.Traversal.Enter(Semantics);
+            return context.CompareReferences(left, right, () =>
             {
                 if (left.Count != right.Count)
                 {
@@ -315,12 +371,14 @@ public static class ModelAdapters
                 }
 
                 return UnorderedEquals(left, right, context, (leftEntry, rightEntry, branch) =>
-                    key.Equals(leftEntry.Key, rightEntry.Key, branch) &&
-                    value.Equals(leftEntry.Value, rightEntry.Value, branch));
+                    ModelAdapterSemantics.Equals(key, leftEntry.Key, rightEntry.Key, branch) &&
+                    ModelAdapterSemantics.Equals(value, leftEntry.Value, rightEntry.Value, branch));
             });
+        }
 
         public int GetHashCode(Dictionary<TKey, TValue> source, HashContext context)
         {
+            using var scope = context.Traversal.Enter(Semantics);
             if (source is null || context.RemainingDepth == 0)
             {
                 return 0;
@@ -333,7 +391,7 @@ public static class ModelAdapters
                 foreach (var item in source)
                 {
                     var entryHash = HashContext.Combine(
-                        key.GetHashCode(item.Key, child), value.GetHashCode(item.Value, child));
+                        ModelAdapterSemantics.Hash(key, item.Key, child), ModelAdapterSemantics.Hash(value, item.Value, child));
                     hash = unchecked(hash + entryHash);
                 }
 
@@ -342,10 +400,13 @@ public static class ModelAdapters
         }
     }
 
-    private sealed class ByteArrayAdapter : IModelAdapter<byte[]>
+    private sealed class ByteArrayAdapter : IModelAdapter<byte[]>, IModelAdapterSemantics
     {
+        public object? Semantics => null;
+
         public byte[] Clone(byte[] value, CloneContext context)
         {
+            using var scope = context.Traversal.Enter(null);
             if (value is null)
             {
                 return null!;
@@ -368,8 +429,10 @@ public static class ModelAdapters
             value is null ? 0 : Blob.GetHashCode(new ArraySegment<byte>(value), context);
     }
 
-    private sealed class BlobAdapter : IModelAdapter<ArraySegment<byte>>
+    private sealed class BlobAdapter : IModelAdapter<ArraySegment<byte>>, IModelAdapterSemantics
     {
+        public object? Semantics => null;
+
         public ArraySegment<byte> Clone(ArraySegment<byte> value, CloneContext context)
         {
             if (value.Array is null)
@@ -377,12 +440,7 @@ public static class ModelAdapters
                 return default;
             }
 
-            if (!context.TryGetClone<byte[]>(value.Array, out var copy))
-            {
-                copy = (byte[])value.Array.Clone();
-                context.Register(value.Array, copy);
-            }
-
+            var copy = ByteArray.Clone(value.Array, context);
             return new(copy, value.Offset, value.Count);
         }
 
@@ -407,22 +465,34 @@ public static class ModelAdapters
     }
 
     private sealed class MaterializedAdapter<TWrapper, TValue>(
-        Func<TWrapper, TValue> read, Func<TValue, TWrapper> wrap, IModelAdapter<TValue> value)
-        : IModelAdapter<TWrapper> where TWrapper : class
+        Func<TWrapper, TValue> read, Func<TValue, IModelAdapter<TValue>, TWrapper> wrap,
+        IModelAdapter<TValue> value, bool defaultBinding)
+        : IModelAdapter<TWrapper>, IModelAdapterSemantics where TWrapper : class
     {
-        public TWrapper Clone(TWrapper source, CloneContext context) =>
-            context.CloneMaterialized(source, read, wrap, value);
+        public object Semantics { get; } =
+            ModelAdapterSemantics.Projection(
+                typeof(MaterializedAdapter<TWrapper, TValue>), ModelAdapterSemantics.For(value), defaultBinding);
 
-        public bool Equals(TWrapper left, TWrapper right, EqualityContext context) =>
-            context.CompareReferences(left, right, () =>
+        public TWrapper Clone(TWrapper source, CloneContext context)
+        {
+            using var scope = context.Traversal.Enter(SemanticsFor(context.Adapters));
+            return context.CloneMaterialized(source, read, wrap, value);
+        }
+
+        public bool Equals(TWrapper left, TWrapper right, EqualityContext context)
+        {
+            using var scope = context.Traversal.Enter(SemanticsFor(context.Adapters));
+            return context.CompareReferences(left, right, () =>
             {
                 var leftPayload = context.Materialize(left, () => read(left));
                 var rightPayload = context.Materialize(right, () => read(right));
-                return value.Equals(leftPayload, rightPayload, context);
+                return ModelAdapterSemantics.Equals(value, leftPayload, rightPayload, context);
             });
+        }
 
         public int GetHashCode(TWrapper source, HashContext context)
         {
+            using var scope = context.Traversal.Enter(SemanticsFor(context.Adapters));
             if (source is null || context.RemainingDepth == 0)
             {
                 return 0;
@@ -431,9 +501,13 @@ public static class ModelAdapters
             return context.HashReference(source, () =>
             {
                 var payload = context.Materialize(source, () => read(source));
-                return value.GetHashCode(payload, context.Descend());
+                return ModelAdapterSemantics.Hash(value, payload, context.Descend());
             });
         }
+
+        private object SemanticsFor(ModelAdapterFrame? arguments) =>
+            ModelAdapterSemantics.Projection(
+                typeof(MaterializedAdapter<TWrapper, TValue>), EffectiveSemantics(value, arguments), defaultBinding);
     }
 
     private static bool UnorderedEquals<T>(

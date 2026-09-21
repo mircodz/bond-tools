@@ -157,7 +157,7 @@ public static class TypeResolver
 
         private BondType ResolveName(BondType.UnresolvedType type, Declaration owner, SourceLocation location)
         {
-            var declaration = FindSymbol(type.QualifiedName, owner);
+            var declaration = FindSymbol(type.QualifiedName, owner, location);
             if (declaration is null)
             {
                 if (type.TypeArguments.Length == 0 && TryResolvePrimitive(type.QualifiedName, out var primitive))
@@ -171,11 +171,41 @@ public static class TypeResolver
             return ResolveReference(declaration, type.TypeArguments, owner, location);
         }
 
-        private Declaration? FindSymbol(string[] name, Declaration owner)
+        private Declaration? FindSymbol(string[] name, Declaration owner, SourceLocation? location = null)
         {
             var localAliases = symbols.GetAliases(owner);
-            return symbols.FindSymbol(name, owner.Namespaces, localAliases ?? aliases);
+            return symbols.FindSymbol(name, owner.Namespaces, localAliases ?? aliases, location ?? owner.Location, EquivalentAliases);
         }
+
+        private bool EquivalentAliases(AliasDeclaration left, AliasDeclaration right)
+        {
+            if (!SymbolTable.ParametersMatch(left.TypeParameters, right.TypeParameters))
+            {
+                return false;
+            }
+
+            var resolvedLeft = (AliasDeclaration)ResolveDeclaration(left);
+            var resolvedRight = (AliasDeclaration)ResolveDeclaration(right);
+            var parameters = left.TypeParameters.Select(parameter => (BondType)new BondType.TypeParameter(parameter)).ToArray();
+            var rightType = resolvedRight.AliasedType.SubstituteTypeParameters(right.TypeParameters, parameters);
+            return ExpandAliasTypes(resolvedLeft.AliasedType) == ExpandAliasTypes(rightType);
+        }
+
+        private static BondType ExpandAliasTypes(BondType type) => type.ResolveAliases() switch
+        {
+            BondType.List list => new BondType.List(ExpandAliasTypes(list.ElementType)),
+            BondType.Vector vector => new BondType.Vector(ExpandAliasTypes(vector.ElementType)),
+            BondType.Set set => new BondType.Set(ExpandAliasTypes(set.KeyType)),
+            BondType.Map map => new BondType.Map(ExpandAliasTypes(map.KeyType), ExpandAliasTypes(map.ValueType)),
+            BondType.Nullable nullable => new BondType.Nullable(ExpandAliasTypes(nullable.ElementType)),
+            BondType.Maybe maybe => new BondType.Maybe(ExpandAliasTypes(maybe.ElementType)),
+            BondType.Bonded bonded => new BondType.Bonded(ExpandAliasTypes(bonded.StructType)),
+            BondType.TypeReference reference => reference with
+            {
+                TypeArguments = reference.TypeArguments.Select(ExpandAliasTypes).ToArray()
+            },
+            var expanded => expanded
+        };
 
         private BondType ResolveReference(
             Declaration declaration,

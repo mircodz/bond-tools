@@ -24,3 +24,5 @@ Requires `Bond.Runtime.CSharp`; the optional flags also require a matching
 See `bond generate csharp --help` for imports and mappings.
 
 For automatic `.csproj` generation, use [`BondTools.Build`](Bond.Build/README.md).
+
+Development: .NET 8 and 10 SDKs; `make test` or `make coverage`.

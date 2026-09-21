@@ -1,6 +1,8 @@
 using System;
+using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Threading;
 using Microsoft.Build.Framework;
 using Microsoft.Build.Utilities;
@@ -47,8 +49,8 @@ public sealed class GenerateBond : Task, ICancelableTask
                 return false;
             }
 
-            GeneratedFiles = result.GeneratedFiles.Select(path => (ITaskItem)new TaskItem(path)).ToArray();
-            WrittenFiles = result.WrittenFiles.Select(path => (ITaskItem)new TaskItem(path)).ToArray();
+            GeneratedFiles = result.GeneratedFiles.Select(CreateOutputItem).ToArray();
+            WrittenFiles = result.WrittenFiles.Select(CreateOutputItem).ToArray();
             Log.LogMessage(MessageImportance.High, "{0}", result.Status);
             return true;
         }
@@ -63,6 +65,27 @@ public sealed class GenerateBond : Task, ICancelableTask
             Log.LogError(null, "BOND1001", null, ProjectFile, 0, 0, 0, 0, "{0}", error.Message);
             return false;
         }
+    }
+
+    private static ITaskItem CreateOutputItem(string path)
+    {
+        // TaskItem expects an MSBuild-escaped include, not a literal filesystem path.
+        var escaped = new StringBuilder(path.Length);
+        foreach (var character in path)
+        {
+            switch (character)
+            {
+                case '%' or '*' or '?' or '@' or '$' or '(' or ')' or ';' or '\'':
+                    escaped.Append('%');
+                    escaped.Append(((int)character).ToString("X2", CultureInfo.InvariantCulture));
+                    break;
+                default:
+                    escaped.Append(character);
+                    break;
+            }
+        }
+
+        return new TaskItem(escaped.ToString());
     }
 
     public void Cancel() => _cancellation.Cancel();

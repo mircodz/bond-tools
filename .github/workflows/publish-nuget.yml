@@ -45,7 +45,9 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 8.0.x
+          dotnet-version: |
+            8.0.x
+            10.0.x
 
       - name: Restore
         run: dotnet restore
@@ -53,7 +55,7 @@ jobs:
       - name: Build and test
         run: |
           dotnet build Bond.sln -c Release --no-restore
-          dotnet test Bond.Parser.Tests/Bond.Parser.Tests.csproj -c Release --no-build --no-restore
+          dotnet test --project Bond.Parser.Tests/Bond.Parser.Tests.csproj -c Release --no-build --no-restore
 
       - name: Pack
         run: dotnet pack Bond.sln -c Release --no-build --no-restore /p:Version="$VERSION"

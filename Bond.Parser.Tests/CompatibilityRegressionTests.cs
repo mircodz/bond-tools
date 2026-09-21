@@ -378,6 +378,245 @@ public class CompatibilityRegressionTests
         _checker.Compare(old, changed).Changes.Should().ContainSingle(c => c.Id == DiagnosticIds.TextName && c.Category == ChangeCategory.BreakingText);
     }
 
+    [Theory]
+    [InlineData("int32", "string")]
+    [InlineData("vector<int32>", "list<string>")]
+    [InlineData("map<string, int32>", "map<string, string>")]
+    [InlineData("nullable<int32>", "nullable<string>")]
+    [InlineData("blob", "vector<string>")]
+    public async Task ChangedOrdinalsStillCheckSimpleJsonPayloadTypes(string before, string after)
+    {
+        var old = await Parse($"namespace Test struct Record {{ 0: {before} value; }}");
+        var current = await Parse($"namespace Test struct Record {{ 1: {after} value; }}");
+        var result = _checker.Compare(old, current);
+
+        result.ExitCode.Should().Be(1);
+        result.Changes.Should().HaveCount(3);
+        result.Changes.Should().ContainSingle(c => c.Id == DiagnosticIds.FieldType
+            && c.Category == ChangeCategory.BreakingText && c.Severity == ChangeSeverity.Error
+            && c.Location == "Test.Record.value");
+        result.Changes.Should().Contain(c => c.Id == DiagnosticIds.FieldRemoved && c.Category == ChangeCategory.Compatible);
+        result.Changes.Should().Contain(c => c.Id == DiagnosticIds.OptionalFieldAdded && c.Category == ChangeCategory.Compatible);
+    }
+
+    [Theory]
+    [InlineData("int32", "int32")]
+    [InlineData("int8", "int64")]
+    [InlineData("string", "wstring")]
+    [InlineData("vector<int8>", "set<int16>")]
+    [InlineData("blob", "list<int16>")]
+    [InlineData("State", "int64")]
+    public async Task ChangedOrdinalsWithCompatibleJsonPayloadsStayCompatible(string before, string after)
+    {
+        const string prefix = "namespace Test enum State { A = 0 } ";
+        var oldDefault = before == "State" ? " = A" : "";
+        var old = await Parse(prefix + $"struct Record {{ 0: {before} value{oldDefault}; }}");
+        var current = await Parse(prefix + $"struct Record {{ 1: {after} value; }}");
+
+        _checker.Compare(old, current).HasBreakingChanges.Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData("1: string renamed;", false)]
+    [InlineData("1: string Value;", false)]
+    [InlineData("[JsonName(\"value\")] 1: string renamed;", true)]
+    [InlineData("[JsonName(\"value\")] 1: int32 renamed;", false)]
+    [InlineData("[JsonName(\"other\")] 1: string value;", false)]
+    public async Task ChangedOrdinalsMatchJsonNameRatherThanSourceName(string field, bool breaking)
+    {
+        var old = await Parse("namespace Test struct Record { 0: int32 value; }");
+        var current = await Parse($"namespace Test struct Record {{ {field} }}");
+        var result = _checker.Compare(old, current);
+
+        result.HasBreakingChanges.Should().Be(breaking);
+        result.Changes.Count(c => c.Category == ChangeCategory.BreakingText).Should().Be(breaking ? 1 : 0);
+    }
+
+    [Theory]
+    [InlineData("Old<int32>", "New<string>", true)]
+    [InlineData("Old<int32>", "New<int32>", false)]
+    [InlineData("Box<int32>", "Box<string>", true)]
+    [InlineData("Wrapped<int32>", "Wrapped<string>", true)]
+    [InlineData("bonded<Old<int32>>", "New<string>", true)]
+    [InlineData("Node<int32>", "Node<string>", true)]
+    public async Task ChangedOrdinalJsonChecksExpandNestedGenericAndAliasPayloads(string before, string after, bool breaking)
+    {
+        const string prefix = """
+            namespace Test
+            struct Old<T> { 0: T member; }
+            struct New<T> { 1: T member; }
+            struct Box<T> { 0: T member; }
+            struct Node<T> { 0: nullable<Node<T>> next; 1: T member; }
+            using Wrapped<T> = map<string, vector<T>>;
+            """;
+        var old = await Parse(prefix + $"struct Record {{ 0: {before} value; }}");
+        var current = await Parse(prefix + $"struct Record {{ 1: {after} value; }}");
+        var result = _checker.Compare(old, current);
+
+        result.HasBreakingChanges.Should().Be(breaking);
+        if (breaking)
+        {
+            result.Changes.Should().ContainSingle(c => c.Severity == ChangeSeverity.Error
+                && c.Id == DiagnosticIds.FieldType && c.Category == ChangeCategory.BreakingText);
+        }
+    }
+
+    [Fact]
+    public async Task ChangedGenericJsonMappingsAreCheckedAtConcreteNestedUses()
+    {
+        const string schema = """
+            namespace Test
+            struct Box<T, U> { 0: T value; }
+            struct Wrapper<V> { 0: Box<V, string> box; }
+            struct Record { 0: Wrapper<int32> wrapped; }
+            """;
+        var old = await Parse(schema);
+        var current = await Parse(schema.Replace("0: T value;", "1: U value;"));
+
+        _checker.Compare(old, current).Changes.Should().ContainSingle(c => c.Severity == ChangeSeverity.Error
+            && c.Id == DiagnosticIds.FieldType && c.Category == ChangeCategory.BreakingText
+            && c.Location == "Test.Record.wrapped.box.value");
+    }
+
+    [Theory]
+    [InlineData("0: int32 value;", "", "", "0: string value;")]
+    [InlineData("", "0: int32 value;", "0: string value;", "")]
+    [InlineData("[JsonName(\"key\")] 0: int32 value;", "", "", "[JsonName(\"key\")] 0: string renamed;")]
+    public async Task SimpleJsonMatchesFieldsAcrossInheritanceLevels(string oldBase, string oldFields, string newBase, string newFields)
+    {
+        var old = await Parse($"namespace Test struct Base {{ {oldBase} }} struct Record : Base {{ {oldFields} }}");
+        var current = await Parse($"namespace Test struct Base {{ {newBase} }} struct Record : Base {{ {newFields} }}");
+
+        _checker.Compare(old, current).Changes.Should().ContainSingle(c => c.Severity == ChangeSeverity.Error
+            && c.Id == DiagnosticIds.FieldType && c.Category == ChangeCategory.BreakingText);
+    }
+
+    [Theory]
+    [InlineData("int32", false)]
+    [InlineData("string", true)]
+    public async Task AddedDerivedJsonNamesAlsoMatchInheritedFields(string type, bool breaking)
+    {
+        const string prefix = "namespace Test struct Base { 0: int32 value; } ";
+        var old = await Parse(prefix + "struct Record : Base {}");
+        var current = await Parse(prefix + $"struct Record : Base {{ [JsonName(\"value\")] 0: {type} added; }}");
+
+        _checker.Compare(old, current).HasBreakingChanges.Should().Be(breaking);
+        _checker.Compare(current, old).HasBreakingChanges.Should().Be(breaking);
+    }
+
+    [Theory]
+    [InlineData("int32", false)]
+    [InlineData("string", true)]
+    public async Task ShadowedGenericJsonWritersAreCheckedAtConcreteUses(string type, bool breaking)
+    {
+        var schema = $$"""
+            namespace Test
+            struct Base<T> { 0: T value; }
+            struct Derived<T, U> : Base<T> {}
+            struct Record { 0: Derived<int32, {{type}}> item; }
+            """;
+        var old = await Parse(schema);
+        var current = await Parse(schema.Replace("Base<T> {}", "Base<T> { [JsonName(\"value\")] 1: U extra; }"));
+
+        foreach (var (previous, next) in new[] { (old, current), (current, old) })
+        {
+            var result = _checker.Compare(previous, next);
+            result.HasBreakingChanges.Should().Be(breaking);
+            if (breaking)
+            {
+                result.Changes.Should().ContainSingle(c => c.Severity == ChangeSeverity.Error
+                    && c.Id == DiagnosticIds.FieldType && c.Category == ChangeCategory.BreakingText
+                    && c.Location.StartsWith("Test.Record.item.", StringComparison.Ordinal));
+            }
+        }
+    }
+
+    [Theory]
+    [InlineData("int32", false)]
+    [InlineData("string", true)]
+    public async Task ChangedOrdinalPayloadsCheckInheritedJsonNameCollisions(string type, bool breaking)
+    {
+        var prefix = $$"""
+            namespace Test
+            struct Base { 0: int32 value; }
+            struct Old : Base {}
+            struct New : Base { [JsonName("value")] 0: {{type}} added; }
+            """;
+        var old = await Parse(prefix + "struct Record { 0: Old payload; }");
+        var current = await Parse(prefix + "struct Record { 1: New payload; }");
+
+        _checker.Compare(old, current).HasBreakingChanges.Should().Be(breaking);
+    }
+
+    [Fact]
+    public async Task UnchangedShadowedJsonNamesDoNotCreateDiagnostics()
+    {
+        const string schema = """
+            namespace Test
+            struct Base { 0: int32 value; }
+            struct Record : Base { [JsonName("value")] 0: string shadowed; }
+            """;
+        var old = await Parse(schema);
+        var current = await Parse(schema);
+
+        _checker.Compare(old, current).Changes.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task InheritedJsonTypeChangesAreReportedOnlyAtTheDefinition()
+    {
+        const string schema = """
+            namespace Before
+            struct Base { 0: int32 value; }
+            struct Derived : Base {}
+            struct Record { 0: Derived first; 1: vector<Derived> second; }
+            """;
+        var old = await Parse(schema);
+        var current = await Parse(schema.Replace("Before", "After").Replace("0: int32 value;", "1: string value;"));
+
+        _checker.Compare(old, current).Changes.Should().ContainSingle(c => c.Severity == ChangeSeverity.Error
+            && c.Id == DiagnosticIds.FieldType && c.Category == ChangeCategory.BreakingText
+            && c.Location == "Before.Base.value");
+    }
+
+    [Fact]
+    public async Task InheritedGenericJsonMappingsUseConcreteBaseArguments()
+    {
+        const string schema = "namespace Test struct Base<T> { 0: T value; } struct Record : Base<int32> {}";
+        var old = await Parse(schema);
+        var current = await Parse(schema.Replace("0: T value;", "1: string value;"));
+
+        _checker.Compare(old, current).Changes.Should().ContainSingle(c => c.Severity == ChangeSeverity.Error
+            && c.Id == DiagnosticIds.FieldType && c.Category == ChangeCategory.BreakingText
+            && c.Location == "Test.Record.base.value");
+    }
+
+    [Fact]
+    public async Task SameOrdinalTypeChangesDoNotDuplicateJsonDiagnostics()
+    {
+        var old = await Parse("namespace Test struct Record { 0: int32 value; }");
+        var current = await Parse("namespace Test struct Record { 0: string value; }");
+
+        _checker.Compare(old, current).Changes.Should().ContainSingle(c =>
+            c.Id == DiagnosticIds.FieldType && c.Category == ChangeCategory.BreakingWire);
+    }
+
+    [Fact]
+    public async Task JsonTypeCollisionDiagnosticsRemainSuppressible()
+    {
+        var old = await Parse("namespace Test struct Record { 0: int32 value; }");
+        var current = await Parse("namespace Test struct Record { 1: string value; }");
+        var result = _checker.Compare(old, current, new CompatibilityOptions
+        {
+            SuppressedDiagnosticIds = new HashSet<string> { DiagnosticIds.FieldType }
+        });
+
+        result.ExitCode.Should().Be(0);
+        result.Changes.Should().HaveCount(3);
+        result.Changes.Should().ContainSingle(c => c.IsSuppressed
+            && c.Id == DiagnosticIds.FieldType && c.Category == ChangeCategory.BreakingText);
+    }
+
     [Fact]
     public async Task XmlAndCustomAttributesAreIgnored()
     {
@@ -658,6 +897,42 @@ public class CompatibilityRegressionTests
         _checker.Compare(old, current).Changes.Should().Contain(c => c.Id == DiagnosticIds.EnumTypeSemantics && c.Severity == ChangeSeverity.Warning);
     }
 
+    [Theory]
+    [InlineData("State", "int64")]
+    [InlineData("vector<State>", "list<int64>")]
+    [InlineData("map<State, vector<State>>", "map<int64, list<int64>>")]
+    [InlineData("Value<State>", "Value<int64>")]
+    public async Task EnumToInt64WideningPreservesPromotionAndSemanticWarnings(string before, string after)
+    {
+        const string prefix = "namespace Test enum State { A = 0 } using Value<T> = T; ";
+        var old = await Parse(prefix + $"struct Record {{ 0: required {before} value; }}");
+        var current = await Parse(prefix + $"struct Record {{ 0: required {after} value; }}");
+        var result = _checker.Compare(old, current);
+
+        result.HasBreakingChanges.Should().BeFalse();
+        result.Changes.Should().HaveCount(2).And.OnlyContain(c =>
+            c.Category == ChangeCategory.Compatible && c.Severity == ChangeSeverity.Warning);
+        result.Changes.Should().ContainSingle(c => c.Id == DiagnosticIds.FieldType
+            && c.Recommendation!.Contains("consumers before producers"));
+        result.Changes.Should().ContainSingle(c => c.Id == DiagnosticIds.EnumTypeSemantics);
+    }
+
+    [Theory]
+    [InlineData("int64", "State")]
+    [InlineData("State", "int16")]
+    [InlineData("State", "uint64")]
+    [InlineData("uint32", "State")]
+    [InlineData("vector<int64>", "vector<State>")]
+    public async Task EnumNarrowingAndUnsignedConversionsRemainBreaking(string before, string after)
+    {
+        const string prefix = "namespace Test enum State { A = 0 } ";
+        var old = await Parse(prefix + $"struct Record {{ 0: required {before} value; }}");
+        var current = await Parse(prefix + $"struct Record {{ 0: required {after} value; }}");
+
+        _checker.Compare(old, current).Changes.Should().ContainSingle(c =>
+            c.Id == DiagnosticIds.FieldType && c.Category == ChangeCategory.BreakingWire && c.Severity == ChangeSeverity.Error);
+    }
+
     [Fact]
     public void EnumExplicitHighHexIsInt32Normalized_ButImplicitOverflowIsInvalid()
     {
@@ -743,6 +1018,71 @@ public class CompatibilityRegressionTests
         _checker.Compare(old, current).HasBreakingChanges.Should().BeFalse();
         _checker.Compare(old, current).Changes.Should().ContainSingle(change =>
             change.Id == DiagnosticIds.FieldType && change.Category == ChangeCategory.Compatible);
+    }
+
+    [Theory]
+    [InlineData("blob", "list<int16>")]
+    [InlineData("blob", "vector<int32>")]
+    [InlineData("blob", "list<int64>")]
+    [InlineData("map<string, blob>", "map<string, vector<int16>>")]
+    [InlineData("vector<blob>", "list<vector<int16>>")]
+    [InlineData("Bytes", "Values<int16>")]
+    public async Task BlobElementsUseRecursiveSignedPromotions(string before, string after)
+    {
+        const string prefix = "namespace Test using Bytes = blob; using Values<T> = vector<T>; ";
+        var old = await Parse(prefix + $"struct Record {{ 0: required {before} value; }}");
+        var current = await Parse(prefix + $"struct Record {{ 0: required {after} value; }}");
+        var result = _checker.Compare(old, current);
+
+        result.HasBreakingChanges.Should().BeFalse();
+        result.Changes.Should().ContainSingle(c => c.Id == DiagnosticIds.FieldType
+            && c.Category == ChangeCategory.Compatible && c.Severity == ChangeSeverity.Warning
+            && c.Recommendation!.Contains("consumers before producers"));
+    }
+
+    [Theory]
+    [InlineData("blob", "list<int8>")]
+    [InlineData("blob", "vector<int8>")]
+    [InlineData("list<int8>", "blob")]
+    [InlineData("vector<int8>", "blob")]
+    [InlineData("map<string, vector<int8>>", "map<string, blob>")]
+    public async Task BlobAndSignedByteSequencesAreRepresentationEquivalent(string before, string after)
+    {
+        var old = await Parse($"namespace Test struct Record {{ 0: required {before} value; }}");
+        var current = await Parse($"namespace Test struct Record {{ 0: required {after} value; }}");
+
+        _checker.Compare(old, current).Changes.Should().ContainSingle(c => c.Id == DiagnosticIds.FieldType
+            && c.Category == ChangeCategory.Compatible && c.Severity == ChangeSeverity.Info);
+    }
+
+    [Theory]
+    [InlineData("list<int16>", "blob")]
+    [InlineData("vector<int64>", "blob")]
+    [InlineData("blob", "list<uint8>")]
+    [InlineData("blob", "vector<uint16>")]
+    [InlineData("vector<uint8>", "blob")]
+    [InlineData("blob", "set<int16>")]
+    [InlineData("blob", "string")]
+    public async Task BlobNarrowingUnsignedAndNonListConversionsRemainBreaking(string before, string after)
+    {
+        var old = await Parse($"namespace Test struct Record {{ 0: required {before} value; }}");
+        var current = await Parse($"namespace Test struct Record {{ 0: required {after} value; }}");
+
+        _checker.Compare(old, current).Changes.Should().ContainSingle(c => c.Id == DiagnosticIds.FieldType
+            && c.Category == ChangeCategory.BreakingWire && c.Severity == ChangeSeverity.Error);
+    }
+
+    [Fact]
+    public async Task BlobToEnumSequencePreservesBothPromotionWarnings()
+    {
+        var old = await Parse("namespace Test enum State { A = 0 } struct Record { 0: required blob value; }");
+        var current = await Parse("namespace Test enum State { A = 0 } struct Record { 0: required list<State> value; }");
+        var result = _checker.Compare(old, current);
+
+        result.HasBreakingChanges.Should().BeFalse();
+        result.Changes.Should().HaveCount(2).And.OnlyContain(c => c.Severity == ChangeSeverity.Warning);
+        result.Changes.Should().ContainSingle(c => c.Id == DiagnosticIds.FieldType);
+        result.Changes.Should().ContainSingle(c => c.Id == DiagnosticIds.EnumTypeSemantics);
     }
 
     [Theory]

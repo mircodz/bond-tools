@@ -203,6 +203,54 @@ public sealed class MsBuildGenerationTests(MsBuildPackageFixture packages) : ICl
         Assert.Equal("not owned by the generator", File.ReadAllText(unrelated));
     }
 
+    [Theory]
+    [InlineData("order%20v1.bond")]
+    [InlineData("order%3Bv1.bond")]
+    [InlineData("order%25v1.bond")]
+    [InlineData("order;v1.bond")]
+    [InlineData("order$(Name);@('item').bond")]
+    public async Task GeneratedPathsPreserveLiteralMsBuildCharacters(string filename)
+    {
+        var project = packages.CreateConsumer();
+        project.Write(filename, "namespace Contracts struct Item { 0: int32 id; }");
+        project.Configure(new XElement("Bond", new XAttribute("Include", "*.bond")));
+
+        (await project.Build()).AssertSuccess();
+        var output = Assert.Single(project.GeneratedFiles());
+        Assert.Equal(Path.GetFileNameWithoutExtension(filename) + ".g.cs", Path.GetFileName(output));
+
+        var unchanged = await project.Build();
+        unchanged.AssertSuccess();
+        Assert.Contains("up-to-date", unchanged.Output, StringComparison.OrdinalIgnoreCase);
+
+        (await project.Command("clean", project.ProjectFile, "-c", "Debug", "--nologo", "--verbosity", "minimal")).AssertSuccess();
+        Assert.False(File.Exists(output));
+    }
+
+    [Fact]
+    public async Task PackagedTaskLoadsInDotNet8SdkHost()
+    {
+        var project = packages.CreateConsumer();
+        project.Write("global.json", """
+            {
+              "sdk": {
+                "version": "8.0.100",
+                "rollForward": "latestFeature",
+                "allowPrerelease": false
+              }
+            }
+            """);
+        project.Write("item.bond", "namespace Contracts struct Item { 0: int32 id; }");
+        project.Configure(new XElement("Bond", new XAttribute("Include", "item.bond")));
+
+        var sdk = await project.Command("--version");
+        sdk.AssertSuccess();
+        Assert.StartsWith("8.0.", sdk.Output.Trim());
+
+        (await project.Build()).AssertSuccess();
+        Assert.Contains("public int id", File.ReadAllText(Assert.Single(project.GeneratedFiles())));
+    }
+
     [Fact]
     public async Task GenerationErrorsPreserveExistingOutputsAndRejectUnownedFiles()
     {

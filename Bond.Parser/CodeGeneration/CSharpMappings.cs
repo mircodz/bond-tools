@@ -16,6 +16,7 @@ public static partial class CSharpGenerator
         private readonly Dictionary<string, string[]> _namespaceMappings = new(StringComparer.Ordinal);
         private readonly Dictionary<string, string> _typeMappings = new(StringComparer.Ordinal);
         private int _suppressTypeMappings;
+        private bool _useBlobSchemaTags;
 
         private void InitializeMappings()
         {
@@ -145,21 +146,26 @@ public static partial class CSharpGenerator
                 return true;
             }
 
-            mapped = new MappedType(name, underlying.SchemaType, IsScalar: underlying.IsScalar,
-                IsValueType: KnownValueTypes.Contains(name), IsSchemaValueType: underlying.IsSchemaValueType,
+            var schema = WithoutTypeMappings(() =>
+                MapType(Substitute(alias.AliasedType, alias, arguments), location), useBlobSchemaTags: true);
+            mapped = new MappedType(name, schema.SchemaType, IsScalar: underlying.IsScalar,
+                IsValueType: KnownValueTypes.Contains(name), IsSchemaValueType: schema.IsSchemaValueType,
                 IsCustom: true);
             return true;
         }
 
-        private T WithoutTypeMappings<T>(Func<T> action)
+        private T WithoutTypeMappings<T>(Func<T> action, bool useBlobSchemaTags = false)
         {
             _suppressTypeMappings++;
+            var previous = _useBlobSchemaTags;
+            _useBlobSchemaTags |= useBlobSchemaTags;
             try
             {
                 return action();
             }
             finally
             {
+                _useBlobSchemaTags = previous;
                 _suppressTypeMappings--;
             }
         }

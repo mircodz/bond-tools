@@ -82,7 +82,7 @@ public static class DiagnosticIds
         new ReadOnlyDictionary<string, string>(new Dictionary<string, string>(StringComparer.Ordinal)
         {
             [Unclassified] = "Unclassified change",
-            [FieldType] = "Field wire type changed",
+            [FieldType] = "Field payload type changed",
             [OptionalToRequired] = "Optional field became required",
             [RequiredToOptional] = "Required field became optional",
             [BaseType] = "Struct inheritance changed",

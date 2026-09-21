@@ -195,6 +195,101 @@ public class CompatibilityChecker
                         ? "Old data omits this field. Start with required_optional (always write, accept absence), update every producer, then require it."
                         : null);
             }
+
+            CompareJsonFields(old, current, location);
+        }
+
+        private void CompareJsonFields(ContractDeclaration old, ContractDeclaration current, string location)
+        {
+            var oldFields = JsonFields(old, _oldDeclarations);
+            var newFields = JsonFields(current, _newDeclarations);
+            var reportedNames = new HashSet<string>(StringComparer.Ordinal);
+
+            void Compare(string name, JsonField previous, JsonField next)
+            {
+                if (previous.Inherited && next.Inherited
+                    || !previous.Inherited && !next.Inherited && previous.Field.Ordinal == next.Field.Ordinal
+                    || reportedNames.Contains(name))
+                {
+                    // Matching binary fields and bases are already checked at their payload or definition.
+                    return;
+                }
+
+                var fieldLocation = location + "." + previous.Field.Name;
+                if (!JsonTypesCompatible(previous.Field.Type, next.Field.Type, fieldLocation, []))
+                {
+                    reportedNames.Add(name);
+                    Add(DiagnosticIds.FieldType, ChangeCategory.BreakingText,
+                        $"SimpleJSON field '{name}' changed from {previous.Field.Type} to incompatible type {next.Field.Type}",
+                        fieldLocation, "Changing an ordinal does not change the SimpleJSON key. Preserve its payload type or use a new text name.");
+                }
+            }
+
+            foreach (var (name, previous) in oldFields)
+            {
+                if (newFields.TryGetValue(name, out var next))
+                {
+                    Compare(name, previous, next);
+                }
+            }
+
+            // Writers still emit shadowed fields, even when a base field wins the reader's name lookup.
+            var newOrdinals = current.Fields.ToDictionary(field => field.Ordinal);
+            foreach (var field in old.Fields)
+            {
+                if ((!newOrdinals.TryGetValue(field.Ordinal, out var next) || field.JsonName != next.JsonName)
+                    && newFields.TryGetValue(field.JsonName, out var reader))
+                {
+                    Compare(field.JsonName, new JsonField(field, false), reader);
+                }
+            }
+
+            var oldOrdinals = old.Fields.ToDictionary(field => field.Ordinal);
+            foreach (var field in current.Fields)
+            {
+                if ((!oldOrdinals.TryGetValue(field.Ordinal, out var previous) || field.JsonName != previous.JsonName)
+                    && oldFields.TryGetValue(field.JsonName, out var reader))
+                {
+                    Compare(field.JsonName, reader, new JsonField(field, false));
+                }
+            }
+        }
+
+        private readonly record struct JsonField(ContractField Field, bool Inherited);
+
+        private static Dictionary<string, JsonField> JsonFields(ContractDeclaration declaration,
+            Dictionary<string, ContractDeclaration> declarations)
+        {
+            var fields = new Dictionary<string, JsonField>(StringComparer.Ordinal);
+            foreach (var field in JsonPayloadFields(declaration, declarations))
+            {
+                // SimpleJSON tests later fields first, then base fields before derived fields.
+                fields[field.Field.JsonName] = field;
+            }
+
+            return fields;
+        }
+
+        private static IEnumerable<JsonField> JsonPayloadFields(ContractDeclaration declaration,
+            Dictionary<string, ContractDeclaration> declarations)
+        {
+            var inherited = false;
+            while (true)
+            {
+                foreach (var field in declaration.Fields)
+                {
+                    yield return new JsonField(field, inherited);
+                }
+
+                var baseType = declaration.BaseType;
+                if (baseType is null || !declarations.TryGetValue(baseType.Name!, out var baseDeclaration))
+                {
+                    yield break;
+                }
+
+                declaration = Instantiate(baseDeclaration, baseType.Arguments);
+                inherited = true;
+            }
         }
 
         private void CompareBase(TypeShape? old, TypeShape? current, string location, HashSet<string> active)
@@ -456,29 +551,26 @@ public class CompatibilityChecker
                 };
             }
 
-            if (old.Kind == "blob" && current.Kind is "list" or "vector")
+            if (old.Kind == "blob" || current.Kind == "blob")
             {
-                return new(current.Arguments[0].Kind == "int8");
+                return Classify(BlobRepresentation(old), BlobRepresentation(current), location, active) with
+                {
+                    NominalOnly = false
+                };
             }
 
-            if (current.Kind == "blob" && old.Kind is "list" or "vector")
+            if (old.Kind == "enum" || current.Kind == "enum")
             {
-                return new(old.Arguments[0].Kind == "int8");
+                var representation = Classify(old.Kind == "enum" ? TypeShape.Of("int32") : old,
+                    current.Kind == "enum" ? TypeShape.Of("int32") : current, location, active);
+                return representation with
+                {
+                    EnumSemantics = representation.Compatible,
+                    NominalOnly = false
+                };
             }
 
-            if (old.Kind is "enum" or "int32" && current.Kind is "enum" or "int32")
-            {
-                return new(true, EnumSemantics: true);
-            }
-
-            if (old.Kind is "int8" or "int16" && current.Kind == "enum")
-            {
-                return new(true, Promotion: true, EnumSemantics: true);
-            }
-
-            var oldWidth = Width(old.Kind);
-            var newWidth = Width(current.Kind);
-            if (oldWidth > 0 && newWidth > oldWidth && NumericFamily(old.Kind) == NumericFamily(current.Kind))
+            if (IsNumericPromotion(old, current))
             {
                 return new(true, Promotion: true);
             }
@@ -523,6 +615,83 @@ public class CompatibilityChecker
 
             return new(false);
         }
+
+        private bool JsonTypesCompatible(TypeShape old, TypeShape current, string location, HashSet<string> active)
+        {
+            old = JsonRepresentation(old);
+            current = JsonRepresentation(current);
+            if (old.Same(current) && !NeedsPayloadComparison(old, current)
+                || old.Kind == "parameter" || current.Kind == "parameter" || IsNumericPromotion(old, current))
+            {
+                return true;
+            }
+
+            if (old.Kind == "struct" && current.Kind == "struct"
+                && _oldDeclarations.TryGetValue(old.Name!, out var oldTemplate)
+                && _newDeclarations.TryGetValue(current.Name!, out var newTemplate)
+                && oldTemplate.Kind == "struct" && newTemplate.Kind == "struct")
+            {
+                if (!NeedsPayloadComparison(old, current))
+                {
+                    return true;
+                }
+
+                var key = old + " -> " + current;
+                if (active.Contains(key))
+                {
+                    return true;
+                }
+
+                if (active.Count >= 64)
+                {
+                    Add(DiagnosticIds.IncompleteDefinition, ChangeCategory.InvalidSchema,
+                        "Expanding generic recursion prevents establishing a finite SimpleJSON payload comparison", location);
+                    return true;
+                }
+
+                active.Add(key);
+                var oldPayload = Instantiate(oldTemplate, old.Arguments);
+                var newPayload = Instantiate(newTemplate, current.Arguments);
+                var oldFields = JsonFields(oldPayload, _oldDeclarations);
+                var newFields = JsonFields(newPayload, _newDeclarations);
+                var compatible = JsonPayloadFields(oldPayload, _oldDeclarations).All(previous =>
+                    newFields.TryGetValue(previous.Field.JsonName, out var next)
+                        ? JsonTypesCompatible(previous.Field.Type, next.Field.Type, location, active)
+                        : previous.Field.Modifier != "required")
+                    && JsonPayloadFields(newPayload, _newDeclarations).All(next =>
+                        oldFields.TryGetValue(next.Field.JsonName, out var previous)
+                            ? JsonTypesCompatible(previous.Field.Type, next.Field.Type, location, active)
+                            : next.Field.Modifier != "required");
+                active.Remove(key);
+                return compatible;
+            }
+
+            return old.Kind == current.Kind && old.Kind is "list" or "map" or "nullable"
+                && old.Arguments.Zip(current.Arguments)
+                    .All(pair => JsonTypesCompatible(pair.First, pair.Second, location, active));
+        }
+
+        private static TypeShape BlobRepresentation(TypeShape type) =>
+            type.Kind == "blob" ? TypeShape.Of("list", TypeShape.Of("int8")) : type;
+
+        private static TypeShape JsonRepresentation(TypeShape type)
+        {
+            while (type.Kind is "maybe" or "bonded")
+            {
+                type = type.Arguments[0];
+            }
+
+            return type.Kind switch
+            {
+                "enum" => TypeShape.Of("int32"),
+                "wstring" or "meta_name" or "meta_full_name" => TypeShape.Of("string"),
+                "vector" or "set" => type with { Kind = "list" },
+                _ => BlobRepresentation(type)
+            };
+        }
+
+        private static bool IsNumericPromotion(TypeShape old, TypeShape current) =>
+            Width(old.Kind) > 0 && Width(current.Kind) > Width(old.Kind) && NumericFamily(old.Kind) == NumericFamily(current.Kind);
 
         private bool NeedsPayloadComparison(TypeShape? old, TypeShape? current)
         {
@@ -588,8 +757,34 @@ public class CompatibilityChecker
             }
 
             var newFields = current.Fields.ToDictionary(field => field.Ordinal);
-            return old.Fields.Any(field => newFields.TryGetValue(field.Ordinal, out var next)
-                && ParameterizedTypeChanged(field.Type, next.Type));
+            if (old.Fields.Any(field => newFields.TryGetValue(field.Ordinal, out var next)
+                && ParameterizedTypeChanged(field.Type, next.Type)))
+            {
+                return true;
+            }
+
+            var oldJsonFields = JsonFields(old, _oldDeclarations);
+            var newJsonFields = JsonFields(current, _newDeclarations);
+            if (oldJsonFields.Any(pair => newJsonFields.TryGetValue(pair.Key, out var next)
+                && ParameterizedTypeChanged(pair.Value.Field.Type, next.Field.Type)))
+            {
+                return true;
+            }
+
+            // A new or remapped writer can be hidden by an inherited reader with the same JSON name.
+            if (old.Fields.Any(field =>
+                (!newFields.TryGetValue(field.Ordinal, out var next) || field.JsonName != next.JsonName)
+                && newJsonFields.TryGetValue(field.JsonName, out var reader)
+                && ParameterizedTypeChanged(field.Type, reader.Field.Type)))
+            {
+                return true;
+            }
+
+            var oldFields = old.Fields.ToDictionary(field => field.Ordinal);
+            return current.Fields.Any(field =>
+                (!oldFields.TryGetValue(field.Ordinal, out var previous) || field.JsonName != previous.JsonName)
+                && oldJsonFields.TryGetValue(field.JsonName, out var reader)
+                && ParameterizedTypeChanged(reader.Field.Type, field.Type));
         }
 
         private static bool ContainsParameter(TypeShape type) =>

@@ -376,8 +376,9 @@ public static partial class CSharpGenerator
                 case BondType.MetaFullName:
                     return new("string", "string", "fullName");
                 case BondType.Blob:
-                    return new("global::System.ArraySegment<byte>", "global::System.ArraySegment<byte>",
-                        "new global::System.ArraySegment<byte>()", IsValueType: true, IsSchemaValueType: true);
+                    return new("global::System.ArraySegment<byte>",
+                        _useBlobSchemaTags ? "global::Bond.Tag.blob" : "global::System.ArraySegment<byte>",
+                        "new global::System.ArraySegment<byte>()", IsValueType: true, IsSchemaValueType: !_useBlobSchemaTags);
                 case BondType.Vector vector:
                     return Collection("List", location, vector.ElementType);
                 case BondType.List list:

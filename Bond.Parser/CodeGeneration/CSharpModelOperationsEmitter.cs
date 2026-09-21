@@ -281,13 +281,25 @@ public static partial class CSharpGenerator
                 Line(2, $"private sealed class __MaterializedBonded<__Payload> : global::Bond.IBonded<__Payload>, {ModelSupport}IMaterializedModelValue<__Payload>");
                 Line(2, "{");
                 Line(3, "[global::System.Diagnostics.DebuggerBrowsable(global::System.Diagnostics.DebuggerBrowsableState.Never)]");
+                Line(3, $"private readonly {ModelSupport}IModelAdapter<__Payload> _adapter;");
+                Line(3, "[global::System.Diagnostics.DebuggerBrowsable(global::System.Diagnostics.DebuggerBrowsableState.Never)]");
                 Line(3, "public __Payload Value { get; }");
-                Line(3, "public __MaterializedBonded(__Payload value) { Value = value; }");
-                Line(3, $"public __Payload Deserialize() => {ModelSupport}ModelOperations.Clone(Value);");
+                Line(3, $"public __MaterializedBonded(__Payload value, {ModelSupport}IModelAdapter<__Payload> adapter)");
+                Line(3, "{");
+                Line(4, "Value = value;");
+                Line(4, "_adapter = adapter;");
+                Line(3, "}");
+                Line(3, $"public __Payload Deserialize() => _adapter.Clone(Value, new {ModelSupport}CloneContext());");
                 Line(3, "public __U Deserialize<__U>() => typeof(__U) == typeof(__Payload)");
                 Line(4, "? (__U)(object)Deserialize() : ((global::Bond.IBonded)new global::Bond.Bonded<__Payload>(Value)).Deserialize<__U>();");
                 Line(3, "public void Serialize<__Writer>(__Writer writer) => ((global::Bond.IBonded)new global::Bond.Bonded<__Payload>(Value)).Serialize(writer);");
                 Line(3, "public global::Bond.IBonded<__U> Convert<__U>() => this as global::Bond.IBonded<__U>;");
+                Line(0);
+                Line(3, $"public static {ModelSupport}IModelAdapter<global::Bond.IBonded<__Payload>> CreateAdapter(" +
+                    $"{ModelSupport}IModelAdapter<__Payload> adapter) =>");
+                Line(4, $"{ModelSupport}ModelAdapters.Materialized<global::Bond.IBonded<__Payload>, __Payload>(");
+                Line(5, $"static value => value is {ModelSupport}IMaterializedModelValue<__Payload> materialized ? materialized.Value : value.Deserialize(),");
+                Line(5, "static (value, capturedAdapter) => new __MaterializedBonded<__Payload>(value, capturedAdapter), adapter);");
                 Line(2, "}");
             }
 
@@ -363,10 +375,7 @@ public static partial class CSharpGenerator
             if (type is BondType.Bonded bonded)
             {
                 var payloadType = MapType(bonded.StructType, location).Name;
-                return $"{adapters}Materialized<{mapped.Name}, {payloadType}>(" +
-                    $"static value => value is {ModelSupport}IMaterializedModelValue<{payloadType}> materialized ? materialized.Value : value.Deserialize(), " +
-                    $"static value => new __MaterializedBonded<{payloadType}>(value), " +
-                    $"{Element(bonded.StructType)})";
+                return $"__MaterializedBonded<{payloadType}>.CreateAdapter({Element(bonded.StructType)})";
             }
 
             return type switch

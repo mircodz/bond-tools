@@ -271,6 +271,195 @@ public sealed class GeneratedModelOperationsTests
     }
 
     [Fact]
+    public async Task CovariantBondedClonesSharePayloadsAndCyclesInEitherFieldOrder()
+    {
+        await Check("""
+            namespace Models
+            struct Base {
+                0: vector<int32> values;
+                1: bonded<Derived> derived_view;
+                2: bonded<Base> base_view;
+            }
+            struct Derived : Base { 0: int32 number; }
+            struct BaseFirst { 0: bonded<Base> first; 1: bonded<Derived> second; }
+            struct DerivedFirst { 0: bonded<Derived> first; 1: bonded<Base> second; }
+            """, """
+            foreach (var baseFirst in new[] { true, false })
+            {
+                var payload = new Models.Derived { number = 7 };
+                payload.values.Add(42);
+                var wrapper = new CountingDerivedBonded(payload);
+                payload.derived_view = wrapper;
+                payload.base_view = wrapper;
+                Bond.IBonded<Models.Base> baseView;
+                Bond.IBonded<Models.Derived> derivedView;
+                if (baseFirst)
+                {
+                    var source = new Models.BaseFirst { first = wrapper, second = wrapper };
+                    var copy = source.Clone();
+                    baseView = copy.first;
+                    derivedView = copy.second;
+                }
+                else
+                {
+                    var source = new Models.DerivedFirst { first = wrapper, second = wrapper };
+                    var copy = source.Clone();
+                    baseView = copy.second;
+                    derivedView = copy.first;
+                }
+
+                Require(wrapper.Reads == 1, "covariant views materialized the source repeatedly");
+                Require(!ReferenceEquals(baseView, wrapper) && !ReferenceEquals(derivedView, wrapper),
+                    "a covariant view retained the source wrapper");
+                var copiedBase = ((IMaterializedModelValue<Models.Base>)baseView).Value;
+                var copiedDerived = ((IMaterializedModelValue<Models.Derived>)derivedView).Value;
+                Require(ReferenceEquals(copiedBase, copiedDerived) && !ReferenceEquals(copiedDerived, payload),
+                    "covariant views did not share an independently cloned payload");
+                Require(copiedDerived.number == 7 && !ReferenceEquals(copiedDerived.values, payload.values),
+                    "the runtime payload type or mutable data was lost");
+                Require(ReferenceEquals(copiedDerived.derived_view, derivedView),
+                    "the derived wrapper cycle was lost");
+                Require(ReferenceEquals(((IMaterializedModelValue<Models.Base>)copiedDerived.base_view).Value, copiedDerived),
+                    "the base wrapper cycle was lost");
+                copiedDerived.values.Add(99);
+                Require(payload.values.Count == 1, "mutating the clone affected the original payload");
+            }
+            """, """
+            public sealed class CountingDerivedBonded : Bond.IBonded<Models.Derived>
+            {
+                private readonly Models.Derived payload;
+                public int Reads;
+                public CountingDerivedBonded(Models.Derived payload) { this.payload = payload; }
+                public Models.Derived Deserialize() { Reads++; return payload; }
+                public T Deserialize<T>() => throw new Exception("untyped deserialization");
+                public Bond.IBonded<T> Convert<T>() => throw new Exception("unexpected conversion");
+                public void Serialize<T>(T writer) => throw new Exception("unexpected serialization");
+                public override string ToString() => throw new Exception("unexpected formatting");
+            }
+            """);
+    }
+
+    [Fact]
+    public async Task GenericMaterializedBindingsPreserveSharedWrappersAndOwnerCycles()
+    {
+        await Check("""
+            namespace Models
+            struct Payload { 0: int32 number; 1: nullable<Holder> owner; }
+            struct Box<T> { 0: T value; }
+            struct Holder { 0: Box<bonded<Payload>> wrapped; 1: bonded<Payload> direct; }
+            """, """
+            var source = new Models.Holder();
+            var payload = new Models.Payload { number = 7, owner = source };
+            var wrapper = new CountingBonded(payload);
+            source.wrapped.value = wrapper;
+            source.direct = wrapper;
+
+            var copy = source.Clone();
+            var copiedPayload = ((IMaterializedModelValue<Models.Payload>)copy.direct).Value;
+            Require(wrapper.Reads == 1, "a standard generic binding materialized the wrapper repeatedly");
+            Require(ReferenceEquals(copy.wrapped.value, copy.direct), "a standard generic binding split same-view wrappers");
+            Require(ReferenceEquals(copiedPayload.owner, copy), "a standard generic binding split the owner cycle");
+            Require(!ReferenceEquals(copy.direct, wrapper) && !ReferenceEquals(copiedPayload, payload),
+                "generic materialized cloning retained original mutable data");
+            Require(source.Equals(copy) && source.GetHashCode() == copy.GetHashCode(),
+                "generic materialized equality or hashing changed");
+            """, CountingBondedSource);
+    }
+
+    [Fact]
+    public async Task GenericMaterializedProjectionsRetainTheirContextualSemantics()
+    {
+        await Check("""
+            namespace Models
+            struct Box<T> { 0: T value; }
+            """, """
+            var ordered = ModelAdapters.WithArguments(ModelAdapters.Value<Models.Box<List<int>>>(),
+                ModelAdapterArgument.Create(ModelAdapters.List(ModelAdapters.Value<int>())));
+            var unordered = ModelAdapters.WithArguments(ModelAdapters.Value<Models.Box<List<int>>>(),
+                ModelAdapterArgument.Create(ModelAdapters.Materialized<List<int>, HashSet<int>>(
+                    values => new HashSet<int>(values), values => new List<int>(values),
+                    ModelAdapters.Set(ModelAdapters.Value<int>()))));
+            var projected = ModelAdapters.WithArguments(ModelAdapters.Value<Models.Box<List<int>>>(),
+                ModelAdapterArgument.Create(ModelAdapters.Materialized<List<int>, int>(
+                    values => values.Count, count => new List<int> { count }, ModelAdapters.Value<int>())));
+            var left = new Models.Box<List<int>> { value = new List<int> { 1, 2 } };
+            var right = new Models.Box<List<int>> { value = new List<int> { 2, 1 } };
+            var equality = new EqualityContext();
+            Require(unordered.Equals(left, right, equality), "contextual projection comparison failed");
+            Require(!ordered.Equals(left, right, equality), "a projection contaminated ordinary generic comparison");
+
+            var hashes = new HashContext();
+            var unorderedHash = unordered.GetHashCode(left, hashes);
+            var orderedHash = ordered.GetHashCode(left, hashes);
+            Require(unorderedHash != orderedHash && orderedHash == ordered.GetHashCode(left, new HashContext()),
+                "a projection contaminated ordinary generic hashing");
+            var clones = new CloneContext();
+            var projectedCopy = projected.Clone(left, clones);
+            var orderedCopy = ordered.Clone(left, clones);
+            Require(!ReferenceEquals(projectedCopy, orderedCopy) &&
+                projectedCopy.value.SequenceEqual(new[] { 2 }) && orderedCopy.value.SequenceEqual(new[] { 1, 2 }),
+                "a projection contaminated ordinary generic cloning");
+            Require(!ReferenceEquals(projectedCopy.value, left.value) && !ReferenceEquals(orderedCopy.value, left.value),
+                "generic projection cloning retained original mutable data");
+            """);
+    }
+
+    [Fact]
+    public async Task GenericAdapterBindingsIsolateMemoizationAndPreserveEquivalentScopesAndCycles()
+    {
+        await Check("""
+            namespace Models
+            struct Box<T> { 0: T value; 1: nullable<Box<T>> next; }
+            """, """
+            var exactList = ModelAdapters.List(ModelAdapters.Value<int>());
+            var offsetElement = new ModelAdapter<int>(
+                (value, context) => value + 100,
+                (left, right, context) => left == right,
+                (value, context) => value + 100);
+            var offsetList = ModelAdapters.List(offsetElement);
+            var parityList = ModelAdapters.List(new ModelAdapter<int>(
+                (value, context) => value,
+                (left, right, context) => (left & 1) == (right & 1),
+                (value, context) => value & 1));
+            var exact = ModelAdapters.WithArguments(ModelAdapters.Value<Models.Box<List<int>>>(),
+                ModelAdapterArgument.Create(exactList));
+            var offset = ModelAdapters.WithArguments(ModelAdapters.Value<Models.Box<List<int>>>(),
+                ModelAdapterArgument.Create(offsetList));
+            var parity = ModelAdapters.WithArguments(ModelAdapters.Value<Models.Box<List<int>>>(),
+                ModelAdapterArgument.Create(parityList));
+            var left = new Models.Box<List<int>> { value = new List<int> { 1 } };
+            var right = new Models.Box<List<int>> { value = new List<int> { 3 } };
+            left.next = left;
+            right.next = right;
+            var comparisons = new EqualityContext();
+            Require(parity.Equals(left, right, comparisons), "contextual parity comparison failed");
+            Require(!exact.Equals(left, right, comparisons), "parity memoization contaminated exact generic comparison");
+
+            var hashes = new HashContext();
+            var exactHash = exact.GetHashCode(left, hashes);
+            var offsetHash = offset.GetHashCode(left, hashes);
+            Require(exactHash != offsetHash && offsetHash == offset.GetHashCode(left, new HashContext()),
+                "generic hash memoization ignored contextual bindings");
+            var clones = new CloneContext();
+            var exactCopy = exact.Clone(left, clones);
+            var offsetCopy = offset.Clone(left, clones);
+            Require(!ReferenceEquals(exactCopy, offsetCopy) && exactCopy.value[0] == 1 && offsetCopy.value[0] == 101,
+                "clone memoization ignored contextual bindings");
+            Require(ReferenceEquals(exactCopy.next, exactCopy) && ReferenceEquals(offsetCopy.next, offsetCopy),
+                "scoping generic adapters broke cycle termination");
+            Require(!ReferenceEquals(exactCopy.value, left.value) && !ReferenceEquals(offsetCopy.value, left.value),
+                "contextual cloning retained original mutable data");
+
+            var equivalent = ModelAdapters.WithArguments(ModelAdapters.Value<Models.Box<List<int>>>(),
+                ModelAdapterArgument.Create(ModelAdapters.List(offsetElement)));
+            Require(ReferenceEquals(offsetCopy, equivalent.Clone(left, clones)),
+                "equivalent bindings did not preserve clone sharing");
+            Require(equivalent.GetHashCode(left, hashes) == offsetHash,
+                "equivalent bindings did not preserve hash semantics");
+            """);
+    }
+
+    [Fact]
     public async Task DebuggerSnapshotsNeverMaterializeEnumerateOrFormatImmediateValues()
     {
         await Check("""

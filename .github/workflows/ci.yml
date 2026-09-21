@@ -37,7 +37,9 @@ jobs:
     - name: Setup .NET
       uses: actions/setup-dotnet@v4
       with:
-        dotnet-version: '8.0.x'
+        dotnet-version: |
+          8.0.x
+          10.0.x
 
     - name: Restore dependencies
       run: dotnet restore
@@ -47,15 +49,15 @@ jobs:
 
     - name: Test with coverage
       run: |
-        dotnet test --no-build --configuration Release \
-          /p:CollectCoverage=true \
-          /p:CoverletOutputFormat=cobertura \
-          /p:ExcludeByFile="**/*.g4.cs"
+        dotnet test --project Bond.Parser.Tests/Bond.Parser.Tests.csproj --no-build --configuration Release \
+          --coverlet --coverlet-output-format cobertura \
+          --coverlet-exclude-by-file "**/*.g4.cs" \
+          --results-directory "$PWD/out/test-results/coverage"
 
     - name: Generate coverage report
       uses: danielpalme/ReportGenerator-GitHub-Action@5.3.11
       with:
-        reports: 'out/test-results/**/coverage.cobertura.xml'
+        reports: 'out/test-results/**/coverage.cobertura*.xml'
         targetdir: 'out/coverage-report'
         reporttypes: 'HtmlInline;Cobertura;MarkdownSummaryGithub;TextSummary'
         tag: '${{ github.run_number }}_${{ github.run_id }}'

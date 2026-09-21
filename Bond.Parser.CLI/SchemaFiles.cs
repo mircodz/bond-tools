@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -137,7 +138,19 @@ internal static class SchemaFiles
             start.ArgumentList.Add(argument);
         }
 
-        using var process = Process.Start(start) ?? throw new IOException("Could not start git.");
+        using var process = new Process { StartInfo = start };
+        try
+        {
+            if (!process.Start())
+            {
+                throw new IOException("Could not start git.");
+            }
+        }
+        catch (Win32Exception startError)
+        {
+            throw new IOException($"Could not start git: {startError.Message}", startError);
+        }
+
         var output = process.StandardOutput.ReadToEndAsync(cancellationToken);
         var error = process.StandardError.ReadToEndAsync(cancellationToken);
         try

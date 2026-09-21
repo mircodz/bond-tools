@@ -174,9 +174,10 @@ public static class BondFormatter
             }
         }
 
-        private void EmitTrailing(StringBuilder sb, IToken stop)
+        private void EmitTrailing(StringBuilder sb, IToken stop, string indent = "")
         {
             var index = stop.TokenIndex;
+            var afterLineComment = false;
             while (true)
             {
                 if (_trailing.TryGetValue(index, out var comments))
@@ -185,7 +186,17 @@ public static class BondFormatter
                     {
                         if (_emittedComments.Add(comment.TokenIndex))
                         {
-                            sb.Append(' ').Append(comment.Text.TrimEnd());
+                            if (afterLineComment)
+                            {
+                                sb.Append('\n').Append(indent);
+                            }
+                            else
+                            {
+                                sb.Append(' ');
+                            }
+
+                            sb.Append(comment.Text.TrimEnd());
+                            afterLineComment = comment.Type == BondLexer.LINE_COMMENT;
                         }
                     }
                 }
@@ -438,7 +449,7 @@ public static class BondFormatter
                         sb.Append(',');
                     }
 
-                    EmitTrailing(sb, viewFields[i].Stop);
+                    EmitTrailing(sb, viewFields[i].Stop, _indent);
                     sb.Append('\n');
                 }
 
@@ -483,7 +494,7 @@ public static class BondFormatter
                 EmitInlineLeading(sb, constants[i].Start.TokenIndex);
                 sb.Append(FormatEnumConstant(constants[i]));
                 sb.Append(',');
-                EmitTrailing(sb, constants[i].Stop);
+                EmitTrailing(sb, constants[i].Stop, _indent);
                 sb.Append('\n');
             }
 
@@ -571,7 +582,7 @@ public static class BondFormatter
             }
 
             sb.Append(';');
-            EmitTrailing(sb, ctx.Stop);
+            EmitTrailing(sb, ctx.Stop, _indent);
             return sb.ToString();
         }
 
@@ -619,7 +630,7 @@ public static class BondFormatter
                 : "";
 
             sb.Append($"{resultType} {methodName}({param});");
-            EmitTrailing(sb, ctx.Stop);
+            EmitTrailing(sb, ctx.Stop, _indent);
             return sb.ToString();
         }
 

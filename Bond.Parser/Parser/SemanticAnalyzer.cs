@@ -61,6 +61,7 @@ public class SemanticAnalyzer
 
     private async Task RegisterFileAsync(Syntax.Bond bond)
     {
+        _symbolTable.SetFileAliases(_currentFile, _aliases);
         foreach (var import in bond.Imports)
         {
             await ProcessImportAsync(import);
@@ -103,6 +104,7 @@ public class SemanticAnalyzer
     private async Task ProcessImportAsync(Import import)
     {
         var (canonicalPath, content) = await _importResolver(_currentFile, import.FilePath);
+        _symbolTable.AddImport(_currentFile, canonicalPath);
 
         if (!_symbolTable.ClaimImport(canonicalPath))
         {

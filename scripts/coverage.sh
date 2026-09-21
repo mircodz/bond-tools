@@ -13,12 +13,12 @@ report_dir="out/coverage-report"
 rm -rf "$out_dir" "$report_dir"
 mkdir -p "$out_dir"
 
-dotnet test Bond.Parser.Tests/Bond.Parser.Tests.csproj \
-  --collect:"XPlat Code Coverage" \
-  --results-directory:"$out_dir"
+dotnet test --project Bond.Parser.Tests/Bond.Parser.Tests.csproj \
+  --coverlet --coverlet-output-format cobertura \
+  --coverlet-exclude-by-file "**/*.g4.cs" \
+  --results-directory "$PWD/$out_dir"
 
-# Find the coverage file (XPlat creates it in a GUID subdirectory)
-coverage_file=$(find "$out_dir" -name "coverage.cobertura.xml" | head -n 1)
+coverage_file=$(find "$out_dir" -name "coverage.cobertura*.xml" | head -n 1)
 
 if [ -z "$coverage_file" ]; then
   echo "Error: Coverage file not generated" >&2

@@ -201,6 +201,44 @@ public sealed class CompatibilityCommandTests : IDisposable
         Assert.Contains("missing.bond", result.Error);
     }
 
+    [Fact]
+    public async Task MissingGitReturnsStructuredDiagnostics()
+    {
+        var input = Write("root.bond", "namespace Example struct Root {}");
+        var emptyPath = Path.Combine(_root, "empty-path");
+        Directory.CreateDirectory(emptyPath);
+        var assembly = typeof(CompatibilityCommandTests).Assembly.Location;
+        var start = new ProcessStartInfo("dotnet")
+        {
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+        start.Environment["PATH"] = emptyPath;
+
+        foreach (var argument in new[]
+        {
+            "exec", "--runtimeconfig", Path.ChangeExtension(assembly, ".runtimeconfig.json"),
+            "--depsfile", Path.ChangeExtension(assembly, ".deps.json"), typeof(Program).Assembly.Location,
+            "breaking", input, "--against", ".git#branch=HEAD", "--error-format=json"
+        })
+        {
+            start.ArgumentList.Add(argument);
+        }
+
+        using var process = Process.Start(start) ?? throw new InvalidOperationException("Could not start the CLI.");
+        var output = process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken);
+        var error = process.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken);
+        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, process.ExitCode);
+        Assert.Empty(await output);
+        using var json = JsonDocument.Parse(await error);
+        Assert.Equal("schema_error", json.RootElement.GetProperty("error").GetString());
+        Assert.Contains("Could not start git",
+            json.RootElement.GetProperty("errors")[0].GetProperty("message").GetString());
+    }
+
     [Theory]
     [InlineData("--protocols=unsupported")]
     [InlineData("--protocols=,,,")]

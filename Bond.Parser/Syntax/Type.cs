@@ -254,18 +254,27 @@ public static class BondTypeExtensions
             return type;
         }
 
-        var visited = new HashSet<BondType.TypeReference>();
-        while (type is BondType.TypeReference { Declaration: AliasDeclaration alias } reference)
+        var active = new HashSet<AliasDeclaration>(ReferenceEqualityComparer.Instance);
+
+        BondType Expand(BondType current)
         {
-            if (!visited.Add(reference))
+            while (current is BondType.TypeReference { Declaration: AliasDeclaration alias } reference)
             {
-                throw new InvalidOperationException($"Cyclic type alias '{alias.Name}'.");
+                if (!active.Add(alias))
+                {
+                    throw new InvalidOperationException($"Cyclic type alias '{alias.Name}'.");
+                }
+
+                // Check template recursion before substitution, so growing arguments cannot hide cycles.
+                var template = Expand(alias.AliasedType);
+                active.Remove(alias);
+                current = template.SubstituteTypeParameters(alias.TypeParameters, reference.TypeArguments);
             }
 
-            type = alias.AliasedType.SubstituteTypeParameters(alias.TypeParameters, reference.TypeArguments);
+            return current;
         }
 
-        return type;
+        return Expand(type);
     }
 
     /// <summary>Substitutes parameters in a type expression without changing referenced declaration templates.</summary>

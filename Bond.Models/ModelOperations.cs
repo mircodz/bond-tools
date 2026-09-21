@@ -64,20 +64,35 @@ public interface IMaterializedModelValue<out T>
     T Value { get; }
 }
 
-/// <summary>A delegate-based adapter. Equality must be an equivalence relation and agree with hashing.</summary>
+/// <summary>
+/// A delegate-based adapter with its own graph-cache scope. Reuse an instance for recursive operations.
+/// Equality must be an equivalence relation and agree with hashing.
+/// </summary>
 public sealed class ModelAdapter<T>(
     Func<T, CloneContext, T> clone,
     Func<T, T, EqualityContext, bool> equals,
     Func<T, HashContext, int> hash) : IModelAdapter<T>
 {
     /// <inheritdoc />
-    public T Clone(T value, CloneContext context) => clone(value, context);
+    public T Clone(T value, CloneContext context)
+    {
+        using var scope = context.Traversal.Enter(ModelAdapterSemantics.For(this));
+        return clone(value, context);
+    }
 
     /// <inheritdoc />
-    public bool Equals(T left, T right, EqualityContext context) => equals(left, right, context);
+    public bool Equals(T left, T right, EqualityContext context)
+    {
+        using var scope = context.Traversal.Enter(ModelAdapterSemantics.For(this));
+        return equals(left, right, context);
+    }
 
     /// <inheritdoc />
-    public int GetHashCode(T value, HashContext context) => hash(value, context);
+    public int GetHashCode(T value, HashContext context)
+    {
+        using var scope = context.Traversal.Enter(ModelAdapterSemantics.For(this));
+        return hash(value, context);
+    }
 }
 
 /// <summary>Reflection-free value operations for generated models and explicitly adapted CLR types.</summary>
@@ -129,5 +144,6 @@ public static class ModelOperations
     internal static bool IsKnownImmutable(object value) => value is
         string or bool or char or sbyte or byte or short or ushort or int or uint or long or ulong
         or float or double or decimal or Enum or DateTime or DateTimeOffset or TimeSpan
-        or DateOnly or TimeOnly or Guid or Uri or Version or IntPtr or UIntPtr or System.Numerics.BigInteger;
+        or DateOnly or TimeOnly or Guid or Version or IntPtr or UIntPtr or System.Numerics.BigInteger
+        || value.GetType() == typeof(Uri);
 }

@@ -4,36 +4,47 @@ using System.Runtime.CompilerServices;
 
 namespace BondTools.Models;
 
-/// <summary>Identity-based graph state shared by one clone operation.</summary>
+/// <summary>Graph state shared by one clone operation, scoped to compatible adapter semantics.</summary>
 public sealed class CloneContext
 {
-    private readonly Dictionary<object, object> _clones = new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<ModelReferenceKey, List<object>> _clones = new();
     private readonly Dictionary<object, Action<object>> _reservations = new(ReferenceEqualityComparer.Instance);
-    private readonly HashSet<object> _materializing = new(ReferenceEqualityComparer.Instance);
+    private readonly HashSet<(ModelReferenceKey Key, Type View)> _materializing = new();
     private readonly MaterializationCache _payloads = new();
 
-    internal ModelAdapterFrame? Adapters { get; set; }
+    internal ModelTraversal Traversal { get; } = new();
+    internal ModelAdapterFrame? Adapters { get => Traversal.Adapters; set => Traversal.Adapters = value; }
 
-    /// <summary>Looks up a previously allocated clone, preserving sharing and cycles.</summary>
-    public bool TryGetClone<T>(object source, out T clone)
+    /// <summary>Looks up a compatible clone in the active adapter scope, preserving sharing and cycles.</summary>
+    public bool TryGetClone<T>(object source, out T clone) =>
+        TryGetClone(new ModelReferenceKey(source, Traversal.Semantics), out clone);
+
+    private bool TryGetClone<T>(ModelReferenceKey key, out T clone)
     {
-        if (_clones.TryGetValue(source, out var value))
+        if (_clones.TryGetValue(key, out var values))
         {
-            clone = (T)value;
-            return true;
+            foreach (var value in values)
+            {
+                if (value is T compatible)
+                {
+                    clone = compatible;
+                    return true;
+                }
+            }
         }
 
         clone = default!;
         return false;
     }
 
-    /// <summary>Registers a clone shell before any of its mutable children are cloned.</summary>
+    /// <summary>Registers a clone shell in the active adapter scope before cloning its mutable children.</summary>
     public void Register(object source, object clone)
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(clone);
 
-        _clones.Add(source, clone);
+        var key = new ModelReferenceKey(source, Traversal.Semantics);
+        _clones.Add(key, [clone]);
         if (_reservations.Remove(source, out var reserve))
         {
             reserve(clone);
@@ -41,7 +52,8 @@ public sealed class CloneContext
     }
 
     internal TWrapper CloneMaterialized<TWrapper, TValue>(
-        TWrapper wrapper, Func<TWrapper, TValue> read, Func<TValue, TWrapper> wrap, IModelAdapter<TValue> adapter)
+        TWrapper wrapper, Func<TWrapper, TValue> read,
+        Func<TValue, IModelAdapter<TValue>, TWrapper> wrap, IModelAdapter<TValue> adapter)
         where TWrapper : class
     {
         if (wrapper is null)
@@ -49,12 +61,14 @@ public sealed class CloneContext
             return null!;
         }
 
-        if (TryGetClone<TWrapper>(wrapper, out var existing))
+        var wrapperKey = new ModelReferenceKey(wrapper, Traversal.Semantics);
+        if (TryGetClone<TWrapper>(wrapperKey, out var existing))
         {
             return existing;
         }
 
-        if (!_materializing.Add(wrapper))
+        var materializing = (wrapperKey, typeof(TWrapper));
+        if (!_materializing.Add(materializing))
         {
             throw new NotSupportedException(
                 "A cyclic materialized value requires its typed adapter to call CloneContext.Register before cloning children.");
@@ -65,41 +79,35 @@ public sealed class CloneContext
         try
         {
             var value = _payloads.Get(wrapper, () => read(wrapper));
+            var captured = Adapters is null ? adapter : new CapturedModelAdapter<TValue>(adapter, Adapters);
             source = value;
             if (source is not null)
             {
                 // Make the wrapper available as soon as its payload shell exists, before cloning cyclic children.
                 reservation = clone =>
                 {
-                    if (!TryGetClone<TWrapper>(wrapper, out _))
+                    if (!TryGetClone<TWrapper>(wrapperKey, out _))
                     {
-                        Register(wrapper, wrap((TValue)clone));
+                        RegisterView(wrapperKey, wrapper, wrap((TValue)clone, captured));
                     }
                 };
 
-                if (_clones.TryGetValue(source, out var clone))
-                {
-                    reservation(clone);
-                }
-                else
-                {
-                    _reservations[source] = _reservations.GetValueOrDefault(source) + reservation;
-                }
+                _reservations[source] = _reservations.GetValueOrDefault(source) + reservation;
             }
 
-            var copied = adapter.Clone(value, this);
-            if (TryGetClone<TWrapper>(wrapper, out existing))
+            var copied = ModelAdapterSemantics.Clone(adapter, value, this);
+            if (TryGetClone<TWrapper>(wrapperKey, out existing))
             {
                 return existing;
             }
 
-            var result = wrap(copied);
-            Register(wrapper, result);
+            var result = wrap(copied, captured);
+            RegisterView(wrapperKey, wrapper, result);
             return result;
         }
         finally
         {
-            _materializing.Remove(wrapper);
+            _materializing.Remove(materializing);
             if (source is not null && reservation is not null && _reservations.TryGetValue(source, out var callbacks))
             {
                 callbacks -= reservation;
@@ -114,6 +122,25 @@ public sealed class CloneContext
             }
         }
     }
+
+    private void RegisterView(ModelReferenceKey key, object source, object clone)
+    {
+        ArgumentNullException.ThrowIfNull(clone);
+        if (_clones.TryGetValue(key, out var views))
+        {
+            // A covariant base wrapper cannot always represent a more-derived view of the same payload.
+            views.Add(clone);
+        }
+        else
+        {
+            _clones.Add(key, [clone]);
+        }
+
+        if (_reservations.Remove(source, out var reserve))
+        {
+            reserve(clone);
+        }
+    }
 }
 
 /// <summary>Coinductive equality state. Forks isolate unsuccessful unordered collection matches.</summary>
@@ -122,7 +149,8 @@ public sealed class EqualityContext
     private HashSet<ReferencePair> _pairs = new(ReferencePairComparer.Instance);
     private readonly MaterializationCache _payloads;
 
-    internal ModelAdapterFrame? Adapters { get; set; }
+    internal ModelTraversal Traversal { get; private init; } = new();
+    internal ModelAdapterFrame? Adapters { get => Traversal.Adapters; set => Traversal.Adapters = value; }
 
     /// <summary>Starts an independent equality operation.</summary>
     public EqualityContext() : this(new MaterializationCache())
@@ -131,7 +159,7 @@ public sealed class EqualityContext
 
     private EqualityContext(MaterializationCache payloads) => _payloads = payloads;
 
-    /// <summary>Compares reference values, recording a pair before recursively comparing children.</summary>
+    /// <summary>Records a pair in the active adapter scope before recursively comparing children.</summary>
     public bool CompareReferences(object? left, object? right, Func<bool> compare)
     {
         if (ReferenceEquals(left, right))
@@ -144,7 +172,7 @@ public sealed class EqualityContext
             return false;
         }
 
-        var pair = new ReferencePair(left, right);
+        var pair = new ReferencePair(left, right, Traversal.Semantics);
         if (!_pairs.Add(pair))
         {
             return true;
@@ -163,7 +191,7 @@ public sealed class EqualityContext
     public EqualityContext Fork() => new(_payloads)
     {
         _pairs = new(_pairs, ReferencePairComparer.Instance),
-        Adapters = Adapters
+        Traversal = Traversal.Fork()
     };
 
     /// <summary>Accepts a successful branch's comparisons.</summary>
@@ -171,17 +199,17 @@ public sealed class EqualityContext
 
     internal T Materialize<T>(object wrapper, Func<T> read) => _payloads.Get(wrapper, read);
 
-    private readonly record struct ReferencePair(object Left, object Right);
+    private readonly record struct ReferencePair(object Left, object Right, ModelOperationSemantics Semantics);
 
     private sealed class ReferencePairComparer : IEqualityComparer<ReferencePair>
     {
         internal static readonly ReferencePairComparer Instance = new();
 
         public bool Equals(ReferencePair x, ReferencePair y) =>
-            ReferenceEquals(x.Left, y.Left) && ReferenceEquals(x.Right, y.Right);
+            ReferenceEquals(x.Left, y.Left) && ReferenceEquals(x.Right, y.Right) && x.Semantics.Equals(y.Semantics);
 
         public int GetHashCode(ReferencePair pair) =>
-            HashCode.Combine(RuntimeHelpers.GetHashCode(pair.Left), RuntimeHelpers.GetHashCode(pair.Right));
+            HashCode.Combine(RuntimeHelpers.GetHashCode(pair.Left), RuntimeHelpers.GetHashCode(pair.Right), pair.Semantics);
     }
 }
 
@@ -189,9 +217,10 @@ public sealed class EqualityContext
 public sealed class HashContext
 {
     private readonly MaterializationCache _payloads;
-    private readonly Dictionary<object, Dictionary<int, int>> _hashes;
+    private readonly Dictionary<ModelReferenceKey, Dictionary<int, int>> _hashes;
 
-    internal ModelAdapterFrame? Adapters { get; set; }
+    internal ModelTraversal Traversal { get; private init; } = new();
+    internal ModelAdapterFrame? Adapters { get => Traversal.Adapters; set => Traversal.Adapters = value; }
 
     /// <summary>The maximum number of traversed edges in a standard value hash.</summary>
     public const int DefaultDepth = 16;
@@ -200,11 +229,11 @@ public sealed class HashContext
     public int RemainingDepth { get; }
 
     /// <summary>Starts an independent hash operation.</summary>
-    public HashContext() : this(DefaultDepth, new MaterializationCache(), new(ReferenceEqualityComparer.Instance))
+    public HashContext() : this(DefaultDepth, new MaterializationCache(), new())
     {
     }
 
-    private HashContext(int depth, MaterializationCache payloads, Dictionary<object, Dictionary<int, int>> hashes)
+    private HashContext(int depth, MaterializationCache payloads, Dictionary<ModelReferenceKey, Dictionary<int, int>> hashes)
     {
         RemainingDepth = depth;
         _payloads = payloads;
@@ -214,7 +243,7 @@ public sealed class HashContext
     /// <summary>Returns a context for a child edge while sharing materialization state.</summary>
     public HashContext Descend() => new(Math.Max(0, RemainingDepth - 1), _payloads, _hashes)
     {
-        Adapters = Adapters
+        Traversal = Traversal.Fork()
     };
 
     /// <summary>Combines ordered field or element hashes.</summary>
@@ -224,10 +253,11 @@ public sealed class HashContext
 
     internal int HashReference(object source, Func<int> compute)
     {
-        if (!_hashes.TryGetValue(source, out var depths))
+        var key = new ModelReferenceKey(source, Traversal.Semantics);
+        if (!_hashes.TryGetValue(key, out var depths))
         {
             depths = new Dictionary<int, int>();
-            _hashes.Add(source, depths);
+            _hashes.Add(key, depths);
         }
 
         if (depths.TryGetValue(RemainingDepth, out var hash))

@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using Bond.Parser.Syntax;
@@ -17,9 +18,23 @@ public class SymbolTable
     private readonly HashSet<string> _processedImports = [];
     private readonly Dictionary<Declaration, (IReadOnlyList<AliasDeclaration> Aliases, string? File)> _contexts =
         new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<string, FileAliasScope> _fileScopes = [];
+
+    private sealed class FileAliasScope(IReadOnlyList<AliasDeclaration> aliases)
+    {
+        public IReadOnlyList<AliasDeclaration> LocalAliases { get; } = aliases;
+        public List<string> Imports { get; } = [];
+        public List<AliasDeclaration>? EffectiveAliases { get; set; }
+    }
 
     internal IEnumerable<Declaration> Declarations => _globalDeclarations.Concat(_aliases).Concat(_forwards);
     internal IEnumerable<Declaration> BoundDeclarations => _boundDeclarations;
+
+    internal void SetFileAliases(string filePath, IReadOnlyList<AliasDeclaration> aliases) =>
+        _fileScopes[filePath] = new FileAliasScope(aliases);
+
+    internal void AddImport(string filePath, string importedFilePath) =>
+        _fileScopes[filePath].Imports.Add(importedFilePath);
 
     internal void SetContext(Declaration declaration, IReadOnlyList<AliasDeclaration> aliases, string? filePath)
     {
@@ -35,8 +50,61 @@ public class SymbolTable
         }
     }
 
-    internal IReadOnlyList<AliasDeclaration>? GetAliases(Declaration declaration) =>
-        _contexts.TryGetValue(declaration, out var context) ? context.Aliases : null;
+    internal IReadOnlyList<AliasDeclaration>? GetAliases(Declaration declaration)
+    {
+        if (!_contexts.TryGetValue(declaration, out var context))
+        {
+            return null;
+        }
+
+        if (context.File is null || !_fileScopes.TryGetValue(context.File, out var scope))
+        {
+            return context.Aliases;
+        }
+
+        if (scope.EffectiveAliases is null)
+        {
+            CompleteAliasScopes();
+        }
+
+        return scope.EffectiveAliases!;
+    }
+
+    private void CompleteAliasScopes()
+    {
+        var dependents = _fileScopes.Values.ToDictionary(scope => scope, _ => new List<FileAliasScope>());
+        var seen = new Dictionary<FileAliasScope, HashSet<AliasDeclaration>>();
+        var pending = new Queue<(FileAliasScope Scope, AliasDeclaration Alias)>();
+        foreach (var scope in _fileScopes.Values)
+        {
+            scope.EffectiveAliases = [.. scope.LocalAliases];
+            seen[scope] = new HashSet<AliasDeclaration>(scope.LocalAliases, ReferenceEqualityComparer.Instance);
+            foreach (var alias in scope.LocalAliases)
+            {
+                pending.Enqueue((scope, alias));
+            }
+
+            foreach (var import in scope.Imports)
+            {
+                dependents[_fileScopes[import]].Add(scope);
+            }
+        }
+
+        // Propagate each declaration through each file once, including cyclic import graphs.
+        while (pending.TryDequeue(out var entry))
+        {
+            foreach (var scope in dependents[entry.Scope])
+            {
+                var shadowed = scope.LocalAliases.Any(local =>
+                    local.Name == entry.Alias.Name && local.Namespaces.Any(ns => entry.Alias.Namespaces.Any(ns.Matches)));
+                if (!shadowed && seen[scope].Add(entry.Alias))
+                {
+                    scope.EffectiveAliases!.Add(entry.Alias);
+                    pending.Enqueue((scope, entry.Alias));
+                }
+            }
+        }
+    }
 
     internal string? GetSourceFile(Declaration declaration) =>
         _contexts.TryGetValue(declaration, out var context) ? context.File : null;
@@ -84,9 +152,17 @@ public class SymbolTable
     }
 
     /// <summary>Aliases first, then the global table.</summary>
-    public Declaration? FindSymbol(string[] qualifiedName, Namespace[] currentNamespaces, IReadOnlyList<AliasDeclaration> aliases)
+    public Declaration? FindSymbol(string[] qualifiedName, Namespace[] currentNamespaces, IReadOnlyList<AliasDeclaration> aliases) =>
+        FindSymbol(qualifiedName, currentNamespaces, aliases, SourceLocation.Unknown, EquivalentDeclarations);
+
+    internal Declaration? FindSymbol(
+        string[] qualifiedName,
+        Namespace[] currentNamespaces,
+        IReadOnlyList<AliasDeclaration> aliases,
+        SourceLocation location,
+        Func<AliasDeclaration, AliasDeclaration, bool> equivalentAliases)
     {
-        var alias = FindAlias(qualifiedName, currentNamespaces, aliases);
+        var alias = FindAlias(qualifiedName, currentNamespaces, aliases, location, equivalentAliases);
         if (alias != null)
         {
             return alias;
@@ -96,35 +172,47 @@ public class SymbolTable
         {
             return _globalDeclarations.FirstOrDefault(d =>
                 d.Name == qualifiedName[0] &&
-                d.Namespaces.Any(ns1 => currentNamespaces.Any(ns1.Matches)))
-                ?? FindAlias(qualifiedName, currentNamespaces, _aliases);
+                d.Namespaces.Any(ns1 => currentNamespaces.Any(ns1.Matches)));
         }
 
         var namespacePart = qualifiedName[..^1];
         var namePart = qualifiedName[^1];
         return _globalDeclarations.FirstOrDefault(d =>
             d.Name == namePart &&
-            d.Namespaces.Any(ns => ns.Name.SequenceEqual(namespacePart)))
-            ?? FindAlias(qualifiedName, currentNamespaces, _aliases);
+            d.Namespaces.Any(ns => ns.Name.SequenceEqual(namespacePart)));
     }
 
     /// <summary>Returns true on first claim, false on cycle / diamond import.</summary>
     public bool ClaimImport(string canonicalPath) => _processedImports.Add(canonicalPath);
 
-    private static AliasDeclaration? FindAlias(string[] qualifiedName, Namespace[] currentNamespaces, IReadOnlyList<AliasDeclaration> aliases)
+    private static AliasDeclaration? FindAlias(
+        string[] qualifiedName,
+        Namespace[] currentNamespaces,
+        IReadOnlyList<AliasDeclaration> aliases,
+        SourceLocation location,
+        Func<AliasDeclaration, AliasDeclaration, bool> equivalentAliases)
     {
-        if (qualifiedName.Length == 1)
-        {
-            return aliases.FirstOrDefault(a =>
-                a.Name == qualifiedName[0] &&
-                a.Namespaces.Any(ns1 => currentNamespaces.Any(ns1.Matches)));
-        }
-
         var namespacePart = qualifiedName[..^1];
         var namePart = qualifiedName[^1];
-        return aliases.FirstOrDefault(a =>
-            a.Name == namePart &&
-            a.Namespaces.Any(ns => ns.Name.SequenceEqual(namespacePart)));
+        var matches = qualifiedName.Length == 1
+            ? aliases.Where(a =>
+                a.Name == qualifiedName[0] &&
+                a.Namespaces.Any(ns1 => currentNamespaces.Any(ns1.Matches)))
+            : aliases.Where(a =>
+                a.Name == namePart &&
+                a.Namespaces.Any(ns => ns.Name.SequenceEqual(namespacePart)));
+        AliasDeclaration? result = null;
+        foreach (var alias in matches)
+        {
+            if (result is not null && !ReferenceEquals(result, alias) && !equivalentAliases(result, alias))
+            {
+                throw new SemanticErrorException($"Ambiguous type alias '{string.Join(".", qualifiedName)}'", location);
+            }
+
+            result ??= alias;
+        }
+
+        return result;
     }
 
     // Forward + struct (in either order) reconciles when the type-parameter shape

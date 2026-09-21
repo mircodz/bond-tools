@@ -245,6 +245,125 @@ public sealed class CSharpMappingFeatureTests
         Assert.IsType<List<int>>(type.GetProperty("values")!.GetValue(value.Clone()));
     }
 
+    [Theory]
+    [InlineData("compact", 2)]
+    [InlineData("fast", 1)]
+    [InlineData("json", 0)]
+    public async Task MappedBlobAliasesRetainWireTypesAndRoundTripEmptyAndNestedValues(string protocol, int version)
+    {
+        var result = await GenerateResult("""
+            namespace Example
+            using Bytes = blob;
+            using Data = Bytes;
+            using Chunks = vector<blob>;
+            struct Item {
+                0: Bytes bytes;
+                1: Data alias;
+                2: vector<Bytes> chunks;
+                3: map<string, vector<Data>> nested;
+                4: Chunks converted;
+            }
+            """, new CSharpGenerationOptions
+        {
+            TypeMappings = [
+                "Example.Bytes=System.Byte[]",
+                "Example.Chunks=System.Collections.Generic.List<System.Byte[]>"
+            ]
+        });
+        Assert.True(result.Success, Messages(result));
+        Assert.DoesNotContain("BondTools.Models", result.Code!);
+        var assembly = Compile(result.Code!, """
+            namespace Example
+            {
+                public static class BondTypeAliasConverter
+                {
+                    public static byte[] Convert(System.ArraySegment<byte> value, byte[] unused)
+                    {
+                        if (value.Count == 0)
+                        {
+                            return System.Array.Empty<byte>();
+                        }
+
+                        var bytes = new byte[value.Count];
+                        System.Array.Copy(value.Array, value.Offset, bytes, 0, value.Count);
+                        return bytes;
+                    }
+
+                    public static System.ArraySegment<byte> Convert(byte[] value, System.ArraySegment<byte> unused) =>
+                        new(value ?? System.Array.Empty<byte>());
+
+                    public static System.Collections.Generic.List<byte[]> Convert(
+                        System.Collections.Generic.List<System.ArraySegment<byte>> value,
+                        System.Collections.Generic.List<byte[]> unused) =>
+                        value.ConvertAll(item => Convert(item, default(byte[])));
+
+                    public static System.Collections.Generic.List<System.ArraySegment<byte>> Convert(
+                        System.Collections.Generic.List<byte[]> value,
+                        System.Collections.Generic.List<System.ArraySegment<byte>> unused) =>
+                        value.ConvertAll(item => Convert(item, default(System.ArraySegment<byte>)));
+                }
+            }
+            namespace Reference
+            {
+                [Bond.Schema, Bond.Namespace("Example")]
+                public class Item
+                {
+                    [Bond.Id(0)] public System.ArraySegment<byte> bytes { get; set; }
+                    [Bond.Id(1)] public System.ArraySegment<byte> alias { get; set; }
+                    [Bond.Id(2)] public System.Collections.Generic.List<System.ArraySegment<byte>> chunks { get; set; } = new();
+                    [Bond.Id(3)] public System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<System.ArraySegment<byte>>> nested { get; set; } = new();
+                    [Bond.Id(4)] public System.Collections.Generic.List<System.ArraySegment<byte>> converted { get; set; } = new();
+                }
+            }
+            """);
+        var mapped = assembly.GetType("Example.Item", true)!;
+        var reference = assembly.GetType("Reference.Item", true)!;
+        Assert.Equal(typeof(byte[]), mapped.GetProperty("bytes")!.PropertyType);
+        var bytesType = mapped.GetProperty("bytes")!.CustomAttributes
+            .Single(attribute => attribute.AttributeType == typeof(global::Bond.TypeAttribute));
+        var convertedType = mapped.GetProperty("converted")!.CustomAttributes
+            .Single(attribute => attribute.AttributeType == typeof(global::Bond.TypeAttribute));
+        Assert.Equal(typeof(global::Bond.Tag.blob), bytesType.ConstructorArguments[0].Value);
+        Assert.Equal(typeof(List<global::Bond.Tag.blob>), convertedType.ConstructorArguments[0].Value);
+        Assert.Equal(SchemaJson(reference), SchemaJson(mapped));
+        Assert.Empty(Assert.IsType<byte[]>(mapped.GetProperty("bytes")!.GetValue(Activator.CreateInstance(mapped))));
+
+        foreach (var bytes in new[] { Array.Empty<byte>(), new byte[] { 0, 127, 255 } })
+        {
+            var value = Activator.CreateInstance(mapped)!;
+            mapped.GetProperty("bytes")!.SetValue(value, bytes);
+            mapped.GetProperty("alias")!.SetValue(value, bytes);
+            mapped.GetProperty("chunks")!.SetValue(value, new List<byte[]> { bytes, Array.Empty<byte>() });
+            mapped.GetProperty("nested")!.SetValue(value, new Dictionary<string, List<byte[]>> { ["data"] = [bytes, []] });
+            mapped.GetProperty("converted")!.SetValue(value, new List<byte[]> { bytes, Array.Empty<byte>() });
+
+            var expected = Activator.CreateInstance(reference)!;
+            var segment = new ArraySegment<byte>(bytes);
+            var empty = new ArraySegment<byte>(Array.Empty<byte>());
+            reference.GetProperty("bytes")!.SetValue(expected, segment);
+            reference.GetProperty("alias")!.SetValue(expected, segment);
+            reference.GetProperty("chunks")!.SetValue(expected, new List<ArraySegment<byte>> { segment, empty });
+            reference.GetProperty("nested")!.SetValue(expected,
+                new Dictionary<string, List<ArraySegment<byte>>> { ["data"] = [segment, empty] });
+            reference.GetProperty("converted")!.SetValue(expected, new List<ArraySegment<byte>> { segment, empty });
+
+            var encoded = Write(mapped, value, protocol, (ushort)version, false);
+            Assert.Equal(Write(reference, expected, protocol, (ushort)version, false), encoded);
+            var copy = Read(mapped, encoded, protocol, (ushort)version, false);
+            Assert.Equal(bytes, Assert.IsType<byte[]>(mapped.GetProperty("bytes")!.GetValue(copy)));
+            Assert.Equal(bytes, Assert.IsType<byte[]>(mapped.GetProperty("alias")!.GetValue(copy)));
+            var chunks = Assert.IsType<List<byte[]>>(mapped.GetProperty("chunks")!.GetValue(copy));
+            Assert.Equal(bytes, chunks[0]);
+            Assert.Empty(chunks[1]);
+            var nested = Assert.IsType<Dictionary<string, List<byte[]>>>(mapped.GetProperty("nested")!.GetValue(copy));
+            Assert.Equal(bytes, nested["data"][0]);
+            Assert.Empty(nested["data"][1]);
+            var converted = Assert.IsType<List<byte[]>>(mapped.GetProperty("converted")!.GetValue(copy));
+            Assert.Equal(bytes, converted[0]);
+            Assert.Empty(converted[1]);
+        }
+    }
+
     [Fact]
     public void ByteArrayAdaptersPreserveSharedStorageWithBlobs()
     {

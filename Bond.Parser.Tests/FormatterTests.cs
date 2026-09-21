@@ -1,4 +1,8 @@
+using System.Linq;
+using System.Threading.Tasks;
 using Bond.Parser.Formatting;
+using Bond.Parser.Parser;
+using Bond.Parser.Syntax;
 using FluentAssertions;
 
 namespace Bond.Parser.Tests;
@@ -48,6 +52,50 @@ public class FormatterTests
 
         result.Success.Should().BeTrue();
         result.FormattedText.Should().Be(expected);
+    }
+
+    [Fact]
+    public async Task Format_TerminatesLineCommentsBeforeCommentsAcrossFieldSeparators()
+    {
+        var input = "namespace N\nstruct S {\n  0: int32 x // first\n  ; /*\n  1: int32 y; // */\n}";
+        var original = await ParserFacade.ParseStringAsync(input);
+        original.Success.Should().BeTrue();
+        var originalFields = original.Ast!.Declarations.OfType<StructDeclaration>().Single().Fields;
+        originalFields.Should().ContainSingle().Which.Name.Should().Be("x");
+
+        var formatted = BondFormatter.Format(input, "<inline>");
+        formatted.Success.Should().BeTrue();
+        formatted.FormattedText.Should().Contain("// first\n    /*\n  1: int32 y; // */");
+
+        var reparsed = await ParserFacade.ParseStringAsync(formatted.FormattedText!);
+        reparsed.Success.Should().BeTrue();
+        reparsed.Ast!.Declarations.OfType<StructDeclaration>().Single().Fields
+            .Select(field => (field.Ordinal, field.Name, field.Type, field.Modifier, field.DefaultValue))
+            .Should().Equal(originalFields.Select(field => (field.Ordinal, field.Name, field.Type, field.Modifier, field.DefaultValue)));
+        BondFormatter.Format(formatted.FormattedText!, "<inline>").FormattedText.Should().Be(formatted.FormattedText);
+    }
+
+    [Theory]
+    [InlineData(";")]
+    [InlineData(",")]
+    public async Task Format_TerminatesLineCommentsBeforeCommentsAcrossEnumSeparators(string separator)
+    {
+        var input = "namespace N\nenum E {\n  x // first\n  " + separator + " /*\n  y, // */\n}";
+        var original = await ParserFacade.ParseStringAsync(input);
+        original.Success.Should().BeTrue();
+        var originalConstants = original.Ast!.Declarations.OfType<EnumDeclaration>().Single().Constants;
+        originalConstants.Should().ContainSingle().Which.Name.Should().Be("x");
+
+        var formatted = BondFormatter.Format(input, "<inline>");
+        formatted.Success.Should().BeTrue();
+        formatted.FormattedText.Should().Contain("// first\n    /*\n  y, // */");
+
+        var reparsed = await ParserFacade.ParseStringAsync(formatted.FormattedText!);
+        reparsed.Success.Should().BeTrue();
+        reparsed.Ast!.Declarations.OfType<EnumDeclaration>().Single().Constants
+            .Select(constant => (constant.Name, constant.Value))
+            .Should().Equal(originalConstants.Select(constant => (constant.Name, constant.Value)));
+        BondFormatter.Format(formatted.FormattedText!, "<inline>").FormattedText.Should().Be(formatted.FormattedText);
     }
 
     [Fact]

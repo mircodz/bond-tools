@@ -318,14 +318,16 @@ public class CodegenParserParityTests
     [Fact]
     public async Task CyclicImportedAliasesReportTheReferenceLocationInTheCorrectFile()
     {
-        var result = await ParserFacade.ParseContentAsync("""
+        const string root = """
             import "leaf.bond"
             namespace Root
             using First = Imported.Second;
-            """, "root.bond", (_, path) => Task.FromResult((path, """
+            """;
+        var result = await ParserFacade.ParseContentAsync(root, "root.bond",
+            (_, path) => Task.FromResult((path, path == "root.bond" ? root : """
+                import "root.bond"
                 namespace Imported
                 // An imported alias refers back to the root alias.
-
 
                 using Second = Root.First;
                 """)));
