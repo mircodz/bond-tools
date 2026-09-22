@@ -1,4 +1,8 @@
+using System.Linq;
+using System.Threading.Tasks;
 using Bond.Parser.Formatting;
+using Bond.Parser.Parser;
+using Bond.Parser.Syntax;
 using FluentAssertions;
 
 namespace Bond.Parser.Tests;
@@ -48,6 +52,50 @@ public class FormatterTests
 
         result.Success.Should().BeTrue();
         result.FormattedText.Should().Be(expected);
+    }
+
+    [Fact]
+    public async Task Format_TerminatesLineCommentsBeforeCommentsAcrossFieldSeparators()
+    {
+        var input = "namespace N\nstruct S {\n  0: int32 x // first\n  ; /*\n  1: int32 y; // */\n}";
+        var original = await ParserFacade.ParseStringAsync(input);
+        original.Success.Should().BeTrue();
+        var originalFields = original.Ast!.Declarations.OfType<StructDeclaration>().Single().Fields;
+        originalFields.Should().ContainSingle().Which.Name.Should().Be("x");
+
+        var formatted = BondFormatter.Format(input, "<inline>");
+        formatted.Success.Should().BeTrue();
+        formatted.FormattedText.Should().Contain("// first\n    /*\n  1: int32 y; // */");
+
+        var reparsed = await ParserFacade.ParseStringAsync(formatted.FormattedText!);
+        reparsed.Success.Should().BeTrue();
+        reparsed.Ast!.Declarations.OfType<StructDeclaration>().Single().Fields
+            .Select(field => (field.Ordinal, field.Name, field.Type, field.Modifier, field.DefaultValue))
+            .Should().Equal(originalFields.Select(field => (field.Ordinal, field.Name, field.Type, field.Modifier, field.DefaultValue)));
+        BondFormatter.Format(formatted.FormattedText!, "<inline>").FormattedText.Should().Be(formatted.FormattedText);
+    }
+
+    [Theory]
+    [InlineData(";")]
+    [InlineData(",")]
+    public async Task Format_TerminatesLineCommentsBeforeCommentsAcrossEnumSeparators(string separator)
+    {
+        var input = "namespace N\nenum E {\n  x // first\n  " + separator + " /*\n  y, // */\n}";
+        var original = await ParserFacade.ParseStringAsync(input);
+        original.Success.Should().BeTrue();
+        var originalConstants = original.Ast!.Declarations.OfType<EnumDeclaration>().Single().Constants;
+        originalConstants.Should().ContainSingle().Which.Name.Should().Be("x");
+
+        var formatted = BondFormatter.Format(input, "<inline>");
+        formatted.Success.Should().BeTrue();
+        formatted.FormattedText.Should().Contain("// first\n    /*\n  y, // */");
+
+        var reparsed = await ParserFacade.ParseStringAsync(formatted.FormattedText!);
+        reparsed.Success.Should().BeTrue();
+        reparsed.Ast!.Declarations.OfType<EnumDeclaration>().Single().Constants
+            .Select(constant => (constant.Name, constant.Value))
+            .Should().Equal(originalConstants.Select(constant => (constant.Name, constant.Value)));
+        BondFormatter.Format(formatted.FormattedText!, "<inline>").FormattedText.Should().Be(formatted.FormattedText);
     }
 
     [Fact]
@@ -199,7 +247,7 @@ public class FormatterTests
 
             enum Color {
                 red,
-                green
+                green,
             }
             """);
 
@@ -225,7 +273,7 @@ public class FormatterTests
                 One,
                 Three = 3,
                 Four,
-                Six = 6
+                Six = 6,
             }
             """);
 
@@ -328,5 +376,122 @@ public class FormatterTests
 
         result.Success.Should().BeTrue();
         result.FormattedText.Should().Be(expected);
+    }
+
+    [Theory]
+    [InlineData("-32", -32)]
+    [InlineData("-0X20", -32)]
+    [InlineData("+32", 32)]
+    public async Task FormattingPreservesSignedGenericArguments(string literal, long expected)
+    {
+        var schema = $$"""
+            namespace Example
+            using Values<T, N> = vector<T>;
+            struct Item { 0: Values<int32, {{literal}}> values; }
+            """;
+        var formatted = BondFormatter.Format(schema, "item.bond");
+        Assert.True(formatted.Success);
+        Assert.Contains("Values<int32, " + literal + ">", formatted.FormattedText!);
+
+        var parsed = await ParserFacade.ParseStringAsync(formatted.FormattedText!);
+        Assert.True(parsed.Success);
+        var structure = Assert.Single(parsed.Ast!.Declarations.OfType<StructDeclaration>());
+        var reference = Assert.IsType<BondType.TypeReference>(Assert.Single(structure.Fields).Type);
+        Assert.Equal(expected, Assert.IsType<BondType.IntTypeArg>(reference.TypeArguments[1]).Value);
+        Assert.Equal(formatted.FormattedText, BondFormatter.Format(formatted.FormattedText!, "item.bond").FormattedText);
+    }
+
+    [Fact]
+    public void Format_PreservesFieldAndEnumTrailingComments()
+    {
+        var input = """
+            namespace Test
+            struct Item{
+            0:int32 id; // identifier
+            1:string name; /* display */ /* label */
+            2:int32 value /* before separator */; // after separator
+            }
+            enum State{
+            First=1; // first
+            Second /* inline */, /* second */
+            Third=3 // last
+            }
+            """;
+        var expected = TrimEol("""
+            namespace Test
+
+            struct Item {
+                0: int32 id; // identifier
+                1: string name; /* display */ /* label */
+                2: int32 value; /* before separator */ // after separator
+            }
+
+            enum State {
+                First = 1, // first
+                Second, /* inline */ /* second */
+                Third = 3, // last
+            }
+            """);
+
+        var result = BondFormatter.Format(input, "<inline>");
+
+        result.Success.Should().BeTrue(string.Join("; ", result.Errors));
+        result.FormattedText.Should().Be(expected);
+
+        var repeated = BondFormatter.Format(result.FormattedText!, "<inline>");
+        repeated.Success.Should().BeTrue();
+        repeated.FormattedText.Should().Be(expected);
+    }
+
+    [Fact]
+    public void Format_PreservesOpeningClosingAndEndOfFileComments()
+    {
+        var input = """
+            namespace Test // namespace
+            struct Item { // opening
+                0: int32 id; // field
+                // before closing
+            }; // closing
+            enum State { // enum opening
+                First, // enum member
+                // enum closing
+            }; // enum end
+            // end of file
+            """;
+
+        var result = BondFormatter.Format(input, "<inline>");
+
+        result.Success.Should().BeTrue(string.Join("; ", result.Errors));
+        result.FormattedText.Should().Contain("0: int32 id; // field");
+        result.FormattedText.Should().Contain("First, // enum member");
+        result.FormattedText.Should().Contain("// before closing");
+        result.FormattedText.Should().EndWith("// end of file");
+
+        var repeated = BondFormatter.Format(result.FormattedText!, "<inline>");
+        repeated.Success.Should().BeTrue(string.Join("; ", repeated.Errors));
+        repeated.FormattedText.Should().Be(result.FormattedText);
+    }
+
+    [Theory]
+    [InlineData("enum State { First }", "First,")]
+    [InlineData("enum State { First; Second; }", "Second,")]
+    [InlineData("enum State { First, Second, }", "Second,")]
+    public void Format_AlwaysAddsFinalEnumComma(string declaration, string lastMember)
+    {
+        var result = BondFormatter.Format("namespace Test " + declaration, "<inline>");
+        result.Success.Should().BeTrue();
+        result.FormattedText.Should().Contain(lastMember + "\n}");
+        BondFormatter.Format(result.FormattedText!, "<inline>").FormattedText.Should().Be(result.FormattedText);
+    }
+
+    [Theory]
+    [InlineData("namespace Test struct Item { 0: int32 /* inside type */ value; }")]
+    [InlineData("namespace Test struct Item { 0: int32 value; } @")]
+    public void Format_RefusesToDiscardUnpreservedCommentsOrInvalidTokens(string input)
+    {
+        var result = BondFormatter.Format(input, "<inline>");
+        result.Success.Should().BeFalse();
+        result.FormattedText.Should().BeNull();
+        result.Errors.Should().NotBeEmpty();
     }
 }

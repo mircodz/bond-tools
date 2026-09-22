@@ -1,8 +1,9 @@
-.PHONY: help build test clean pack install uninstall coverage format
+.PHONY: help build build-release test clean pack install uninstall coverage format
 
 # Variables
 VERSION := $(shell cat version)
-NUPKG_DIR := ./nupkgs
+OUT_DIR := ./out
+NUPKG_DIR := $(OUT_DIR)/package/release
 TOOL_NAME := bond
 PKG_ID := bond-tools
 
@@ -13,28 +14,26 @@ help: ## Show this help message
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-20s %s\n", $$1, $$2}'
 
 build: ## Build the project in Debug mode
-	dotnet build Bond.Parser/Bond.Parser.csproj -c Debug
-	dotnet build Bond.Parser.CLI/Bond.Parser.CLI.csproj -c Debug
+	dotnet build Bond.sln -c Debug
 
 build-release: ## Build the project in Release mode
-	dotnet build Bond.Parser/Bond.Parser.csproj -c Release
-	dotnet build Bond.Parser.CLI/Bond.Parser.CLI.csproj -c Release
+	dotnet build Bond.sln -c Release
 
 test: ## Run all tests
-	dotnet test Bond.Parser.Tests/Bond.Parser.Tests.csproj
+	dotnet test --solution Bond.sln
 
 coverage: ## Run tests with coverage report
 	bash scripts/coverage.sh
 
 clean: ## Clean build artifacts
 	dotnet clean Bond.sln || true
-	rm -rf $(NUPKG_DIR)
+	rm -rf $(OUT_DIR)
 	rm -rf */bin */obj
 
-pack: clean build-release ## Pack the CLI tool as a NuGet package
-	dotnet pack Bond.Parser.CLI/Bond.Parser.CLI.csproj -c Release -o $(NUPKG_DIR) /p:Version=$(VERSION)
+pack: build-release ## Pack the tool, parser, model support, and build integration
+	dotnet pack Bond.sln -c Release --no-build --no-restore /p:Version=$(VERSION)
 	@echo ""
-	@echo "Package created: $(NUPKG_DIR)/$(PKG_ID).$(VERSION).nupkg"
+	@echo "Packages created in $(NUPKG_DIR)"
 
 install: pack ## Install the tool globally
 	dotnet tool uninstall -g $(PKG_ID) 2>/dev/null || true
@@ -56,21 +55,5 @@ reinstall: uninstall install ## Reinstall the tool (clean install)
 setup: ## Initial setup (restore packages)
 	./scripts/setup-hooks.sh
 	dotnet restore
-
-# Release
-bump-major: ## Bump major version (1.0.0 -> 2.0.0)
-	@echo "Current version: $(VERSION)"
-	@echo $(VERSION) | awk -F. '{print $$1+1".0.0"}' > version
-	@echo "New version: $$(cat version)"
-
-bump-minor: ## Bump minor version (1.0.0 -> 1.1.0)
-	@echo "Current version: $(VERSION)"
-	@echo $(VERSION) | awk -F. '{print $$1"."$$2+1".0"}' > version
-	@echo "New version: $$(cat version)"
-
-bump-patch: ## Bump patch version (1.0.0 -> 1.0.1)
-	@echo "Current version: $(VERSION)"
-	@echo $(VERSION) | awk -F. '{print $$1"."$$2"."$$3+1}' > version
-	@echo "New version: $$(cat version)"
 
 all: clean build test ## Clean, build, and test

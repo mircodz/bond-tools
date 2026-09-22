@@ -1,34 +1,35 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-command -v dotnet >/dev/null || { echo "dotnet missing" >&2; exit 1; }
+if ! command -v dotnet >/dev/null; then
+  echo "dotnet missing" >&2
+  exit 1
+fi
 
 cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 
-out_dir="TestResults/Coverage"
-report_dir="$out_dir/html"
-rm -rf "$out_dir"
+out_dir="out/test-results/coverage"
+report_dir="out/coverage-report"
+rm -rf "$out_dir" "$report_dir"
 mkdir -p "$out_dir"
 
-dotnet test Bond.Parser.Tests/Bond.Parser.Tests.csproj \
-  --collect:"XPlat Code Coverage" \
-  --results-directory:"$out_dir"
+dotnet test --solution Bond.sln \
+  --coverlet --coverlet-output-format cobertura \
+  --coverlet-exclude-by-file "**/*.g4.cs" \
+  --results-directory "$PWD/$out_dir"
 
-# Find the coverage file (XPlat creates it in a GUID subdirectory)
-coverage_file=$(find "$out_dir" -name "coverage.cobertura.xml" | head -n 1)
+coverage_file=$(find "$out_dir" -name "*coverage.cobertura*.xml" -print -quit)
 
 if [ -z "$coverage_file" ]; then
   echo "Error: Coverage file not generated" >&2
   exit 1
 fi
 
-echo "Coverage file: $coverage_file"
-
 mkdir -p "$report_dir"
 dotnet tool update -g dotnet-reportgenerator-globaltool >/dev/null 2>&1 || true
 
 reportgenerator \
-  -reports:"$coverage_file" \
+  -reports:"$out_dir/*coverage.cobertura*.xml" \
   -targetdir:"$report_dir" \
   -reporttypes:Html
 

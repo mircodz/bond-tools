@@ -15,7 +15,7 @@ public class JsonSnapshotTests
     private static readonly string FixturesDir = Path.Combine(AppContext.BaseDirectory, "Fixtures");
     private static readonly HashSet<string> Skipped = new(StringComparer.OrdinalIgnoreCase)
     {
-        // These golden JSONs from upstream drop the Unary streaming marker
+        // These JSON outputs from upstream drop the Unary streaming marker
         "example.bond",
         "generic_service.bond",
         "service_attributes.bond",
@@ -30,6 +30,7 @@ public class JsonSnapshotTests
             {
                 continue;
             }
+
             var jsonPath = Path.ChangeExtension(bondPath, ".json");
             if (File.Exists(jsonPath))
             {
@@ -42,15 +43,15 @@ public class JsonSnapshotTests
     [MemberData(nameof(FixturePairs))]
     public async Task BondAst_Json_MatchesFixture(string bondPath, string jsonPath)
     {
-        var result = await ParserFacade.ParseFileAsync(bondPath);
+        var result = await ParserFacade.ParseFileAsync(bondPath, cancellationToken: TestContext.Current.CancellationToken);
         result.Success.Should().BeTrue($"fixture {bondPath} should parse");
 
         var options = BondJsonSerializerOptions.GetOptions();
         var actual = JsonSerializer.Serialize(result.Ast!, options);
 
         // Normalize both sides for stable comparison (order-insensitive for objects and arrays)
-        var actualDoc = JsonDocument.Parse(actual);
-        var expectedDoc = JsonDocument.Parse(await File.ReadAllTextAsync(jsonPath));
+        using var actualDoc = JsonDocument.Parse(actual);
+        using var expectedDoc = JsonDocument.Parse(await File.ReadAllTextAsync(jsonPath, TestContext.Current.CancellationToken));
 
         Canonicalize(actualDoc.RootElement)
             .Should().Be(Canonicalize(expectedDoc.RootElement));

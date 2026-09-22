@@ -77,6 +77,8 @@ public static class ParserFacade
             var parser = new BondParser(tokenStream);
 
             var errorListener = new ErrorListener(filePath);
+            lexer.RemoveErrorListeners();
+            lexer.AddErrorListener(errorListener);
             parser.RemoveErrorListeners();
             parser.AddErrorListener(errorListener);
 
@@ -106,6 +108,11 @@ public static class ParserFacade
                 errors.Add(new ParseError(ex.Message, filePath, ex.Location.Line, ex.Location.Column));
                 return new ParseResult(ast, errors);
             }
+            catch (ParseErrorsException ex)
+            {
+                errors.AddRange(ex.Errors);
+                return new ParseResult(ast, errors);
+            }
             catch (Exception ex)
             {
                 errors.Add(new ParseError(ex.Message, filePath, 0, 0));
@@ -113,6 +120,11 @@ public static class ParserFacade
             }
 
             return new ParseResult(ast, errors);
+        }
+        catch (SemanticErrorException ex)
+        {
+            errors.Add(new ParseError(ex.Message, filePath, ex.Location.Line, ex.Location.Column));
+            return new ParseResult(null, errors);
         }
         catch (Exception ex)
         {

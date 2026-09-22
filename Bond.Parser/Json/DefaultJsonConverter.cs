@@ -25,7 +25,8 @@ internal sealed class DefaultJsonConverter : WriteOnlyJsonConverter<Default>
 
             case Default.Float floatValue:
                 writer.WriteString("type", "float");
-                var normalized = floatValue.Value == 0 ? 0 : floatValue.Value; // collapse -0 to 0 to match reference output
+                // Collapse negative zero to match the upstream JSON output.
+                var normalized = floatValue.Value == 0 ? 0 : floatValue.Value;
                 writer.WriteNumber("value", normalized);
                 break;
 

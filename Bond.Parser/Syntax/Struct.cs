@@ -6,6 +6,9 @@ public sealed record StructDeclaration : Declaration
 {
     public required Attribute[] Attributes { get; init; }
     public BondType? BaseType { get; init; }
+    public bool IsView { get; init; }
+    public string[]? ViewTarget { get; init; }
+    public string[] ViewFields { get; init; } = [];
     public required Field[] Fields { get; init; }
 
     public override string Kind => "struct";

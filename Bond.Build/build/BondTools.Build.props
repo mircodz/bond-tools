@@ -1,0 +1,9 @@
+<Project>
+  <PropertyGroup>
+    <BondDescriptors Condition="'$(BondDescriptors)' == ''">false</BondDescriptors>
+    <BondClone Condition="'$(BondClone)' == ''">false</BondClone>
+    <BondEquality Condition="'$(BondEquality)' == ''">false</BondEquality>
+    <BondDebugger Condition="'$(BondDebugger)' == ''">false</BondDebugger>
+    <BondToString Condition="'$(BondToString)' == ''">false</BondToString>
+  </PropertyGroup>
+</Project>

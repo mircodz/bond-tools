@@ -1,198 +1,333 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using Bond.Parser.Syntax;
 
 namespace Bond.Parser.Parser;
 
-/// <summary>
-/// Walks an AST and replaces every UnresolvedType with a TypeReference wrapper
-/// around the resolved Declaration. Operates against a populated SymbolTable plus
-/// the current file's alias list.
-/// </summary>
+/// <summary>Binds types in their declaration's namespace and alias environment.</summary>
 public static class TypeResolver
 {
-    private readonly record struct Context(
-        SymbolTable Symbols,
-        IReadOnlyList<AliasDeclaration> Aliases,
-        Namespace[] Namespaces);
+    public static Syntax.Bond Resolve(Syntax.Bond ast, SymbolTable symbols, IReadOnlyList<AliasDeclaration> aliases) =>
+        new Binder(symbols, aliases).Resolve(ast);
 
-    public static Syntax.Bond Resolve(Syntax.Bond ast, SymbolTable symbols, IReadOnlyList<AliasDeclaration> aliases)
+    private sealed class Binder(SymbolTable symbols, IReadOnlyList<AliasDeclaration> fallbackAliases)
     {
-        var ctx = new Context(symbols, aliases, ast.Namespaces);
-        var resolved = ast.Declarations.Select(d => ResolveDeclaration(d, ctx)).ToArray();
-        return ast with { Declarations = resolved };
-    }
+        private readonly Dictionary<Declaration, Declaration> _resolved = new(ReferenceEqualityComparer.Instance);
+        private readonly HashSet<Declaration> _active = new(ReferenceEqualityComparer.Instance);
 
-    private static Declaration ResolveDeclaration(Declaration declaration, Context ctx) =>
-        declaration switch
+        public Syntax.Bond Resolve(Syntax.Bond ast)
         {
-            StructDeclaration s => ResolveStruct(s, ctx),
-            AliasDeclaration a => ResolveAlias(a, ctx),
-            ServiceDeclaration s => ResolveService(s, ctx),
-            _ => declaration
+            var declarations = ast.Declarations.Select(ResolveDeclaration).ToArray();
+            var environment = symbols.Declarations.Select(ResolveDeclaration)
+                .Concat(declarations)
+                .GroupBy(d => d.QualifiedName)
+                .Select(group => group.LastOrDefault(d => d is not ForwardDeclaration) ?? group.Last())
+                .ToArray();
+
+            return ast with
+            {
+                Declarations = declarations,
+                ResolvedDeclarations = environment
+            };
+        }
+
+        private Declaration ResolveDeclaration(Declaration declaration)
+        {
+            if (_resolved.TryGetValue(declaration, out var existing))
+            {
+                return existing;
+            }
+
+            if (!_active.Add(declaration))
+            {
+                throw new SemanticErrorException($"Cyclic definition of '{declaration.Name}'", declaration.Location);
+            }
+
+            try
+            {
+                var result = declaration switch
+                {
+                    StructDeclaration { IsView: true } view => ResolveView(view),
+                    StructDeclaration structure => structure with
+                    {
+                        BaseType = structure.BaseType is null
+                            ? null
+                            : ResolveType(structure.BaseType, structure, structure.Location),
+                        Fields = structure.Fields.Select(field => field with
+                        {
+                            Type = ResolveType(field.Type, structure, field.Location)
+                        }).ToArray()
+                    },
+                    AliasDeclaration alias => alias with
+                    {
+                        AliasedType = ResolveType(alias.AliasedType, alias, alias.Location)
+                    },
+                    ServiceDeclaration service => service with
+                    {
+                        BaseType = service.BaseType is null
+                            ? null
+                            : ResolveType(service.BaseType, service, service.Location),
+                        Methods = service.Methods.Select(method => ResolveMethod(method, service)).ToArray()
+                    },
+                    _ => declaration
+                };
+
+                _resolved.Add(declaration, result);
+                symbols.SetResolvedContext(declaration, result);
+                return result;
+            }
+            catch (SemanticErrorException error) when (symbols.GetSourceFile(declaration) is { } file)
+            {
+                throw new ParseErrorsException([new ParseError(error.Message, file, error.Location.Line, error.Location.Column)]);
+            }
+            finally
+            {
+                _active.Remove(declaration);
+            }
+        }
+
+        private StructDeclaration ResolveView(StructDeclaration view)
+        {
+            if (view.ViewTarget is null)
+            {
+                throw new SemanticErrorException($"View '{view.Name}' has no target struct", view.Location);
+            }
+
+            if (view.TypeParameters.Length != 0)
+            {
+                throw new SemanticErrorException("A view inherits its type parameters from its target struct", view.Location);
+            }
+
+            var target = FindSymbol(view.ViewTarget, view);
+            if (target is not StructDeclaration structure)
+            {
+                throw new SemanticErrorException($"View '{view.Name}' requires a defined struct target", view.Location);
+            }
+
+            if (_active.Contains(structure))
+            {
+                throw new SemanticErrorException($"Cyclic view definition involving '{view.Name}'", view.Location);
+            }
+
+            var source = (StructDeclaration)ResolveDeclaration(structure);
+            return view with
+            {
+                TypeParameters = source.TypeParameters,
+                BaseType = source.BaseType,
+                Fields = source.Fields.Where(field => view.ViewFields.Contains(field.Name, StringComparer.Ordinal)).ToArray()
+            };
+        }
+
+        private Method ResolveMethod(Method method, ServiceDeclaration service) => method switch
+        {
+            FunctionMethod function => function with
+            {
+                InputType = ResolveMethodType(function.InputType, service, function.Location),
+                ResultType = ResolveMethodType(function.ResultType, service, function.Location)
+            },
+            EventMethod eventMethod => eventMethod with
+            {
+                InputType = ResolveMethodType(eventMethod.InputType, service, eventMethod.Location)
+            },
+            _ => method
         };
 
-    private static StructDeclaration ResolveStruct(StructDeclaration structDecl, Context ctx) =>
-        structDecl with
+        private MethodType ResolveMethodType(MethodType type, Declaration owner, SourceLocation location) => type switch
         {
-            Fields = structDecl.Fields.Select(f => ResolveField(f, ctx, structDecl)).ToArray(),
-            BaseType = structDecl.BaseType is null ? null : ResolveType(structDecl.BaseType, ctx, currentStruct: null, structDecl.Location)
+            MethodType.Unary unary => new MethodType.Unary(ResolveType(unary.Type, owner, location)),
+            MethodType.Streaming streaming => new MethodType.Streaming(ResolveType(streaming.Type, owner, location)),
+            _ => type
         };
 
-    private static AliasDeclaration ResolveAlias(AliasDeclaration aliasDecl, Context ctx) =>
-        aliasDecl with { AliasedType = ResolveType(aliasDecl.AliasedType, ctx, currentStruct: null, aliasDecl.Location) };
-
-    private static ServiceDeclaration ResolveService(ServiceDeclaration serviceDecl, Context ctx) =>
-        serviceDecl with
+        private BondType ResolveType(BondType type, Declaration owner, SourceLocation location) => type switch
         {
-            Methods = serviceDecl.Methods.Select(m => ResolveMethod(m, ctx)).ToArray(),
-            BaseType = serviceDecl.BaseType is null ? null : ResolveType(serviceDecl.BaseType, ctx, currentStruct: null, serviceDecl.Location)
+            BondType.List list => new BondType.List(ResolveType(list.ElementType, owner, location)),
+            BondType.Vector vector => new BondType.Vector(ResolveType(vector.ElementType, owner, location)),
+            BondType.Set set => new BondType.Set(ResolveType(set.KeyType, owner, location)),
+            BondType.Map map => new BondType.Map(ResolveType(map.KeyType, owner, location), ResolveType(map.ValueType, owner, location)),
+            BondType.Nullable nullable => new BondType.Nullable(ResolveType(nullable.ElementType, owner, location)),
+            BondType.Maybe maybe => new BondType.Maybe(ResolveType(maybe.ElementType, owner, location)),
+            BondType.Bonded bonded => new BondType.Bonded(ResolveType(bonded.StructType, owner, location)),
+            BondType.UnresolvedType unresolved => ResolveName(unresolved, owner, location),
+            BondType.TypeReference reference => ResolveReference(reference.Declaration, reference.TypeArguments, owner, location),
+            _ => type
         };
 
-    private static Field ResolveField(Field field, Context ctx, StructDeclaration currentStruct) =>
-        field with { Type = ResolveType(field.Type, ctx, currentStruct, field.Location) };
-
-    private static Method ResolveMethod(Method method, Context ctx) => method switch
-    {
-        FunctionMethod f => f with { InputType = ResolveMethodType(f.InputType, ctx), ResultType = ResolveMethodType(f.ResultType, ctx) },
-        EventMethod e => e with { InputType = ResolveMethodType(e.InputType, ctx) },
-        _ => method
-    };
-
-    private static MethodType ResolveMethodType(MethodType methodType, Context ctx) => methodType switch
-    {
-        MethodType.Unary u => new MethodType.Unary(ResolveType(u.Type, ctx, currentStruct: null, default)),
-        MethodType.Streaming s => new MethodType.Streaming(ResolveType(s.Type, ctx, currentStruct: null, default)),
-        _ => methodType
-    };
-
-    private static BondType ResolveType(BondType type, Context ctx, StructDeclaration? currentStruct, SourceLocation callerLocation) => type switch
-    {
-        BondType.Int8 or BondType.Int16 or BondType.Int32 or BondType.Int64
-            or BondType.UInt8 or BondType.UInt16 or BondType.UInt32 or BondType.UInt64
-            or BondType.Float or BondType.Double or BondType.Bool
-            or BondType.String or BondType.WString or BondType.Blob
-            or BondType.MetaName or BondType.MetaFullName
-            or BondType.TypeParameter or BondType.IntTypeArg
-            => type,
-
-        BondType.List list => new BondType.List(ResolveType(list.ElementType, ctx, currentStruct, callerLocation)),
-        BondType.Vector vector => new BondType.Vector(ResolveType(vector.ElementType, ctx, currentStruct, callerLocation)),
-        BondType.Set set => new BondType.Set(ResolveType(set.KeyType, ctx, currentStruct, callerLocation)),
-        BondType.Map map => new BondType.Map(
-            ResolveType(map.KeyType, ctx, currentStruct, callerLocation),
-            ResolveType(map.ValueType, ctx, currentStruct, callerLocation)),
-        BondType.Nullable n => new BondType.Nullable(ResolveType(n.ElementType, ctx, currentStruct, callerLocation)),
-        BondType.Maybe m => new BondType.Maybe(ResolveType(m.ElementType, ctx, currentStruct, callerLocation)),
-        BondType.Bonded b => new BondType.Bonded(ResolveType(b.StructType, ctx, currentStruct, callerLocation)),
-
-        BondType.UnresolvedType u => ResolveUnresolvedType(u, ctx, currentStruct, callerLocation),
-        BondType.TypeReference u => ResolveTypeReference(u, ctx, currentStruct),
-
-        _ => throw new InvalidOperationException($"Unknown BondType: {type.GetType().Name}")
-    };
-
-    private static BondType ResolveUnresolvedType(BondType.UnresolvedType unresolved, Context ctx, StructDeclaration? currentStruct, SourceLocation callerLocation)
-    {
-        var declaration = ctx.Symbols.FindSymbol(unresolved.QualifiedName, ctx.Namespaces, ctx.Aliases);
-
-        if (declaration is null && unresolved.TypeArguments.Length == 0 && TryResolvePrimitive(unresolved.QualifiedName, out var primitive))
+        private BondType ResolveName(BondType.UnresolvedType type, Declaration owner, SourceLocation location)
         {
-            return primitive;
+            var declaration = FindSymbol(type.QualifiedName, owner, location);
+            if (declaration is null)
+            {
+                if (type.TypeArguments.Length == 0 && TryResolvePrimitive(type.QualifiedName, out var primitive))
+                {
+                    return primitive;
+                }
+
+                throw new SemanticErrorException($"Type '{string.Join(".", type.QualifiedName)}' not found in symbol table", location);
+            }
+
+            return ResolveReference(declaration, type.TypeArguments, owner, location);
         }
 
-        if (declaration is null)
+        private Declaration? FindSymbol(string[] name, Declaration owner, SourceLocation? location = null)
         {
-            throw new SemanticErrorException(
-                $"Type '{string.Join(".", unresolved.QualifiedName)}' not found in symbol table",
-                callerLocation);
+            var effectiveAliases = symbols.GetEffectiveAliases(owner) ?? fallbackAliases;
+            return symbols.FindSymbol(name, owner.Namespaces, effectiveAliases, location ?? owner.Location, EquivalentAliases);
         }
 
-        var resolvedTypeArgs = unresolved.TypeArguments
-            .Select(arg => ResolveType(arg, ctx, currentStruct, callerLocation))
-            .ToArray();
-
-        // Self-references become forward declarations to break the recursion.
-        if (currentStruct is not null && declaration is StructDeclaration s && IsSameDeclaration(s, currentStruct))
+        private bool EquivalentAliases(AliasDeclaration left, AliasDeclaration right)
         {
-            return new BondType.TypeReference(ToForward(s), resolvedTypeArgs);
+            if (!SymbolTable.ParametersMatch(left.TypeParameters, right.TypeParameters))
+            {
+                return false;
+            }
+
+            var resolvedLeft = (AliasDeclaration)ResolveDeclaration(left);
+            var resolvedRight = (AliasDeclaration)ResolveDeclaration(right);
+            var parameters = left.TypeParameters.Select(parameter => (BondType)new BondType.TypeParameter(parameter)).ToArray();
+            var rightType = resolvedRight.AliasedType.SubstituteTypeParameters(right.TypeParameters, parameters);
+            return ExpandAliasTypes(resolvedLeft.AliasedType) == ExpandAliasTypes(rightType);
         }
 
-        // Resolve the alias body before wrapping.
-        if (declaration is AliasDeclaration alias)
+        private static BondType ExpandAliasTypes(BondType type) => type.ResolveAliases() switch
         {
-            return new BondType.TypeReference(ResolveAlias(alias, ctx), resolvedTypeArgs);
+            BondType.List list => new BondType.List(ExpandAliasTypes(list.ElementType)),
+            BondType.Vector vector => new BondType.Vector(ExpandAliasTypes(vector.ElementType)),
+            BondType.Set set => new BondType.Set(ExpandAliasTypes(set.KeyType)),
+            BondType.Map map => new BondType.Map(ExpandAliasTypes(map.KeyType), ExpandAliasTypes(map.ValueType)),
+            BondType.Nullable nullable => new BondType.Nullable(ExpandAliasTypes(nullable.ElementType)),
+            BondType.Maybe maybe => new BondType.Maybe(ExpandAliasTypes(maybe.ElementType)),
+            BondType.Bonded bonded => new BondType.Bonded(ExpandAliasTypes(bonded.StructType)),
+            BondType.TypeReference reference => reference with
+            {
+                TypeArguments = reference.TypeArguments.Select(ExpandAliasTypes).ToArray()
+            },
+            var expanded => expanded
+        };
+
+        private BondType ResolveReference(
+            Declaration declaration,
+            BondType[] arguments,
+            Declaration owner,
+            SourceLocation location)
+        {
+            if (declaration is ForwardDeclaration)
+            {
+                declaration = FindSymbol(declaration.QualifiedName.Split('.'), owner) ?? declaration;
+            }
+
+            var typeArguments = arguments.Select(argument => ResolveType(argument, owner, location)).ToArray();
+
+            Declaration target;
+            if (declaration is StructDeclaration structure
+                && (_active.Contains(structure)
+                    || (owner is AliasDeclaration && !_resolved.ContainsKey(structure))
+                    || (structure.IsView && HasActiveViewSource(structure))))
+            {
+                // Keep recursive/forward references finite. The complete definition is in ResolvedDeclarations.
+                target = ToForward(structure, location);
+            }
+            else
+            {
+                if (_active.Contains(declaration))
+                {
+                    throw new SemanticErrorException($"Cyclic definition of '{declaration.Name}'", location);
+                }
+
+                target = ResolveDeclaration(declaration);
+            }
+
+            if (typeArguments.Length != target.TypeParameters.Length)
+            {
+                throw new SemanticErrorException(
+                    target.TypeParameters.Length == 0
+                        ? $"Type '{target.Name}' is not a generic type"
+                        : $"Type '{target.Name}' requires {target.TypeParameters.Length} type argument(s)", location);
+            }
+
+            return new BondType.TypeReference(target, typeArguments);
         }
 
-        return new BondType.TypeReference(declaration, resolvedTypeArgs);
+        private bool HasActiveViewSource(StructDeclaration view)
+        {
+            var visited = new HashSet<Declaration>(ReferenceEqualityComparer.Instance);
+            while (view.IsView && view.ViewTarget is not null && visited.Add(view))
+            {
+                if (FindSymbol(view.ViewTarget, view) is not StructDeclaration source)
+                {
+                    return false;
+                }
+
+                if (_active.Contains(source))
+                {
+                    return true;
+                }
+
+                view = source;
+            }
+
+            return false;
+        }
+
+        private TypeParam[] GetTypeParameters(StructDeclaration structure, SourceLocation location)
+        {
+            var visited = new HashSet<Declaration>(ReferenceEqualityComparer.Instance);
+            while (structure.IsView && structure.ViewTarget is not null)
+            {
+                if (!visited.Add(structure))
+                {
+                    throw new SemanticErrorException($"Cyclic view definition involving '{structure.Name}'", location);
+                }
+
+                if (FindSymbol(structure.ViewTarget, structure) is not StructDeclaration source)
+                {
+                    throw new SemanticErrorException($"View '{structure.Name}' requires a defined struct target", location);
+                }
+
+                structure = source;
+            }
+
+            return structure.TypeParameters;
+        }
+
+        private ForwardDeclaration ToForward(StructDeclaration structure, SourceLocation location) => new()
+        {
+            Namespaces = structure.Namespaces,
+            Name = structure.Name,
+            TypeParameters = GetTypeParameters(structure, location),
+            Location = structure.Location
+        };
     }
 
-    private static BondType ResolveTypeReference(BondType.TypeReference typeReference, Context ctx, StructDeclaration? currentStruct)
+    private static bool TryResolvePrimitive(string[] name, [NotNullWhen(true)] out BondType? primitive)
     {
-        var qualifiedName = typeReference.Declaration.Namespaces.Length > 0
-            ? typeReference.Declaration.Namespaces[0].Name.Concat([typeReference.Declaration.Name]).ToArray()
-            : [typeReference.Declaration.Name];
-
-        var declaration = ctx.Symbols.FindSymbol(qualifiedName, ctx.Namespaces, ctx.Aliases) ?? typeReference.Declaration;
-
-        var resolvedTypeArgs = typeReference.TypeArguments
-            .Select(arg => ResolveType(arg, ctx, currentStruct, default))
-            .ToArray();
-
-        if (currentStruct is not null && declaration is StructDeclaration s && IsSameDeclaration(s, currentStruct))
+        primitive = null;
+        if (name.Length != 1)
         {
-            return new BondType.TypeReference(ToForward(s), resolvedTypeArgs);
+            return false;
         }
 
-        if (declaration is AliasDeclaration alias)
+        primitive = name[0].ToLowerInvariant() switch
         {
-            return new BondType.TypeReference(ResolveAlias(alias, ctx), resolvedTypeArgs);
-        }
+            "int8" => BondType.Int8.Instance,
+            "int16" => BondType.Int16.Instance,
+            "int32" => BondType.Int32.Instance,
+            "int64" => BondType.Int64.Instance,
+            "uint8" => BondType.UInt8.Instance,
+            "uint16" => BondType.UInt16.Instance,
+            "uint32" => BondType.UInt32.Instance,
+            "uint64" => BondType.UInt64.Instance,
+            "float" => BondType.Float.Instance,
+            "double" => BondType.Double.Instance,
+            "bool" => BondType.Bool.Instance,
+            "string" => BondType.String.Instance,
+            "wstring" => BondType.WString.Instance,
+            "blob" => BondType.Blob.Instance,
+            _ => null
+        };
 
-        if (ReferenceEquals(declaration, typeReference.Declaration) && resolvedTypeArgs.SequenceEqual(typeReference.TypeArguments))
-        {
-            return typeReference;
-        }
-
-        return new BondType.TypeReference(declaration, resolvedTypeArgs);
-    }
-
-    private static ForwardDeclaration ToForward(StructDeclaration s) => new()
-    {
-        Namespaces = s.Namespaces,
-        Name = s.Name,
-        TypeParameters = s.TypeParameters
-    };
-
-    private static bool IsSameDeclaration(StructDeclaration declaration, StructDeclaration currentStruct)
-    {
-        if (!string.Equals(declaration.Name, currentStruct.Name, StringComparison.Ordinal)) return false;
-        return declaration.Namespaces.Any(n => currentStruct.Namespaces.Any(n.Matches));
-    }
-
-    private static bool TryResolvePrimitive(string[] qualifiedName, out BondType primitive)
-    {
-        primitive = null!;
-        if (qualifiedName.Length != 1) return false;
-
-        switch (qualifiedName[0].ToLowerInvariant())
-        {
-            case "int8":    primitive = BondType.Int8.Instance;    return true;
-            case "int16":   primitive = BondType.Int16.Instance;   return true;
-            case "int32":   primitive = BondType.Int32.Instance;   return true;
-            case "int64":   primitive = BondType.Int64.Instance;   return true;
-            case "uint8":   primitive = BondType.UInt8.Instance;   return true;
-            case "uint16":  primitive = BondType.UInt16.Instance;  return true;
-            case "uint32":  primitive = BondType.UInt32.Instance;  return true;
-            case "uint64":  primitive = BondType.UInt64.Instance;  return true;
-            case "float":   primitive = BondType.Float.Instance;   return true;
-            case "double":  primitive = BondType.Double.Instance;  return true;
-            case "bool":    primitive = BondType.Bool.Instance;    return true;
-            case "string":  primitive = BondType.String.Instance;  return true;
-            case "wstring": primitive = BondType.WString.Instance; return true;
-            case "blob":    primitive = BondType.Blob.Instance;    return true;
-            default: return false;
-        }
+        return primitive is not null;
     }
 }

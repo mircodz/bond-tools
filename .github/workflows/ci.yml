@@ -37,7 +37,9 @@ jobs:
     - name: Setup .NET
       uses: actions/setup-dotnet@v4
       with:
-        dotnet-version: '8.0.x'
+        dotnet-version: |
+          8.0.x
+          10.0.x
 
     - name: Restore dependencies
       run: dotnet restore
@@ -47,17 +49,16 @@ jobs:
 
     - name: Test with coverage
       run: |
-        dotnet test --no-build --configuration Release \
-          /p:CollectCoverage=true \
-          /p:CoverletOutputFormat=cobertura \
-          /p:CoverletOutput=./TestResults/ \
-          /p:ExcludeByFile="**/*.g4.cs"
+        dotnet test --solution Bond.sln --no-build --configuration Release \
+          --coverlet --coverlet-output-format cobertura \
+          --coverlet-exclude-by-file "**/*.g4.cs" \
+          --results-directory "$PWD/out/test-results/coverage"
 
     - name: Generate coverage report
       uses: danielpalme/ReportGenerator-GitHub-Action@5.3.11
       with:
-        reports: '**/TestResults/coverage.cobertura.xml'
-        targetdir: 'CoverageReport'
+        reports: 'out/test-results/**/*coverage.cobertura*.xml'
+        targetdir: 'out/coverage-report'
         reporttypes: 'HtmlInline;Cobertura;MarkdownSummaryGithub;TextSummary'
         tag: '${{ github.run_number }}_${{ github.run_id }}'
 
@@ -65,17 +66,17 @@ jobs:
       id: coverage
       if: always()
       run: |
-        if [ -f CoverageReport/Summary.txt ]; then
+        if [ -f out/coverage-report/Summary.txt ]; then
           echo "summary<<EOF" >> $GITHUB_OUTPUT
-          cat CoverageReport/Summary.txt >> $GITHUB_OUTPUT
+          cat out/coverage-report/Summary.txt >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
           # Extract line coverage percentage
-          LINE_COVERAGE=$(grep "Line coverage:" CoverageReport/Summary.txt | grep -oP '\d+\.?\d*(?=%)')
+          LINE_COVERAGE=$(grep "Line coverage:" out/coverage-report/Summary.txt | grep -oP '\d+\.?\d*(?=%)')
           echo "line_coverage=$LINE_COVERAGE" >> $GITHUB_OUTPUT
 
           # Extract branch coverage percentage
-          BRANCH_COVERAGE=$(grep "Branch coverage:" CoverageReport/Summary.txt | grep -oP '\d+\.?\d*(?=%)')
+          BRANCH_COVERAGE=$(grep "Branch coverage:" out/coverage-report/Summary.txt | grep -oP '\d+\.?\d*(?=%)')
           echo "branch_coverage=$BRANCH_COVERAGE" >> $GITHUB_OUTPUT
         else
           echo "summary=Coverage report not found" >> $GITHUB_OUTPUT
@@ -88,8 +89,8 @@ jobs:
       run: |
         echo "## Code Coverage Summary" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
-        if [ -f CoverageReport/SummaryGithub.md ]; then
-          cat CoverageReport/SummaryGithub.md >> $GITHUB_STEP_SUMMARY
+        if [ -f out/coverage-report/SummaryGithub.md ]; then
+          cat out/coverage-report/SummaryGithub.md >> $GITHUB_STEP_SUMMARY
         else
           echo "Coverage report not generated" >> $GITHUB_STEP_SUMMARY
         fi
@@ -122,5 +123,5 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: coverage-report
-        path: CoverageReport/
+        path: out/coverage-report/
         retention-days: 30

@@ -8,7 +8,7 @@
     <Title>Bond IDL Parser</Title>
     <PackageId>BondTools.Parser</PackageId>
     <Authors>Mirco De Zorzi</Authors>
-    <Description>A parser and compatibility checker for the Bond IDL.</Description>
+    <Description>A parser and compatibility checker for Bond IDL, with C# model generation.</Description>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageLicenseFile>LICENSE</PackageLicenseFile>
     <NoWarn>CS1584,CS1658,CS1591</NoWarn>
@@ -21,8 +21,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Antlr4.Runtime.Standard" Version="4.13.1" />
-    <PackageReference Include="Antlr4BuildTasks" Version="12.11.0" PrivateAssets="all" />
+    <PackageReference Include="Antlr4.Runtime.Standard" />
+    <PackageReference Include="Antlr4BuildTasks" PrivateAssets="all" />
   </ItemGroup>
 
   <ItemGroup>
