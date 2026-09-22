@@ -1,18 +1,17 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
     <OutputType>Exe</OutputType>
     <UseMicrosoftTestingPlatformRunner>true</UseMicrosoftTestingPlatformRunner>
+    <TestingPlatformCommandLineArguments>$(TestingPlatformCommandLineArguments) --coverlet-file-prefix $(MSBuildProjectName)</TestingPlatformCommandLineArguments>
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
-    <RootNamespace>Bond.Parser.Tests</RootNamespace>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="Bond.Runtime.CSharp" />
     <PackageReference Include="coverlet.MTP" PrivateAssets="all" />
-    <PackageReference Include="FluentAssertions" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="Newtonsoft.Json" />
@@ -25,25 +24,12 @@
 
   <ItemGroup>
     <Using Include="Xunit" />
+    <Compile Include="..\Shared\GeneratedCode.cs" Link="Support\GeneratedCode.cs" />
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Bond.Build\Bond.Build.csproj" ReferenceOutputAssembly="false" />
-    <ProjectReference Include="..\Bond.Models\Bond.Models.csproj" />
-    <ProjectReference Include="..\Bond.Parser\Bond.Parser.csproj" />
-    <ProjectReference Include="..\Bond.Parser.CLI\Bond.Parser.CLI.csproj" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <Content Include="Fixtures\**\*.bond">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </Content>
-    <Content Include="Fixtures\**\*.json">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </Content>
-    <Content Include="Fixtures\CodegenReference\**\*">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </Content>
+    <ProjectReference Include="..\..\Bond.Models\Bond.Models.csproj" />
+    <ProjectReference Include="..\..\Bond.Parser\Bond.Parser.csproj" />
   </ItemGroup>
 
 </Project>

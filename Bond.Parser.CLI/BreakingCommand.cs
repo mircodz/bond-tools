@@ -17,7 +17,7 @@ public static class BreakingCommand
         var options = SchemaCommandOptions.Parse(args, comparison: true);
         if (options.Errors.Count != 0)
         {
-            return await SchemaCommandOptions.WriteErrors(standardError, options.ErrorFormat,
+            return await SchemaDiagnostics.WriteAsync(standardError, options.ErrorFormat,
                 options.Errors.Select(error => new ParseError(error, null, 0, 0)));
         }
 
@@ -60,7 +60,7 @@ public static class BreakingCommand
             var current = await ParserFacade.ParseFileAsync(input, resolver, cancellationToken, parseOptions);
             if (!current.Success)
             {
-                return await SchemaCommandOptions.WriteErrors(standardError, options.ErrorFormat, current.Errors);
+                return await SchemaDiagnostics.WriteAsync(standardError, options.ErrorFormat, current.Errors);
             }
 
             currentPath = options.Against!;
@@ -78,7 +78,7 @@ public static class BreakingCommand
 
             if (!previous.Success)
             {
-                return await SchemaCommandOptions.WriteErrors(standardError, options.ErrorFormat, previous.Errors);
+                return await SchemaDiagnostics.WriteAsync(standardError, options.ErrorFormat, previous.Errors);
             }
 
             var checker = new CompatibilityChecker();
@@ -130,7 +130,7 @@ public static class BreakingCommand
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
-            return await SchemaCommandOptions.WriteErrors(standardError, options.ErrorFormat,
+            return await SchemaDiagnostics.WriteAsync(standardError, options.ErrorFormat,
                 [new ParseError(error.Message, currentPath, 0, 0)]);
         }
     }

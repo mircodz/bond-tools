@@ -15,7 +15,7 @@ public static class CheckCommand
         var options = SchemaCommandOptions.Parse(args, comparison: false);
         if (options.Errors.Count != 0)
         {
-            return await SchemaCommandOptions.WriteErrors(standardError, options.ErrorFormat,
+            return await SchemaDiagnostics.WriteAsync(standardError, options.ErrorFormat,
                 options.Errors.Select(error => new ParseError(error, null, 0, 0)));
         }
 
@@ -47,11 +47,11 @@ public static class CheckCommand
                 return 0;
             }
 
-            return await SchemaCommandOptions.WriteErrors(standardError, options.ErrorFormat, result.Errors, exitCode: 1);
+            return await SchemaDiagnostics.WriteAsync(standardError, options.ErrorFormat, result.Errors, exitCode: 1);
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
-            return await SchemaCommandOptions.WriteErrors(standardError, options.ErrorFormat,
+            return await SchemaDiagnostics.WriteAsync(standardError, options.ErrorFormat,
                 [new ParseError(error.Message, file, 0, 0)]);
         }
     }

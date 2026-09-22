@@ -6,9 +6,10 @@ using System.Reflection;
 using System.Threading.Tasks;
 using Bond.Parser.CodeGeneration;
 using Bond.Parser.Parser;
+using Bond.TestSupport;
 using BondTools.Models;
 
-namespace Bond.Parser.Tests;
+namespace Bond.Models.Tests;
 
 using SchemaAttribute = global::BondTools.Models.SchemaAttribute;
 
@@ -25,7 +26,7 @@ public sealed class GeneratedMetadataTests
         Assert.DoesNotContain("BondTools.Models", plain.Code!);
         Assert.DoesNotContain("__BondSchemaCatalog", plain.Code!);
 
-        var plainAssembly = CSharpGeneratorTests.Compile(plain.Code!);
+        var plainAssembly = GeneratedCode.Compile(plain.Code!);
         Assert.Null(plainAssembly.GetType("Example.ItemSchema"));
 
         var generated = CSharpGenerator.Generate(parsed.Ast!, "input.bond", new CSharpGenerationOptions
@@ -36,7 +37,7 @@ public sealed class GeneratedMetadataTests
         Assert.DoesNotContain("IEquatable<", generated.Code!);
         Assert.DoesNotContain("DebuggerTypeProxy", generated.Code!);
 
-        var assembly = CSharpGeneratorTests.Compile(generated.Code!);
+        var assembly = GeneratedCode.Compile(generated.Code!);
         var model = assembly.GetType("Example.Item", throwOnError: true)!;
         Assert.Equal(new[] { typeof(IGeneratedSchemaProvider) }, model.GetInterfaces());
         Assert.Null(model.GetMethod("Clone"));
@@ -46,7 +47,7 @@ public sealed class GeneratedMetadataTests
     [Fact]
     public async Task DescriptorsPreserveDeclaredIdentityAttributesFieldsAndDefaults()
     {
-        var code = await CSharpGeneratorTests.Generate("""
+        var code = await GeneratedCode.Generate("""
             namespace Contracts
             namespace csharp Application.Models
             [doc.category("enum")]
@@ -63,7 +64,7 @@ public sealed class GeneratedMetadataTests
                 7: string inferred;
             }
             """);
-        var assembly = CSharpGeneratorTests.Compile(code);
+        var assembly = GeneratedCode.Compile(code);
         var descriptor = Read(assembly, "Application.Models.RecordSchema");
 
         Assert.Equal("Record", descriptor.Name);
@@ -103,12 +104,12 @@ public sealed class GeneratedMetadataTests
     [Fact]
     public async Task EnumValuesRetainEffectiveAndDeclaredNumbersWithoutLoadingTheEnum()
     {
-        var code = await CSharpGeneratorTests.Generate("""
+        var code = await GeneratedCode.Generate("""
             namespace Example
             [kind("state")]
             enum State { Unknown = -2, Ready, Duplicate = -1, Last, Bits = 0xffffffff }
             """);
-        var assembly = CSharpGeneratorTests.Compile(code);
+        var assembly = GeneratedCode.Compile(code);
         var descriptor = Read(assembly, "Example.StateSchema");
 
         Assert.Equal(SchemaKind.Enum, descriptor.Kind);
@@ -127,7 +128,7 @@ public sealed class GeneratedMetadataTests
     [Fact]
     public async Task EverySupportedTypeRemainsSymbolicRatherThanCollapsingToItsClrType()
     {
-        var code = await CSharpGeneratorTests.Generate("""
+        var code = await GeneratedCode.Generate("""
             namespace Example
             struct Child {}
             struct Types {
@@ -156,7 +157,7 @@ public sealed class GeneratedMetadataTests
                 22: bonded<Child> deferred;
             }
             """);
-        var assembly = CSharpGeneratorTests.Compile(code);
+        var assembly = GeneratedCode.Compile(code);
         var descriptor = Read(assembly, "Example.TypesSchema");
 
         Assert.Equal(new[]
@@ -185,7 +186,7 @@ public sealed class GeneratedMetadataTests
     [Fact]
     public async Task InheritanceAndViewsRetainOwnFieldsAndSourceSelections()
     {
-        var code = await CSharpGeneratorTests.Generate("""
+        var code = await GeneratedCode.Generate("""
             namespace Example
             struct Base<T> { 0: T inherited; }
             [source("not copied")]
@@ -197,7 +198,7 @@ public sealed class GeneratedMetadataTests
             [view("own")]
             struct Selected view_of Record { number; item; number; missing; inherited }
             """);
-        var assembly = CSharpGeneratorTests.Compile(code);
+        var assembly = GeneratedCode.Compile(code);
         var descriptor = Read(assembly, "Example.SelectedSchema");
 
         Assert.True(descriptor.IsView);
@@ -222,7 +223,7 @@ public sealed class GeneratedMetadataTests
     [Fact]
     public async Task GenericAliasesBindSimultaneouslyAndPreserveSignedErasedArguments()
     {
-        var code = await CSharpGeneratorTests.Generate("""
+        var code = await GeneratedCode.Generate("""
             namespace Example
             using Pair<T, U> = map<T, vector<U>>;
             using Swap<T, U> = Pair<U, T>;
@@ -232,7 +233,7 @@ public sealed class GeneratedMetadataTests
                 1: Erased<int32, -32> fixed_number;
             }
             """);
-        var assembly = CSharpGeneratorTests.Compile(code);
+        var assembly = GeneratedCode.Compile(code);
         var descriptor = Read(assembly, "Example.BoxSchema");
         var bound = descriptor.Bind(new PrimitiveSchemaType(SchemaTypeKind.Int32),
             new PrimitiveSchemaType(SchemaTypeKind.String));
@@ -262,7 +263,7 @@ public sealed class GeneratedMetadataTests
     [Fact]
     public async Task RecursiveDescriptorsDoNotInitializeOrConstructModels()
     {
-        var code = await CSharpGeneratorTests.Generate("""
+        var code = await GeneratedCode.Generate("""
             namespace Example
             struct Node<T> {
                 0: Node<T> eager;
@@ -270,7 +271,7 @@ public sealed class GeneratedMetadataTests
             }
             struct Other<T> { 0: nullable<Node<T>> parent; }
             """);
-        var assembly = CSharpGeneratorTests.Compile(code, """
+        var assembly = GeneratedCode.Compile(code, """
             namespace Example
             {
                 public partial class Node<T>
@@ -300,7 +301,7 @@ public sealed class GeneratedMetadataTests
     [Fact]
     public async Task UnresolvedForwardMetadataIsExplicitlyUnknownAndNeverDiscoversClrFields()
     {
-        var code = await CSharpGeneratorTests.Generate("""
+        var code = await GeneratedCode.Generate("""
             namespace Example
             struct External<T>;
             struct Node<T>;
@@ -312,7 +313,7 @@ public sealed class GeneratedMetadataTests
             }
             struct Node<T> { 0: T value; }
             """);
-        var assembly = CSharpGeneratorTests.Compile(code, """
+        var assembly = GeneratedCode.Compile(code, """
             namespace Example
             {
                 public class External<T>
@@ -367,7 +368,7 @@ public sealed class GeneratedMetadataTests
             ModelFeatures = CSharpModelFeatures.Descriptors,
             TypeMappings = ["Example.Erased=int", "Example.Values=System.Collections.Generic.List<{0}>"]
         });
-        var holder = Read(CSharpGeneratorTests.Compile(code), "Example.HolderSchema");
+        var holder = Read(GeneratedCode.Compile(code), "Example.HolderSchema");
         var erased = Assert.IsType<NamedSchemaType>(holder.Fields[0].Type);
         Assert.Equal("int", erased.Declaration.ClrName);
 
@@ -416,7 +417,7 @@ public sealed class GeneratedMetadataTests
             {
                 ModelFeatures = richImports ? CSharpModelFeatures.Descriptors : CSharpModelFeatures.None
             });
-        var assembly = CSharpGeneratorTests.Compile(root, importedCode);
+        var assembly = GeneratedCode.Compile(root, importedCode);
         var descriptor = Read(assembly, "Application.RootSchema");
         var node = Assert.IsType<NamedSchemaType>(descriptor.Fields[0].Type).Declaration;
         Assert.Equal("Library.Node", node.FullName);
@@ -463,7 +464,7 @@ public sealed class GeneratedMetadataTests
             using Value = string;
             struct Root { 0: Value value; 1: Imported other; 2: Value again; }
             """, new Dictionary<string, string> { ["library.bond"] = imported });
-        var assembly = CSharpGeneratorTests.Compile(root, await CSharpGeneratorTests.Generate(imported));
+        var assembly = GeneratedCode.Compile(root, await GeneratedCode.Generate(imported));
         var descriptor = Read(assembly, "Example.RootSchema");
         var local = Assert.IsType<NamedSchemaType>(descriptor.Fields[0].Type).Declaration;
         var importedModel = Assert.IsType<NamedSchemaType>(descriptor.Fields[1].Type).Declaration;
@@ -496,8 +497,8 @@ public sealed class GeneratedMetadataTests
             namespace Application
             struct Root { 0: Shared.Left left; 1: Shared.Right right; }
             """, new Dictionary<string, string> { ["left.bond"] = left, ["right.bond"] = right });
-        var assembly = CSharpGeneratorTests.Compile(root,
-            await CSharpGeneratorTests.Generate(left), await CSharpGeneratorTests.Generate(right));
+        var assembly = GeneratedCode.Compile(root,
+            await GeneratedCode.Generate(left), await GeneratedCode.Generate(right));
         var descriptor = Read(assembly, "Application.RootSchema");
         var leftModel = Assert.IsType<NamedSchemaType>(descriptor.Fields[0].Type).Declaration;
         var rightModel = Assert.IsType<NamedSchemaType>(descriptor.Fields[1].Type).Declaration;
@@ -513,7 +514,7 @@ public sealed class GeneratedMetadataTests
     [Fact]
     public async Task DescriptorCompanionsDoNotCollideWithSourceModelNames()
     {
-        var code = await CSharpGeneratorTests.Generate("""
+        var code = await GeneratedCode.Generate("""
             namespace Example
             struct Item { 0: ItemSchema value; 1: Text text; }
             struct ItemSchema {}
@@ -523,7 +524,7 @@ public sealed class GeneratedMetadataTests
             using Text = string;
             struct TextSchema {}
             """);
-        var assembly = CSharpGeneratorTests.Compile(code);
+        var assembly = GeneratedCode.Compile(code);
 
         Assert.Equal("Item", Read(assembly, "Example.ItemSchema__").Name);
         Assert.Equal("ItemSchema", Read(assembly, "Example.ItemSchemaSchema").Name);
@@ -537,7 +538,7 @@ public sealed class GeneratedMetadataTests
     [Fact]
     public async Task FileLocalCatalogAvoidsSourceTypeAndNamespaceNames()
     {
-        var code = await CSharpGeneratorTests.Generate("""
+        var code = await GeneratedCode.Generate("""
             namespace __BondSchemaCatalog__
             struct __BondSchemaCatalog {}
             struct __BondSchemaCatalog_ {}
@@ -545,7 +546,7 @@ public sealed class GeneratedMetadataTests
             """);
         Assert.Contains("file static class __BondSchemaCatalog___", code);
 
-        var assembly = CSharpGeneratorTests.Compile(code);
+        var assembly = GeneratedCode.Compile(code);
         var descriptor = Read(assembly, "__BondSchemaCatalog__.ItemSchema");
         Assert.Equal("__BondSchemaCatalog", Assert.IsType<NamedSchemaType>(descriptor.Fields[0].Type).Declaration.Name);
     }
@@ -568,7 +569,7 @@ public sealed class GeneratedMetadataTests
         Assert.Equal(first.Code, second.Code);
         Assert.Contains("file static class __BondSchemaCatalog_", first.Code!);
         Assert.DoesNotContain("public static class", first.Code!);
-        Assert.Empty(CSharpGeneratorTests.Compile(first.Code!).GetExportedTypes());
+        Assert.Empty(GeneratedCode.Compile(first.Code!).GetExportedTypes());
     }
 
     [Fact]
@@ -589,7 +590,7 @@ public sealed class GeneratedMetadataTests
         });
         Assert.True(generated.Success, string.Join("\n", generated.Errors.Select(error => error.Message)));
 
-        var assembly = CSharpGeneratorTests.Compile(generated.Code!, """
+        var assembly = GeneratedCode.Compile(generated.Code!, """
             namespace Application
             {
                 public static class BondTypeAliasConverter
@@ -612,12 +613,12 @@ public sealed class GeneratedMetadataTests
     [Fact]
     public async Task NamedDescriptorArgumentsCanBeSuppliedWithoutAnyClrTypeInformation()
     {
-        var code = await CSharpGeneratorTests.Generate("""
+        var code = await GeneratedCode.Generate("""
             namespace Example
             enum State { Ready }
             struct Box<T> { 0: T value; }
             """);
-        var assembly = CSharpGeneratorTests.Compile(code);
+        var assembly = GeneratedCode.Compile(code);
         var state = Read(assembly, "Example.StateSchema");
         var box = Read(assembly, "Example.BoxSchema");
         var bound = box.Bind(state.AsType());

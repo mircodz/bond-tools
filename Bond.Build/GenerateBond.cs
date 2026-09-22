@@ -34,14 +34,12 @@ public sealed class GenerateBond : Task, ICancelableTask
     {
         try
         {
-            var request = BuildRequest.Create(ProjectFile, OutputDirectory, Sources,
-                ImportDirectories, Usings, NamespaceMappings, TypeMappings);
+            var request = BuildRequest.Create(ProjectFile, OutputDirectory, Sources, ImportDirectories, Usings, NamespaceMappings, TypeMappings);
             var result = GenerationEngine.RunAsync(request, _cancellation.Token).GetAwaiter().GetResult();
 
             foreach (var error in result.Errors)
             {
-                Log.LogError(null, "BOND1001", null, error.FilePath ?? ProjectFile,
-                    error.Line, error.Column, 0, 0, "{0}", error.Message);
+                Log.LogError(null, "BOND1001", null, error.FilePath ?? ProjectFile, error.Line, error.Column, 0, 0, "{0}", error.Message);
             }
 
             if (result.Errors.Count != 0)

@@ -2,13 +2,14 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using Bond.Parser.CodeGeneration;
 using Bond.Parser.Parser;
 using Bond.Parser.Syntax;
 using FluentAssertions;
 
 namespace Bond.Parser.Tests;
 
-public class AliasScopeRegressionTests
+public class AliasScopeTests
 {
     [Theory]
     [InlineData("a.bond", "b.bond")]
@@ -325,11 +326,15 @@ public class AliasScopeRegressionTests
         }
 
         var importRequests = 0;
-        var result = await ParserFacade.ParseContentAsync(files["root.bond"], "root.bond", (_, path) =>
-        {
-            importRequests++;
-            return Task.FromResult((path, files[path]));
-        });
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var result = await Task.Run(
+            () => ParserFacade.ParseContentAsync(files["root.bond"], "root.bond", (_, path) =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                importRequests++;
+                return Task.FromResult((path, files[path]));
+            }),
+            cancellationToken).WaitAsync(cancellationToken);
 
         result.Success.Should().BeTrue(string.Join("; ", result.Errors.Select(error => error.Message)));
         importRequests.Should().Be(2 * layers - 2);
@@ -366,6 +371,41 @@ public class AliasScopeRegressionTests
         fields[1].Type.ResolveAliases().Should().Be(BondType.String.Instance);
     }
 
+    [Fact]
+    public async Task ImportedViewsRetainAliasTypesWhenRootAliasesShadowImports()
+    {
+        var imports = new Dictionary<string, string>
+        {
+            ["leaf.bond"] = "namespace Example using Value = int32;",
+            ["middle.bond"] = """
+                import "leaf.bond"
+                namespace Example
+                struct Imported { 0: Value value; }
+                """
+        };
+        var parsed = await ParserFacade.ParseContentAsync("""
+            import "middle.bond"
+            namespace Example
+            using Value = string;
+            struct View view_of Imported { value }
+            struct Local { 0: Value value; }
+            """, "/schemas/root.bond",
+            (_, import) => Task.FromResult(("/schemas/" + import, imports[import])));
+        Assert.True(parsed.Success, string.Join("\n", parsed.Errors.Select(error => error.Message)));
+
+        var imported = parsed.Ast!.ResolvedDeclarations.OfType<StructDeclaration>().Single(type => type.Name == "Imported");
+        var view = parsed.Ast.Declarations.OfType<StructDeclaration>().Single(type => type.Name == "View");
+        var local = parsed.Ast.Declarations.OfType<StructDeclaration>().Single(type => type.Name == "Local");
+        Assert.IsType<BondType.Int32>(Assert.Single(imported.Fields).Type.ResolveAliases());
+        Assert.IsType<BondType.Int32>(Assert.Single(view.Fields).Type.ResolveAliases());
+        Assert.IsType<BondType.String>(Assert.Single(local.Fields).Type.ResolveAliases());
+
+        var generated = CSharpGenerator.Generate(parsed.Ast, "root.bond");
+        Assert.True(generated.Success);
+        Assert.Contains("public int value", generated.Code!);
+        Assert.Contains("public string value", generated.Code!);
+    }
+
     [Theory]
     [InlineData("using Loop<T> = Loop<T>;")]
     [InlineData("using Loop<T> = Loop<vector<T>>;")]
@@ -381,6 +421,30 @@ public class AliasScopeRegressionTests
         error.FilePath.Should().Be("cycle.bond");
         error.Line.Should().Be(2);
         error.Column.Should().BeGreaterThan(0);
+    }
+
+    [Fact]
+    public async Task StandaloneTypeResolutionUsesTheSuppliedAliasScope()
+    {
+        var parsed = await ParserFacade.ParseStringAsync("""
+            namespace N
+            using Values<T> = vector<T>;
+            struct Item { 0: Values<int32> values; }
+            """, options: new ParseOptions(IgnoreImports: true));
+        parsed.Success.Should().BeTrue(string.Join("; ", parsed.Errors.Select(error => error.Message)));
+        var ast = parsed.Ast!;
+        var aliases = ast.Declarations.OfType<AliasDeclaration>().ToArray();
+        var symbols = new SymbolTable();
+        foreach (var declaration in ast.Declarations.OfType<StructDeclaration>())
+        {
+            symbols.AddDeclaration(declaration);
+        }
+
+        var resolved = TypeResolver.Resolve(ast, symbols, aliases);
+
+        var item = resolved.Declarations.OfType<StructDeclaration>().Single();
+        item.Fields.Should().ContainSingle().Which.Type.ResolveAliases()
+            .Should().Be(new BondType.Vector(BondType.Int32.Instance));
     }
 
     [Theory]

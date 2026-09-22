@@ -2,12 +2,11 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
-using System.Threading;
+using System.Text.Json.Nodes;
 using System.Threading.Tasks;
 using System.Xml.Linq;
-using Bond.Parser.CodeGeneration;
 
-namespace Bond.Parser.Tests;
+namespace Bond.Build.Tests;
 
 public sealed class MsBuildGenerationTests(MsBuildPackageFixture packages) : IClassFixture<MsBuildPackageFixture>
 {
@@ -45,7 +44,10 @@ public sealed class MsBuildGenerationTests(MsBuildPackageFixture packages) : ICl
         project.Write("Program.cs", """
             var item = new Contracts.Item { id = 42 };
             if (item.ToString() != "Item { id = 42 }")
+            {
                 throw new System.Exception("Unexpected generated summary.");
+            }
+
             System.Console.WriteLine(item);
             """);
         project.Configure(new XElement("Bond", new XAttribute("Include", "item.bond"), new XAttribute("ToString", "true")));
@@ -83,14 +85,23 @@ public sealed class MsBuildGenerationTests(MsBuildPackageFixture packages) : ICl
             item.values.Add(3);
             var copy = item.Clone();
             if (ReferenceEquals(item.values, copy.values) || !item.Equals(copy))
+            {
                 throw new Exception("Cloning did not copy model values.");
+            }
+
             if (ItemSchema.Descriptor.FullName != "Contracts.Item")
+            {
                 throw new Exception("Namespace mapping changed IDL metadata.");
+            }
+
             var output = new OutputBuffer();
             Bond.Serialize.To(new CompactBinaryWriter<OutputBuffer>(output, 2), item);
             var decoded = Bond.Deserialize<Item>.From(new CompactBinaryReader<InputBuffer>(new InputBuffer(output.Data), 2));
             if (!item.Equals(decoded) || new GeneratedModelDebugView(item).Fields.Length != 2)
+            {
                 throw new Exception("Generated models did not retain runtime behavior.");
+            }
+
             Console.WriteLine("consumer succeeded");
             """);
         project.Configure(
@@ -121,6 +132,16 @@ public sealed class MsBuildGenerationTests(MsBuildPackageFixture packages) : ICl
         Assert.Contains("up-to-date", second.Output, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(timestamp, File.GetLastWriteTimeUtc(outputFile));
         Assert.Equal(code, await File.ReadAllTextAsync(outputFile, TestContext.Current.CancellationToken));
+
+        var program = Path.Combine(project.Root, "Program.cs");
+        File.AppendAllText(program, "\nConsole.WriteLine(\"rebuilt with cached models\");\n");
+        var recompiled = await project.Build();
+        recompiled.AssertSuccess();
+        Assert.Contains("up-to-date", recompiled.Output, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(timestamp, File.GetLastWriteTimeUtc(outputFile));
+        var rerun = await project.Run();
+        rerun.AssertSuccess();
+        Assert.Contains("rebuilt with cached models", rerun.Output);
 
         File.Delete(outputFile);
         (await project.Build()).AssertSuccess();
@@ -260,6 +281,10 @@ public sealed class MsBuildGenerationTests(MsBuildPackageFixture packages) : ICl
         (await project.Build()).AssertSuccess();
         var output = Assert.Single(project.GeneratedFiles());
         var original = File.ReadAllText(output);
+        var generationFiles = project.GenerationFiles();
+        Assert.Contains(generationFiles, path => Path.GetFileName(path) == "manifest.json");
+        var snapshots = generationFiles.ToDictionary(path => path,
+            path => (Contents: File.ReadAllBytes(path), Timestamp: File.GetLastWriteTimeUtc(path)));
 
         project.Write("item.bond", "namespace Contracts struct Item { 0: string id; }");
         project.Write("invalid.bond", "namespace Contracts struct Invalid { 0: Missing value; }");
@@ -269,6 +294,12 @@ public sealed class MsBuildGenerationTests(MsBuildPackageFixture packages) : ICl
         Assert.Contains("invalid.bond", failure.Output);
         Assert.Equal(original, File.ReadAllText(output));
         Assert.Single(project.GeneratedFiles());
+        Assert.Equal(generationFiles, project.GenerationFiles());
+        foreach (var (path, snapshot) in snapshots)
+        {
+            Assert.Equal(snapshot.Contents, File.ReadAllBytes(path));
+            Assert.Equal(snapshot.Timestamp, File.GetLastWriteTimeUtc(path));
+        }
 
         File.Delete(Path.Combine(project.Root, "invalid.bond"));
         File.WriteAllText(output, "user content");
@@ -276,6 +307,119 @@ public sealed class MsBuildGenerationTests(MsBuildPackageFixture packages) : ICl
         var overwrite = await project.Build();
         Assert.NotEqual(0, overwrite.ExitCode);
         Assert.Equal("user content", File.ReadAllText(output));
+    }
+
+    [Fact]
+    public async Task StaleOutputOwnershipErrorsPrecedeSchemaErrorsWithoutChangingGenerationFiles()
+    {
+        var project = packages.CreateConsumer();
+        project.Write("item.bond", "namespace Contracts struct Item { 0: int32 id; }");
+        project.Write("stale.bond", "namespace Contracts struct Stale { 0: int32 id; }");
+        project.Configure(new XElement("Bond", new XAttribute("Include", "*.bond")));
+        (await project.Build()).AssertSuccess();
+        var staleOutput = project.GeneratedFiles()
+            .Single(path => File.ReadAllText(path).Contains("class Stale", StringComparison.Ordinal));
+
+        File.Delete(Path.Combine(project.Root, "stale.bond"));
+        File.WriteAllText(staleOutput, "user content");
+        project.Write("item.bond", "namespace Contracts struct Item { 0: Missing id; }");
+        var generationFiles = project.GenerationFiles();
+        var snapshots = generationFiles.ToDictionary(path => path,
+            path => (Contents: File.ReadAllBytes(path), Timestamp: File.GetLastWriteTimeUtc(path)));
+
+        var failure = await project.Build();
+
+        Assert.NotEqual(0, failure.ExitCode);
+        Assert.Contains("Refusing to overwrite or remove a non-generated file", failure.Output);
+        Assert.Contains(staleOutput, failure.Output);
+        Assert.DoesNotContain("not found in symbol table", failure.Output);
+        Assert.Equal(generationFiles, project.GenerationFiles());
+        foreach (var (path, snapshot) in snapshots)
+        {
+            Assert.Equal(snapshot.Contents, File.ReadAllBytes(path));
+            Assert.Equal(snapshot.Timestamp, File.GetLastWriteTimeUtc(path));
+        }
+    }
+
+    [Theory]
+    [InlineData("Version", "Invalid manifest identity or version.")]
+    [InlineData("NullEntries", "Invalid manifest identity or version.")]
+    [InlineData("NullEntry", "Invalid manifest output entry.")]
+    [InlineData("Output", "Invalid manifest output entry.")]
+    [InlineData("DuplicateSource", "Invalid manifest output entry.")]
+    [InlineData("DuplicateOutput", "Invalid manifest output entry.")]
+    [InlineData("NullDependencies", "Invalid manifest output entry.")]
+    [InlineData("NullDependency", "Invalid manifest dependency.")]
+    [InlineData("DependencyHash", "Invalid manifest dependency.")]
+    [InlineData("DuplicateDependency", "Invalid manifest dependency.")]
+    [InlineData("MissingRootHash", "Manifest does not include the root input hash.")]
+    public async Task InvalidManifestSectionsFailWithoutChangingGenerationFiles(string field, string message)
+    {
+        var project = packages.CreateConsumer();
+        project.Write("item.bond", "namespace Contracts struct Item { 0: int32 id; }");
+        project.Write("other.bond", "namespace Contracts struct Other { 0: int32 id; }");
+        project.Configure(new XElement("Bond", new XAttribute("Include", "*.bond")));
+        (await project.Build()).AssertSuccess();
+        var generationFiles = project.GenerationFiles();
+        var manifestPath = generationFiles.Single(path => Path.GetFileName(path) == "manifest.json");
+        var manifest = JsonNode.Parse(File.ReadAllText(manifestPath))!;
+        var entries = manifest["Entries"]!.AsArray();
+        var dependencies = entries[0]!["Dependencies"]!.AsArray();
+        switch (field)
+        {
+            case "Version":
+                manifest["Version"] = 0;
+                break;
+            case "NullEntries":
+                manifest["Entries"] = null;
+                break;
+            case "NullEntry":
+                entries[0] = null;
+                break;
+            case "Output":
+                entries[0]!["Output"] = "different.g.cs";
+                break;
+            case "DuplicateSource":
+                entries.Add(entries[0]!.DeepClone());
+                break;
+            case "DuplicateOutput":
+                entries[1]!["Output"] = entries[0]!["Output"]!.GetValue<string>();
+                break;
+            case "NullDependencies":
+                entries[0]!["Dependencies"] = null;
+                break;
+            case "NullDependency":
+                dependencies[0] = null;
+                break;
+            case "DependencyHash":
+                dependencies[0]!["Hash"] = "not a hash";
+                break;
+            case "DuplicateDependency":
+                dependencies.Add(dependencies[0]!.DeepClone());
+                break;
+            case "MissingRootHash":
+                dependencies[0]!["Hash"] = null;
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(field));
+        }
+
+        File.WriteAllText(manifestPath, manifest.ToJsonString());
+        var snapshots = generationFiles.ToDictionary(path => path,
+            path => (Contents: File.ReadAllBytes(path), Timestamp: File.GetLastWriteTimeUtc(path)));
+
+        var failure = await project.Build();
+
+        Assert.NotEqual(0, failure.ExitCode);
+        Assert.Contains(manifestPath, failure.Output);
+        Assert.Contains($"Bond manifest '{manifestPath}' is invalid. Run dotnet clean and rebuild, " +
+            $"or remove this manifest and rebuild. {message}", failure.Output);
+        Assert.Equal(generationFiles, project.GenerationFiles());
+        foreach (var (path, snapshot) in snapshots)
+        {
+            Assert.Equal(snapshot.Contents, File.ReadAllBytes(path));
+            Assert.Equal(snapshot.Timestamp, File.GetLastWriteTimeUtc(path));
+        }
     }
 
     [Fact]
@@ -339,16 +483,10 @@ public sealed class MsBuildPackageFixture : IAsyncLifetime
 
     public async ValueTask InitializeAsync()
     {
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory != null && !File.Exists(Path.Combine(directory.FullName, "Bond.sln")))
-        {
-            directory = directory.Parent;
-        }
-
-        _repository = directory?.FullName ?? throw new DirectoryNotFoundException("Repository root not found.");
+        _repository = TestRepository.Root;
         Root = Path.Combine(_repository, "out", "build integration", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(Root);
-        _version = CSharpGenerator.Version;
+        _version = File.ReadAllText(Path.Combine(_repository, "version")).Trim();
         _runtimeVersion = XDocument.Load(Path.Combine(_repository, "Directory.Packages.props"))
             .Descendants("PackageVersion")
             .Single(item => (string?)item.Attribute("Include") == "Bond.Runtime.CSharp")
@@ -445,8 +583,11 @@ public sealed class MsBuildPackageFixture : IAsyncLifetime
                 properties, references, new XElement("ItemGroup", items))).Save(ProjectFile);
         }
 
-        public string[] GeneratedFiles() => Directory.Exists(Artifacts)
-            ? Directory.GetFiles(Artifacts, "*.g.cs", SearchOption.AllDirectories)
+        public string[] GeneratedFiles() =>
+            GenerationFiles().Where(path => path.EndsWith(".g.cs", StringComparison.Ordinal)).ToArray();
+
+        public string[] GenerationFiles() => Directory.Exists(Artifacts)
+            ? Directory.GetFiles(Artifacts, "*", SearchOption.AllDirectories)
                 .Where(path => path.Split(Path.DirectorySeparatorChar).Contains("bond")).OrderBy(path => path).ToArray()
             : [];
 
@@ -463,14 +604,9 @@ public sealed class MsBuildPackageFixture : IAsyncLifetime
 
     private static async Task<CommandResult> Execute(string directory, string? packages, params string[] arguments)
     {
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        timeout.CancelAfter(TimeSpan.FromMinutes(3));
         var start = new ProcessStartInfo("dotnet")
         {
-            WorkingDirectory = directory,
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true
+            WorkingDirectory = directory
         };
         foreach (var argument in arguments)
         {
@@ -485,22 +621,7 @@ public sealed class MsBuildPackageFixture : IAsyncLifetime
             start.Environment["NUGET_PACKAGES"] = packages;
         }
 
-        using var process = Process.Start(start) ?? throw new InvalidOperationException("Could not start dotnet.");
-        var stdout = process.StandardOutput.ReadToEndAsync(timeout.Token);
-        var stderr = process.StandardError.ReadToEndAsync(timeout.Token);
-        try
-        {
-            await process.WaitForExitAsync(timeout.Token);
-            return new CommandResult(process.ExitCode, await stdout + await stderr);
-        }
-        catch (OperationCanceledException)
-        {
-            if (!process.HasExited)
-            {
-                process.Kill(entireProcessTree: true);
-            }
-
-            throw;
-        }
+        var result = await TestProcess.Run(start, TimeSpan.FromMinutes(3));
+        return new CommandResult(result.ExitCode, result.Output + result.Error);
     }
 }

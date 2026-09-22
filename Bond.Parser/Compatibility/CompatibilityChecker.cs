@@ -167,11 +167,11 @@ public class CompatibilityChecker
                 CompareBase(old.BaseType, current.BaseType, location, active);
             }
 
-            var oldFields = old.Fields.ToDictionary(f => f.Ordinal);
-            var newFields = current.Fields.ToDictionary(f => f.Ordinal);
+            var oldFieldsByOrdinal = old.Fields.ToDictionary(f => f.Ordinal);
+            var newFieldsByOrdinal = current.Fields.ToDictionary(f => f.Ordinal);
             foreach (var field in old.Fields)
             {
-                if (newFields.TryGetValue(field.Ordinal, out var next))
+                if (newFieldsByOrdinal.TryGetValue(field.Ordinal, out var next))
                 {
                     CompareField(location, field, next, active);
                 }
@@ -186,7 +186,7 @@ public class CompatibilityChecker
                 }
             }
 
-            foreach (var field in current.Fields.Where(f => !oldFields.ContainsKey(f.Ordinal)))
+            foreach (var field in current.Fields.Where(f => !oldFieldsByOrdinal.ContainsKey(f.Ordinal)))
             {
                 Add(field.Modifier == "required" ? DiagnosticIds.RequiredFieldAdded : DiagnosticIds.OptionalFieldAdded,
                     field.Modifier == "required" ? ChangeCategory.BreakingWire : ChangeCategory.Compatible,
@@ -201,17 +201,21 @@ public class CompatibilityChecker
 
         private void CompareJsonFields(ContractDeclaration old, ContractDeclaration current, string location)
         {
-            var oldFields = JsonFields(old, _oldDeclarations);
-            var newFields = JsonFields(current, _newDeclarations);
+            var oldReadersByJsonName = JsonReadersByName(old, _oldDeclarations);
+            var newReadersByJsonName = JsonReadersByName(current, _newDeclarations);
             var reportedNames = new HashSet<string>(StringComparer.Ordinal);
 
-            void Compare(string name, JsonField previous, JsonField next)
+            void CompareJsonPair(string name, JsonField previous, JsonField next)
             {
                 if (previous.Inherited && next.Inherited
-                    || !previous.Inherited && !next.Inherited && previous.Field.Ordinal == next.Field.Ordinal
-                    || reportedNames.Contains(name))
+                    || !previous.Inherited && !next.Inherited && previous.Field.Ordinal == next.Field.Ordinal)
                 {
                     // Matching binary fields and bases are already checked at their payload or definition.
+                    return;
+                }
+
+                if (reportedNames.Contains(name))
+                {
                     return;
                 }
 
@@ -225,52 +229,60 @@ public class CompatibilityChecker
                 }
             }
 
-            foreach (var (name, previous) in oldFields)
+            foreach (var (name, oldReader) in oldReadersByJsonName)
             {
-                if (newFields.TryGetValue(name, out var next))
+                if (newReadersByJsonName.TryGetValue(name, out var newReader))
                 {
-                    Compare(name, previous, next);
+                    CompareJsonPair(name, oldReader, newReader);
                 }
             }
 
             // Writers still emit shadowed fields, even when a base field wins the reader's name lookup.
-            var newOrdinals = current.Fields.ToDictionary(field => field.Ordinal);
-            foreach (var field in old.Fields)
+            var newFieldsByOrdinal = current.Fields.ToDictionary(field => field.Ordinal);
+            foreach (var oldWriter in old.Fields)
             {
-                if ((!newOrdinals.TryGetValue(field.Ordinal, out var next) || field.JsonName != next.JsonName)
-                    && newFields.TryGetValue(field.JsonName, out var reader))
+                if (newFieldsByOrdinal.TryGetValue(oldWriter.Ordinal, out var newField) && oldWriter.JsonName == newField.JsonName)
                 {
-                    Compare(field.JsonName, new JsonField(field, false), reader);
+                    continue;
+                }
+
+                if (newReadersByJsonName.TryGetValue(oldWriter.JsonName, out var newReader))
+                {
+                    CompareJsonPair(oldWriter.JsonName, new JsonField(oldWriter, Inherited: false), newReader);
                 }
             }
 
-            var oldOrdinals = old.Fields.ToDictionary(field => field.Ordinal);
-            foreach (var field in current.Fields)
+            var oldFieldsByOrdinal = old.Fields.ToDictionary(field => field.Ordinal);
+            foreach (var newWriter in current.Fields)
             {
-                if ((!oldOrdinals.TryGetValue(field.Ordinal, out var previous) || field.JsonName != previous.JsonName)
-                    && oldFields.TryGetValue(field.JsonName, out var reader))
+                if (oldFieldsByOrdinal.TryGetValue(newWriter.Ordinal, out var oldField) && newWriter.JsonName == oldField.JsonName)
                 {
-                    Compare(field.JsonName, reader, new JsonField(field, false));
+                    continue;
+                }
+
+                if (oldReadersByJsonName.TryGetValue(newWriter.JsonName, out var oldReader))
+                {
+                    CompareJsonPair(newWriter.JsonName, oldReader, new JsonField(newWriter, Inherited: false));
                 }
             }
         }
 
         private readonly record struct JsonField(ContractField Field, bool Inherited);
 
-        private static Dictionary<string, JsonField> JsonFields(ContractDeclaration declaration,
+        private static Dictionary<string, JsonField> JsonReadersByName(ContractDeclaration declaration,
             Dictionary<string, ContractDeclaration> declarations)
         {
-            var fields = new Dictionary<string, JsonField>(StringComparer.Ordinal);
-            foreach (var field in JsonPayloadFields(declaration, declarations))
+            var readersByJsonName = new Dictionary<string, JsonField>(StringComparer.Ordinal);
+            foreach (var field in JsonWriterFields(declaration, declarations))
             {
                 // SimpleJSON tests later fields first, then base fields before derived fields.
-                fields[field.Field.JsonName] = field;
+                readersByJsonName[field.Field.JsonName] = field;
             }
 
-            return fields;
+            return readersByJsonName;
         }
 
-        private static IEnumerable<JsonField> JsonPayloadFields(ContractDeclaration declaration,
+        private static IEnumerable<JsonField> JsonWriterFields(ContractDeclaration declaration,
             Dictionary<string, ContractDeclaration> declarations)
         {
             var inherited = false;
@@ -295,7 +307,7 @@ public class CompatibilityChecker
         private void CompareBase(TypeShape? old, TypeShape? current, string location, HashSet<string> active)
         {
             var start = _changes.Count;
-            if (old is null || current is null || !Classify(old, current, location + ".base", active).Compatible)
+            if (old is null || current is null || !CompareTypes(old, current, location + ".base", active).Compatible)
             {
                 Add(DiagnosticIds.BaseType, ChangeCategory.BreakingWire,
                     $"Inheritance layout changed from '{old?.ToString() ?? "none"}' to '{current?.ToString() ?? "none"}'",
@@ -370,8 +382,8 @@ public class CompatibilityChecker
                 return;
             }
 
-            var change = Classify(oldType, newType, location, active);
-            if (change.NominalOnly)
+            var change = CompareTypes(oldType, newType, location, active);
+            if (change.SuppressTypeDiagnostic)
             {
                 return;
             }
@@ -515,64 +527,64 @@ public class CompatibilityChecker
         }
 
         private readonly record struct TypeChange(bool Compatible, bool Promotion = false,
-            bool EnumSemantics = false, bool NominalOnly = false);
+            bool EnumSemantics = false, bool SuppressTypeDiagnostic = false);
 
-        private TypeChange Classify(TypeShape old, TypeShape current, string location, HashSet<string> active)
+        private TypeChange CompareTypes(TypeShape old, TypeShape current, string location, HashSet<string> active)
         {
             if (old.Same(current) && !NeedsPayloadComparison(old, current))
             {
-                return new(true, NominalOnly: true);
+                return new(Compatible: true, SuppressTypeDiagnostic: true);
             }
 
             // Unbound parameters describe templates, not serialized types. Their concrete uses are checked below.
             if (old.Kind == "parameter" || current.Kind == "parameter")
             {
-                return new(true, NominalOnly: true);
+                return new(Compatible: true, SuppressTypeDiagnostic: true);
             }
 
             if (old.Kind == "maybe" || current.Kind == "maybe")
             {
-                return Classify(UnwrapMaybe(old), UnwrapMaybe(current), location, active);
+                return CompareTypes(UnwrapMaybe(old), UnwrapMaybe(current), location, active);
             }
 
             if (old.Kind == "bonded" && current.Kind != "bonded")
             {
-                return Classify(old.Arguments[0], current, location, active) with
+                return CompareTypes(old.Arguments[0], current, location, active) with
                 {
-                    NominalOnly = false
+                    SuppressTypeDiagnostic = false
                 };
             }
 
             if (current.Kind == "bonded" && old.Kind != "bonded")
             {
-                return Classify(old, current.Arguments[0], location, active) with
+                return CompareTypes(old, current.Arguments[0], location, active) with
                 {
-                    NominalOnly = false
+                    SuppressTypeDiagnostic = false
                 };
             }
 
             if (old.Kind == "blob" || current.Kind == "blob")
             {
-                return Classify(BlobRepresentation(old), BlobRepresentation(current), location, active) with
+                return CompareTypes(BlobRepresentation(old), BlobRepresentation(current), location, active) with
                 {
-                    NominalOnly = false
+                    SuppressTypeDiagnostic = false
                 };
             }
 
             if (old.Kind == "enum" || current.Kind == "enum")
             {
-                var representation = Classify(old.Kind == "enum" ? TypeShape.Of("int32") : old,
+                var representation = CompareTypes(old.Kind == "enum" ? TypeShape.Of("int32") : old,
                     current.Kind == "enum" ? TypeShape.Of("int32") : current, location, active);
                 return representation with
                 {
                     EnumSemantics = representation.Compatible,
-                    NominalOnly = false
+                    SuppressTypeDiagnostic = false
                 };
             }
 
             if (IsNumericPromotion(old, current))
             {
-                return new(true, Promotion: true);
+                return new(Compatible: true, Promotion: true);
             }
 
             if (old.Kind == "struct" && current.Kind == "struct"
@@ -582,38 +594,41 @@ public class CompatibilityChecker
             {
                 if (!NeedsPayloadComparison(old, current))
                 {
-                    return new(true, NominalOnly: true);
+                    return new(Compatible: true, SuppressTypeDiagnostic: true);
                 }
 
                 var key = old + " -> " + current;
                 if (active.Contains(key))
                 {
-                    return new(true, NominalOnly: true);
+                    return new(Compatible: true, SuppressTypeDiagnostic: true);
                 }
 
                 if (active.Count >= 64)
                 {
                     Add(DiagnosticIds.IncompleteDefinition, ChangeCategory.InvalidSchema,
                         "Expanding generic recursion prevents establishing a finite payload comparison", location);
-                    return new(true, NominalOnly: true);
+                    return new(Compatible: true, SuppressTypeDiagnostic: true);
                 }
 
                 active.Add(key);
                 CompareStruct(Instantiate(oldTemplate, old.Arguments), Instantiate(newTemplate, current.Arguments), location, active);
                 active.Remove(key);
-                return new(true, NominalOnly: true);
+                return new(Compatible: true, SuppressTypeDiagnostic: true);
             }
 
             if (old.Kind is "list" or "vector" && current.Kind is "list" or "vector"
                 || old.Kind == current.Kind && old.Kind is "map" or "set" or "nullable" or "bonded" or "stream")
             {
                 var children = old.Arguments.Zip(current.Arguments)
-                    .Select(pair => Classify(pair.First, pair.Second, location, active)).ToArray();
-                return new(children.All(c => c.Compatible), children.Any(c => c.Promotion), children.Any(c => c.EnumSemantics),
-                    old.Kind == current.Kind && children.All(c => c.NominalOnly));
+                    .Select(pair => CompareTypes(pair.First, pair.Second, location, active)).ToArray();
+                return new(
+                    Compatible: children.All(c => c.Compatible),
+                    Promotion: children.Any(c => c.Promotion),
+                    EnumSemantics: children.Any(c => c.EnumSemantics),
+                    SuppressTypeDiagnostic: old.Kind == current.Kind && children.All(c => c.SuppressTypeDiagnostic));
             }
 
-            return new(false);
+            return new(Compatible: false);
         }
 
         private bool JsonTypesCompatible(TypeShape old, TypeShape current, string location, HashSet<string> active)
@@ -650,20 +665,49 @@ public class CompatibilityChecker
                 }
 
                 active.Add(key);
-                var oldPayload = Instantiate(oldTemplate, old.Arguments);
-                var newPayload = Instantiate(newTemplate, current.Arguments);
-                var oldFields = JsonFields(oldPayload, _oldDeclarations);
-                var newFields = JsonFields(newPayload, _newDeclarations);
-                var compatible = JsonPayloadFields(oldPayload, _oldDeclarations).All(previous =>
-                    newFields.TryGetValue(previous.Field.JsonName, out var next)
-                        ? JsonTypesCompatible(previous.Field.Type, next.Field.Type, location, active)
-                        : previous.Field.Modifier != "required")
-                    && JsonPayloadFields(newPayload, _newDeclarations).All(next =>
-                        oldFields.TryGetValue(next.Field.JsonName, out var previous)
-                            ? JsonTypesCompatible(previous.Field.Type, next.Field.Type, location, active)
-                            : next.Field.Modifier != "required");
-                active.Remove(key);
-                return compatible;
+                try
+                {
+                    var oldPayload = Instantiate(oldTemplate, old.Arguments);
+                    var newPayload = Instantiate(newTemplate, current.Arguments);
+                    var oldReadersByJsonName = JsonReadersByName(oldPayload, _oldDeclarations);
+                    var newReadersByJsonName = JsonReadersByName(newPayload, _newDeclarations);
+                    foreach (var oldWriter in JsonWriterFields(oldPayload, _oldDeclarations))
+                    {
+                        if (newReadersByJsonName.TryGetValue(oldWriter.Field.JsonName, out var newReader))
+                        {
+                            if (!JsonTypesCompatible(oldWriter.Field.Type, newReader.Field.Type, location, active))
+                            {
+                                return false;
+                            }
+                        }
+                        else if (oldWriter.Field.Modifier == "required")
+                        {
+                            return false;
+                        }
+                    }
+
+                    // Promotion checks stay old-to-new, even for a new writer targeting an old reader.
+                    foreach (var newWriter in JsonWriterFields(newPayload, _newDeclarations))
+                    {
+                        if (oldReadersByJsonName.TryGetValue(newWriter.Field.JsonName, out var oldReader))
+                        {
+                            if (!JsonTypesCompatible(oldReader.Field.Type, newWriter.Field.Type, location, active))
+                            {
+                                return false;
+                            }
+                        }
+                        else if (newWriter.Field.Modifier == "required")
+                        {
+                            return false;
+                        }
+                    }
+
+                    return true;
+                }
+                finally
+                {
+                    active.Remove(key);
+                }
             }
 
             return old.Kind == current.Kind && old.Kind is "list" or "map" or "nullable"
@@ -756,35 +800,55 @@ public class CompatibilityChecker
                 return true;
             }
 
-            var newFields = current.Fields.ToDictionary(field => field.Ordinal);
-            if (old.Fields.Any(field => newFields.TryGetValue(field.Ordinal, out var next)
+            var newFieldsByOrdinal = current.Fields.ToDictionary(field => field.Ordinal);
+            if (old.Fields.Any(field => newFieldsByOrdinal.TryGetValue(field.Ordinal, out var next)
                 && ParameterizedTypeChanged(field.Type, next.Type)))
             {
                 return true;
             }
 
-            var oldJsonFields = JsonFields(old, _oldDeclarations);
-            var newJsonFields = JsonFields(current, _newDeclarations);
-            if (oldJsonFields.Any(pair => newJsonFields.TryGetValue(pair.Key, out var next)
-                && ParameterizedTypeChanged(pair.Value.Field.Type, next.Field.Type)))
+            var oldReadersByJsonName = JsonReadersByName(old, _oldDeclarations);
+            var newReadersByJsonName = JsonReadersByName(current, _newDeclarations);
+            foreach (var (name, oldReader) in oldReadersByJsonName)
             {
-                return true;
+                if (newReadersByJsonName.TryGetValue(name, out var newReader)
+                    && ParameterizedTypeChanged(oldReader.Field.Type, newReader.Field.Type))
+                {
+                    return true;
+                }
             }
 
             // A new or remapped writer can be hidden by an inherited reader with the same JSON name.
-            if (old.Fields.Any(field =>
-                (!newFields.TryGetValue(field.Ordinal, out var next) || field.JsonName != next.JsonName)
-                && newJsonFields.TryGetValue(field.JsonName, out var reader)
-                && ParameterizedTypeChanged(field.Type, reader.Field.Type)))
+            foreach (var oldWriter in old.Fields)
             {
-                return true;
+                if (newFieldsByOrdinal.TryGetValue(oldWriter.Ordinal, out var newField) && oldWriter.JsonName == newField.JsonName)
+                {
+                    continue;
+                }
+
+                if (newReadersByJsonName.TryGetValue(oldWriter.JsonName, out var newReader)
+                    && ParameterizedTypeChanged(oldWriter.Type, newReader.Field.Type))
+                {
+                    return true;
+                }
             }
 
-            var oldFields = old.Fields.ToDictionary(field => field.Ordinal);
-            return current.Fields.Any(field =>
-                (!oldFields.TryGetValue(field.Ordinal, out var previous) || field.JsonName != previous.JsonName)
-                && oldJsonFields.TryGetValue(field.JsonName, out var reader)
-                && ParameterizedTypeChanged(reader.Field.Type, field.Type));
+            var oldFieldsByOrdinal = old.Fields.ToDictionary(field => field.Ordinal);
+            foreach (var newWriter in current.Fields)
+            {
+                if (oldFieldsByOrdinal.TryGetValue(newWriter.Ordinal, out var oldField) && newWriter.JsonName == oldField.JsonName)
+                {
+                    continue;
+                }
+
+                if (oldReadersByJsonName.TryGetValue(newWriter.JsonName, out var oldReader)
+                    && ParameterizedTypeChanged(oldReader.Field.Type, newWriter.Type))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private static bool ContainsParameter(TypeShape type) =>

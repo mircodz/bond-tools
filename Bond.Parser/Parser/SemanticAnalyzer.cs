@@ -18,7 +18,7 @@ public class SemanticAnalyzer
     private readonly SymbolTable _symbolTable;
     private readonly ImportResolver _importResolver;
     private readonly string _currentFile;
-    private readonly List<AliasDeclaration> _aliases = [];
+    private readonly List<AliasDeclaration> _localAliases = [];
 
     public SemanticAnalyzer(SymbolTable symbolTable, ImportResolver importResolver, string currentFile)
     {
@@ -31,7 +31,9 @@ public class SemanticAnalyzer
     {
         _symbolTable.ClaimImport(_currentFile);
         await RegisterFileAsync(bond);
-        var resolved = TypeResolver.Resolve(bond, _symbolTable, _aliases);
+        _symbolTable.CompleteAliasScopes();
+
+        var resolved = TypeResolver.Resolve(bond, _symbolTable, _localAliases);
 
         foreach (var declaration in _symbolTable.BoundDeclarations)
         {
@@ -61,7 +63,7 @@ public class SemanticAnalyzer
 
     private async Task RegisterFileAsync(Syntax.Bond bond)
     {
-        _symbolTable.SetFileAliases(_currentFile, _aliases);
+        _symbolTable.SetFileAliases(_currentFile, _localAliases);
         foreach (var import in bond.Imports)
         {
             await ProcessImportAsync(import);
@@ -74,7 +76,7 @@ public class SemanticAnalyzer
 
         foreach (var declaration in bond.Declarations)
         {
-            _symbolTable.SetContext(declaration, _aliases, _currentFile);
+            _symbolTable.SetContext(declaration, _localAliases, _currentFile);
             if (declaration is not AliasDeclaration)
             {
                 _symbolTable.AddDeclaration(declaration);
@@ -84,7 +86,7 @@ public class SemanticAnalyzer
 
     private void RegisterAlias(AliasDeclaration alias)
     {
-        var duplicate = _aliases.FirstOrDefault(existing =>
+        var duplicate = _localAliases.FirstOrDefault(existing =>
             existing.Name == alias.Name &&
             existing.Namespaces.Any(ns => alias.Namespaces.Any(ns.Matches)));
 
@@ -98,7 +100,7 @@ public class SemanticAnalyzer
             throw new SemanticErrorException($"Duplicate declaration: alias '{alias.Name}' was already declared", alias.Location);
         }
 
-        _aliases.Add(alias);
+        _localAliases.Add(alias);
     }
 
     private async Task ProcessImportAsync(Import import)

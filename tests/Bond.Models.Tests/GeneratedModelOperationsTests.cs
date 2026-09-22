@@ -1,13 +1,10 @@
-using System;
 using System.Linq;
-using System.Reflection;
-using System.Runtime.ExceptionServices;
 using System.Threading.Tasks;
 using Bond.Parser.CodeGeneration;
 using Bond.Parser.Parser;
-using BondTools.Models;
+using Bond.TestSupport;
 
-namespace Bond.Parser.Tests;
+namespace Bond.Models.Tests;
 
 public sealed class GeneratedModelOperationsTests
 {
@@ -168,34 +165,55 @@ public sealed class GeneratedModelOperationsTests
             Require(integers.Equals(integers.Clone()), "generic primitive did not clone or compare");
             var scalar = new Models.Scalar<double> { value = double.NaN };
             Require(scalar.Equals(scalar.Clone()), "constrained nullable generic failed");
+
             var leaf = new Models.Leaf { number = 7 };
             var box = new Models.Box<Models.Leaf> { value = leaf };
             box.values.Add(leaf);
+
             var copy = box.Clone();
+
             Require(!ReferenceEquals(copy.value, leaf) && ReferenceEquals(copy.value, copy.values[0]), "generic model did not preserve sharing");
+
             var derived = new Models.Derived<Models.Leaf> { value = leaf };
             ((Models.Box<List<Models.Leaf>>)derived).value = new List<Models.Leaf> { leaf };
             ((Models.Box<List<Models.Leaf>>)derived).values.Add(((Models.Box<List<Models.Leaf>>)derived).value);
+
             var derivedCopy = derived.Clone();
             var baseCopy = (Models.Box<List<Models.Leaf>>)derivedCopy;
+
             Require(ReferenceEquals(baseCopy.value[0], derivedCopy.value), "substituted hidden base field lost shared value");
             Require(ReferenceEquals(baseCopy.value, baseCopy.values[0]), "nested substituted generic containers lost sharing");
             Require(derived.Equals(derivedCopy) && derived.GetHashCode() == derivedCopy.GetHashCode(), "generic derived operations disagreed");
+
             var containers = new Models.ContainerRoot();
             containers.wrapped.value = new List<Models.Leaf> { leaf };
             containers.nested.value = containers.wrapped;
+
             var containersCopy = containers.Clone();
+
             Require(!ReferenceEquals(containersCopy.wrapped.value, containers.wrapped.value), "generic container was shallow copied");
             Require(ReferenceEquals(containersCopy.wrapped, containersCopy.nested.value), "nested generic sharing was lost");
             Require(containers.Equals(containersCopy) && containers.GetHashCode() == containersCopy.GetHashCode(), "generic container operations disagreed");
+            """);
+    }
+
+    [Fact]
+    public async Task GenericBlobClonesOwnBackingStorage()
+    {
+        await Check("""
+            namespace Models
+            struct Box<T> { 0: T value; 1: vector<T> values; }
+            """, """
             var blobs = new Models.Box<ArraySegment<byte>> { value = new ArraySegment<byte>(new byte[] { 1, 2 }) };
+
             var blobsCopy = blobs.Clone();
+
             Require(!ReferenceEquals(blobs.value.Array, blobsCopy.value.Array) && blobs.Equals(blobsCopy), "generic blob did not deep clone");
             """);
     }
 
     [Fact]
-    public async Task UnknownGenericValuesRequireTypedAdaptersAndKnownImmutableTypesWork()
+    public async Task UnknownGenericValuesRequireTypedAdapters()
     {
         await Check("""
             namespace Models
@@ -204,15 +222,25 @@ public sealed class GeneratedModelOperationsTests
             var external = new External { Data = new List<int> { 4, 5 } };
             var box = new Models.Box<External> { value = external };
             box.values.Add(external);
-            try { box.Clone(); throw new Exception("unknown mutable CLR value was silently shallow copied"); }
+
+            try
+            {
+                box.Clone();
+                throw new Exception("unknown mutable CLR value was silently shallow copied");
+            }
             catch (NotSupportedException error)
             {
                 Require(error.Message.Contains("RegisterAdapter<T>"), "missing adapter did not include registration guidance");
             }
+
             ModelOperations.RegisterAdapter<External>(new ModelAdapter<External>(
                 (value, context) =>
                 {
-                    if (context.TryGetClone<External>(value, out var found)) return found;
+                    if (context.TryGetClone<External>(value, out var found))
+                    {
+                        return found;
+                    }
+
                     var clone = new External();
                     context.Register(value, clone);
                     clone.Data = ModelAdapters.List(ModelAdapters.Value<int>()).Clone(value.Data, context);
@@ -220,22 +248,33 @@ public sealed class GeneratedModelOperationsTests
                 },
                 (left, right, context) => ModelAdapters.List(ModelAdapters.Value<int>()).Equals(left.Data, right.Data, context),
                 (value, context) => ModelAdapters.List(ModelAdapters.Value<int>()).GetHashCode(value.Data, context)));
+
             var copy = box.Clone();
+
             Require(!ReferenceEquals(copy.value, external) && !ReferenceEquals(copy.value.Data, external.Data), "registered adapter was not used");
             Require(ReferenceEquals(copy.value, copy.values[0]), "registered adapter lost sharing");
             Require(box.Equals(copy) && box.GetHashCode() == copy.GetHashCode(), "registered value equality disagreed");
-            var date = new Models.Box<DateTime> { value = new DateTime(2024, 3, 5, 6, 7, 8, DateTimeKind.Utc) };
-            Require(date.Equals(date.Clone()), "DateTime needed an adapter");
-            var guid = new Models.Box<Guid> { value = Guid.NewGuid() };
-            Require(guid.Equals(guid.Clone()), "Guid needed an adapter");
-            Require(ModelOperations.Clone(TimeSpan.FromHours(3)) == TimeSpan.FromHours(3), "TimeSpan needed an adapter");
-            Require(ModelOperations.Clone(new DateOnly(2024, 3, 5)) == new DateOnly(2024, 3, 5), "DateOnly needed an adapter");
             """, """
             public sealed class External
             {
                 public System.Collections.Generic.List<int> Data = new();
                 public override string ToString() => throw new System.Exception("unexpected formatting");
             }
+            """);
+    }
+
+    [Fact]
+    public async Task GenericImmutableValuesCloneWithoutRegisteredAdapters()
+    {
+        await Check("""
+            namespace Models
+            struct Box<T> { 0: T value; 1: vector<T> values; }
+            """, """
+            var date = new Models.Box<DateTime> { value = new DateTime(2024, 3, 5, 6, 7, 8, DateTimeKind.Utc) };
+            var guid = new Models.Box<Guid> { value = Guid.NewGuid() };
+
+            Require(date.Equals(date.Clone()), "DateTime needed an adapter");
+            Require(guid.Equals(guid.Clone()), "Guid needed an adapter");
             """);
     }
 
@@ -363,6 +402,44 @@ public sealed class GeneratedModelOperationsTests
                 "generic materialized cloning retained original mutable data");
             Require(source.Equals(copy) && source.GetHashCode() == copy.GetHashCode(),
                 "generic materialized equality or hashing changed");
+            """, CountingBondedSource);
+    }
+
+    [Fact]
+    public async Task GenericNullableContainerAliasesPreserveMaterializedWrappersAndOwnerCycles()
+    {
+        await Check("""
+            namespace Models
+            using Payloads = nullable<vector<bonded<Payload>>>;
+            struct Payload { 0: int32 number; 1: nullable<Holder> owner; }
+            struct Box<T> { 0: T value; }
+            struct Holder { 0: Box<Payloads> wrapped; 1: bonded<Payload> direct; }
+            """, """
+            var source = new Models.Holder();
+            var payload = new Models.Payload { number = 7, owner = source };
+            var wrapper = new CountingBonded(payload);
+            source.wrapped.value = new List<Bond.IBonded<Models.Payload>> { wrapper };
+            source.direct = wrapper;
+
+            var copy = source.Clone();
+            var copiedPayload = ((IMaterializedModelValue<Models.Payload>)copy.direct).Value;
+
+            Require(wrapper.Reads == 1 && wrapper.Writes == 0,
+                "a nullable container alias did not materialize the shared wrapper exactly once");
+            Require(ReferenceEquals(copy.wrapped.value[0], copy.direct),
+                "a nullable container alias split same-view wrappers");
+            Require(ReferenceEquals(copiedPayload.owner, copy),
+                "a nullable container alias split the owner cycle");
+            Require(!ReferenceEquals(copy.wrapped.value, source.wrapped.value)
+                && !ReferenceEquals(copy.direct, wrapper) && !ReferenceEquals(copiedPayload, payload),
+                "a nullable container alias retained original mutable data");
+
+            Require(source.Equals(copy), "a nullable container alias clone was not value equal");
+            Require(wrapper.Reads == 2, "nullable container alias equality materialized repeatedly");
+            Require(source.GetHashCode() == copy.GetHashCode(),
+                "nullable container alias clone hashes differed");
+            Require(wrapper.Reads == 3 && wrapper.Writes == 0,
+                "nullable container alias hashing materialized repeatedly or serialized");
             """, CountingBondedSource);
     }
 
@@ -558,22 +635,34 @@ public sealed class GeneratedModelOperationsTests
         });
         Assert.True(generated.Success, string.Join("\n", generated.Errors.Select(error => error.Message)));
 
-        Run(generated.Code!, """
+        GeneratedScenario.Run(generated.Code!, """
             var source = new Models.Container { value = new External { Number = 8 } };
             source.values.Add(source.value);
-            try { source.Clone(); throw new Exception("mapped mutable type was silently shallow copied"); }
+
+            try
+            {
+                source.Clone();
+                throw new Exception("mapped mutable type was silently shallow copied");
+            }
             catch (NotSupportedException) { }
+
             ModelOperations.RegisterAdapter<External>(new ModelAdapter<External>(
                 (value, context) =>
                 {
-                    if (context.TryGetClone<External>(value, out var found)) return found;
+                    if (context.TryGetClone<External>(value, out var found))
+                    {
+                        return found;
+                    }
+
                     var clone = new External { Number = value.Number };
                     context.Register(value, clone);
                     return clone;
                 },
                 (left, right, context) => left.Number == right.Number,
                 (value, context) => value.Number));
+
             var copy = source.Clone();
+
             Require(!ReferenceEquals(source.value, copy.value) && ReferenceEquals(copy.value, copy.values[0]),
                 "mapped field and container did not use the same typed adapter");
             Require(source.Equals(copy) && source.GetHashCode() == copy.GetHashCode(), "mapped equality disagreed");
@@ -590,38 +679,7 @@ public sealed class GeneratedModelOperationsTests
     }
 
     private static async Task Check(string schema, string body, string extraSource = "") =>
-        Run(await CSharpGeneratorTests.Generate(schema), body, extraSource);
-
-    private static void Run(string generated, string body, string extraSource)
-    {
-        var checks = """
-            using System;
-            using System.Collections.Generic;
-            using System.Linq;
-            using BondTools.Models;
-            public static class Scenario
-            {
-                private static void Require(bool condition, string message)
-                {
-                    if (!condition) throw new Exception(message);
-                }
-                public static void Run()
-                {
-            """ + body + """
-                }
-            }
-            """ + extraSource;
-
-        var assembly = CSharpGeneratorTests.Compile(generated, checks);
-        try
-        {
-            assembly.GetType("Scenario", true)!.GetMethod("Run")!.Invoke(null, null);
-        }
-        catch (TargetInvocationException error) when (error.InnerException is not null)
-        {
-            ExceptionDispatchInfo.Capture(error.InnerException).Throw();
-        }
-    }
+        GeneratedScenario.Run(await GeneratedCode.Generate(schema), body, extraSource);
 
     private const string CountingBondedSource = """
         public sealed class CountingBonded : global::Bond.IBonded<Models.Payload>

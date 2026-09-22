@@ -48,55 +48,75 @@ internal sealed record BuildManifest
 
         try
         {
-            var manifest = JsonSerializer.Deserialize<BuildManifest>(bytes, JsonOptions);
-
-            // JSON can contain explicit nulls even for required, non-nullable properties.
-            if (manifest == null || manifest.Version != 1
-                || !BuildFiles.PathComparer.Equals(manifest.ProjectFile, request.ProjectFile)
-                || !BuildFiles.PathComparer.Equals(manifest.OutputDirectory, request.OutputDirectory)
-                || !BuildFiles.IsHash(manifest.GeneratorIdentity) || !BuildFiles.IsHash(manifest.RequestHash)
-                || manifest.Entries == null)
-            {
-                throw new InvalidDataException("Invalid manifest identity or version.");
-            }
-
-            var sources = new HashSet<string>(BuildFiles.PathComparer);
-            var outputs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var entry in manifest.Entries)
-            {
-                if (entry == null || !CanonicalPath(entry.Source) || !sources.Add(entry.Source)
-                    || !string.Equals(Path.GetExtension(entry.Source), ".bond", StringComparison.OrdinalIgnoreCase)
-                    || entry.Output != BuildRequest.OutputFor(request.ProjectFile, entry.Source)
-                    || !outputs.Add(entry.Output) || !BuildFiles.IsHash(entry.OptionsHash)
-                    || !BuildFiles.IsHash(entry.OutputHash) || entry.Dependencies == null)
-                {
-                    throw new InvalidDataException("Invalid manifest output entry.");
-                }
-
-                BuildFiles.OutputPath(request.OutputDirectory, entry.Output);
-                var dependencies = new HashSet<string>(BuildFiles.PathComparer);
-                foreach (var dependency in entry.Dependencies)
-                {
-                    if (dependency == null || !CanonicalPath(dependency.Path) || !dependencies.Add(dependency.Path)
-                        || (dependency.Hash != null && !BuildFiles.IsHash(dependency.Hash)))
-                    {
-                        throw new InvalidDataException("Invalid manifest dependency.");
-                    }
-                }
-
-                if (!entry.Dependencies.Any(dependency =>
-                    BuildFiles.PathComparer.Equals(dependency.Path, entry.Source) && dependency.Hash != null))
-                {
-                    throw new InvalidDataException("Manifest does not include the root input hash.");
-                }
-            }
-
+            var manifest = ValidateIdentity(JsonSerializer.Deserialize<BuildManifest>(bytes, JsonOptions), request);
+            ValidateEntries(manifest.Entries, request);
             return manifest;
         }
         catch (Exception error) when (error is JsonException or InvalidDataException or ArgumentException or NotSupportedException)
         {
             throw new InvalidDataException($"Bond manifest '{path}' is invalid. Run dotnet clean and rebuild, " +
                 $"or remove this manifest and rebuild. {error.Message}", error);
+        }
+    }
+
+    private static BuildManifest ValidateIdentity(BuildManifest? manifest, BuildRequest request)
+    {
+        // JSON can contain explicit nulls even for required, non-nullable properties.
+        if (manifest == null || manifest.Version != 1
+            || !BuildFiles.PathComparer.Equals(manifest.ProjectFile, request.ProjectFile)
+            || !BuildFiles.PathComparer.Equals(manifest.OutputDirectory, request.OutputDirectory)
+            || !BuildFiles.IsHash(manifest.GeneratorIdentity) || !BuildFiles.IsHash(manifest.RequestHash)
+            || manifest.Entries == null)
+        {
+            throw new InvalidDataException("Invalid manifest identity or version.");
+        }
+
+        return manifest;
+    }
+
+    private static void ValidateEntries(BuildManifestEntry[] entries, BuildRequest request)
+    {
+        var sources = new HashSet<string>(BuildFiles.PathComparer);
+        var outputs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var entry in entries)
+        {
+            if (entry == null || !CanonicalPath(entry.Source) || !sources.Add(entry.Source)
+                || !string.Equals(Path.GetExtension(entry.Source), ".bond", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidDataException("Invalid manifest output entry.");
+            }
+
+            if (entry.Output != BuildRequest.OutputFor(request.ProjectFile, entry.Source) || !outputs.Add(entry.Output))
+            {
+                throw new InvalidDataException("Invalid manifest output entry.");
+            }
+
+            if (!BuildFiles.IsHash(entry.OptionsHash) || !BuildFiles.IsHash(entry.OutputHash) || entry.Dependencies == null)
+            {
+                throw new InvalidDataException("Invalid manifest output entry.");
+            }
+
+            BuildFiles.OutputPath(request.OutputDirectory, entry.Output);
+            ValidateDependencies(entry);
+        }
+    }
+
+    private static void ValidateDependencies(BuildManifestEntry entry)
+    {
+        var paths = new HashSet<string>(BuildFiles.PathComparer);
+        foreach (var dependency in entry.Dependencies)
+        {
+            if (dependency == null || !CanonicalPath(dependency.Path) || !paths.Add(dependency.Path)
+                || (dependency.Hash != null && !BuildFiles.IsHash(dependency.Hash)))
+            {
+                throw new InvalidDataException("Invalid manifest dependency.");
+            }
+        }
+
+        if (!entry.Dependencies.Any(dependency =>
+            BuildFiles.PathComparer.Equals(dependency.Path, entry.Source) && dependency.Hash != null))
+        {
+            throw new InvalidDataException("Manifest does not include the root input hash.");
         }
     }
 

@@ -17,124 +17,153 @@ internal sealed record GenerationResult(
     IReadOnlyList<ParseError> Errors,
     string Status);
 
+internal sealed class GenerationFailureException(string path, Exception cause) : Exception(cause.Message, cause)
+{
+    internal ParseError Error { get; } = new(cause.Message, path, 0, 0);
+
+    internal static bool IsExpected(Exception error) =>
+        error is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException
+            or NotSupportedException or JsonException;
+}
+
 internal static class GenerationEngine
 {
     internal static async Task<GenerationResult> RunAsync(BuildRequest request, CancellationToken cancellationToken)
     {
-        var currentPath = request.OutputDirectory;
         try
         {
-            BuildFiles.EnsureSafePath(request.OutputDirectory, directory: true);
-            var manifestPath = Path.Combine(request.OutputDirectory, "manifest.json");
-            currentPath = manifestPath;
-            var previous = await BuildManifest.ReadAsync(manifestPath, request, cancellationToken);
-            var identity = await GeneratorIdentityAsync(cancellationToken);
-            var generatorUnchanged = previous?.GeneratorIdentity == identity;
-
-            var oldEntries = previous?.Entries.ToDictionary(entry => entry.Source, BuildFiles.PathComparer)
-                ?? new Dictionary<string, BuildManifestEntry>(BuildFiles.PathComparer);
-            var entries = new List<BuildManifestEntry>();
-            var pending = new List<(string Path, byte[] Content)>();
-            var removed = new List<string>();
-            var errors = new List<ParseError>();
-
-            var generatedCount = 0;
-            var skippedCount = 0;
-
-            foreach (var input in request.Inputs)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                currentPath = BuildFiles.OutputPath(request.OutputDirectory, input.Output);
-                var existingOutput = await BuildFiles.ReadOwnedOutputAsync(currentPath, cancellationToken);
-                var optionsHash = BuildFiles.HashText(JsonSerializer.Serialize(input));
-                oldEntries.Remove(input.Source, out var oldEntry);
-
-                if (generatorUnchanged && oldEntry != null
-                    && await CanReuseOutputAsync(oldEntry, optionsHash, existingOutput, cancellationToken))
-                {
-                    entries.Add(oldEntry);
-                    skippedCount++;
-                    continue;
-                }
-
-                currentPath = input.Source;
-                var (generated, dependencies) = await GenerateInputAsync(input, cancellationToken);
-                if (!generated.Success)
-                {
-                    errors.AddRange(generated.Errors);
-                    continue;
-                }
-
-                var contentBytes = Encoding.UTF8.GetBytes(generated.Code!);
-                if (existingOutput == null || !existingOutput.AsSpan().SequenceEqual(contentBytes))
-                {
-                    pending.Add((BuildFiles.OutputPath(request.OutputDirectory, input.Output), contentBytes));
-                }
-
-                entries.Add(new BuildManifestEntry
-                {
-                    Source = input.Source,
-                    Output = input.Output,
-                    OptionsHash = optionsHash,
-                    OutputHash = BuildFiles.Hash(contentBytes),
-                    Dependencies = dependencies
-                });
-                generatedCount++;
-            }
-
-            foreach (var entry in oldEntries.Values)
-            {
-                currentPath = BuildFiles.OutputPath(request.OutputDirectory, entry.Output);
-                if (await BuildFiles.ReadOwnedOutputAsync(currentPath, cancellationToken) != null)
-                {
-                    removed.Add(currentPath);
-                }
-            }
-
-            if (errors.Count != 0)
+            var (plan, errors) = await PrepareAsync(request, cancellationToken);
+            if (plan == null)
             {
                 return new GenerationResult([], [], errors, "");
             }
 
-            // Validate every root, dependency, and owned output before changing any generated files.
-            foreach (var output in pending)
-            {
-                currentPath = output.Path;
-                await BuildFiles.ReadOwnedOutputAsync(output.Path, cancellationToken);
-                await BuildFiles.WriteAtomicAsync(output.Path, output.Content, cancellationToken);
-            }
-
-            foreach (var output in removed)
-            {
-                currentPath = output;
-                await BuildFiles.ReadOwnedOutputAsync(output, cancellationToken);
-                File.Delete(output);
-            }
-
-            var manifest = new BuildManifest
-            {
-                Version = 1,
-                ProjectFile = request.ProjectFile,
-                OutputDirectory = request.OutputDirectory,
-                GeneratorIdentity = identity,
-                RequestHash = BuildFiles.HashText(JsonSerializer.Serialize(request)),
-                Entries = entries.ToArray()
-            };
-            currentPath = manifestPath;
-            await BuildFiles.WriteAtomicAsync(manifestPath,
-                JsonSerializer.SerializeToUtf8Bytes(manifest, BuildManifest.JsonOptions), cancellationToken);
-
-            var outputs = entries.Select(entry => BuildFiles.OutputPath(request.OutputDirectory, entry.Output)).ToArray();
-            var state = generatedCount == 0 && removed.Count == 0
-                ? $"Bond: up-to-date ({skippedCount} schemas)."
-                : $"Bond: generated {generatedCount}, skipped {skippedCount}, removed {removed.Count}.";
-            return new GenerationResult(outputs, outputs.Append(manifestPath).ToArray(), [], state);
+            return await plan.ApplyAsync(cancellationToken);
         }
-        catch (Exception error) when (error is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException
-            or NotSupportedException or JsonException)
+        catch (GenerationFailureException error)
         {
-            return new GenerationResult([], [], [new ParseError(error.Message, currentPath, 0, 0)], "");
+            return new GenerationResult([], [], [error.Error], "");
         }
+    }
+
+    private static async Task<(GenerationPlan? Plan, IReadOnlyList<ParseError> Errors)> PrepareAsync(
+        BuildRequest request, CancellationToken cancellationToken)
+    {
+        var (previous, identity) = await ReadPreviousGenerationAsync(request, cancellationToken);
+        var generatorUnchanged = previous?.GeneratorIdentity == identity;
+        var oldEntries = previous?.Entries.ToDictionary(entry => entry.Source, BuildFiles.PathComparer)
+            ?? new Dictionary<string, BuildManifestEntry>(BuildFiles.PathComparer);
+        var outputs = new List<PreparedOutput>();
+        var errors = new List<ParseError>();
+
+        foreach (var input in request.Inputs)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            oldEntries.Remove(input.Source, out var oldEntry);
+            var (output, inputErrors) = await PrepareOutputAsync(
+                input, request.OutputDirectory, generatorUnchanged ? oldEntry : null, cancellationToken);
+            if (output != null)
+            {
+                outputs.Add(output);
+            }
+            else
+            {
+                errors.AddRange(inputErrors);
+            }
+        }
+
+        // Stale-output ownership errors take precedence over collected schema diagnostics.
+        var removed = await FindRemovedOutputsAsync(request.OutputDirectory, oldEntries.Values, cancellationToken);
+        if (errors.Count != 0)
+        {
+            return (null, errors);
+        }
+
+        return (new GenerationPlan(request, identity, outputs.ToArray(), removed), []);
+    }
+
+    private static async Task<(BuildManifest? Manifest, string GeneratorIdentity)> ReadPreviousGenerationAsync(
+        BuildRequest request, CancellationToken cancellationToken)
+    {
+        var errorPath = request.OutputDirectory;
+        try
+        {
+            BuildFiles.EnsureSafePath(request.OutputDirectory, directory: true);
+            errorPath = Path.Combine(request.OutputDirectory, "manifest.json");
+            var previous = await BuildManifest.ReadAsync(errorPath, request, cancellationToken);
+            var identity = await GeneratorIdentityAsync(cancellationToken);
+            return (previous, identity);
+        }
+        catch (Exception error) when (GenerationFailureException.IsExpected(error))
+        {
+            throw new GenerationFailureException(errorPath, error);
+        }
+    }
+
+    private static async Task<(PreparedOutput? Output, IReadOnlyList<ParseError> Errors)> PrepareOutputAsync(
+        BuildInput input, string outputDirectory, BuildManifestEntry? cachedEntry, CancellationToken cancellationToken)
+    {
+        var errorPath = outputDirectory;
+        try
+        {
+            var outputPath = BuildFiles.OutputPath(outputDirectory, input.Output);
+            errorPath = outputPath;
+            var existingOutput = await BuildFiles.ReadOwnedOutputAsync(outputPath, cancellationToken);
+            var optionsHash = BuildFiles.HashText(JsonSerializer.Serialize(input));
+
+            if (cachedEntry != null
+                && await CanReuseOutputAsync(cachedEntry, optionsHash, existingOutput, cancellationToken))
+            {
+                return (new PreparedOutput(outputPath, cachedEntry, null, Reused: true), []);
+            }
+
+            errorPath = input.Source;
+            var (generated, dependencies) = await GenerateInputAsync(input, cancellationToken);
+            if (!generated.Success)
+            {
+                return (null, generated.Errors);
+            }
+
+            var content = Encoding.UTF8.GetBytes(generated.Code!);
+            var entry = new BuildManifestEntry
+            {
+                Source = input.Source,
+                Output = input.Output,
+                OptionsHash = optionsHash,
+                OutputHash = BuildFiles.Hash(content),
+                Dependencies = dependencies
+            };
+            var contentChanged = existingOutput == null || !existingOutput.AsSpan().SequenceEqual(content);
+
+            return (new PreparedOutput(outputPath, entry, contentChanged ? content : null, Reused: false), []);
+        }
+        catch (Exception error) when (GenerationFailureException.IsExpected(error))
+        {
+            throw new GenerationFailureException(errorPath, error);
+        }
+    }
+
+    private static async Task<string[]> FindRemovedOutputsAsync(
+        string outputDirectory, IEnumerable<BuildManifestEntry> oldEntries, CancellationToken cancellationToken)
+    {
+        var removed = new List<string>();
+        foreach (var entry in oldEntries)
+        {
+            var path = BuildFiles.OutputPath(outputDirectory, entry.Output);
+            try
+            {
+                if (await BuildFiles.ReadOwnedOutputAsync(path, cancellationToken) != null)
+                {
+                    removed.Add(path);
+                }
+            }
+            catch (Exception error) when (GenerationFailureException.IsExpected(error))
+            {
+                throw new GenerationFailureException(path, error);
+            }
+        }
+
+        return removed.ToArray();
     }
 
     private static async Task<(CSharpGenerationResult Result, BuildDependency[] Dependencies)> GenerateInputAsync(

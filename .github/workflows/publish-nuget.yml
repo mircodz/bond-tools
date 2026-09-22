@@ -55,7 +55,7 @@ jobs:
       - name: Build and test
         run: |
           dotnet build Bond.sln -c Release --no-restore
-          dotnet test --project Bond.Parser.Tests/Bond.Parser.Tests.csproj -c Release --no-build --no-restore
+          dotnet test --solution Bond.sln -c Release --no-build --no-restore
 
       - name: Pack
         run: dotnet pack Bond.sln -c Release --no-build --no-restore /p:Version="$VERSION"

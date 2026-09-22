@@ -89,44 +89,20 @@ internal sealed class ArgumentModelAdapter<T> : IModelAdapter<T>, IModelAdapterS
 
     public T Clone(T value, CloneContext context)
     {
-        var previous = context.Adapters;
-        context.Adapters = new ModelAdapterFrame(_arguments, previous);
-        try
-        {
-            return ModelAdapterSemantics.Clone(_inner, value, context);
-        }
-        finally
-        {
-            context.Adapters = previous;
-        }
+        using var scope = context.Traversal.PushBindings(_arguments);
+        return ModelAdapterSemantics.Clone(_inner, value, context);
     }
 
     public bool Equals(T left, T right, EqualityContext context)
     {
-        var previous = context.Adapters;
-        context.Adapters = new ModelAdapterFrame(_arguments, previous);
-        try
-        {
-            return ModelAdapterSemantics.Equals(_inner, left, right, context);
-        }
-        finally
-        {
-            context.Adapters = previous;
-        }
+        using var scope = context.Traversal.PushBindings(_arguments);
+        return ModelAdapterSemantics.Equals(_inner, left, right, context);
     }
 
     public int GetHashCode(T value, HashContext context)
     {
-        var previous = context.Adapters;
-        context.Adapters = new ModelAdapterFrame(_arguments, previous);
-        try
-        {
-            return ModelAdapterSemantics.Hash(_inner, value, context);
-        }
-        finally
-        {
-            context.Adapters = previous;
-        }
+        using var scope = context.Traversal.PushBindings(_arguments);
+        return ModelAdapterSemantics.Hash(_inner, value, context);
     }
 }
 
@@ -138,43 +114,19 @@ internal sealed class CapturedModelAdapter<T>(IModelAdapter<T> inner, ModelAdapt
 
     public T Clone(T value, CloneContext context)
     {
-        var previous = context.Adapters;
-        context.Adapters = bindings;
-        try
-        {
-            return ModelAdapterSemantics.Clone(inner, value, context);
-        }
-        finally
-        {
-            context.Adapters = previous;
-        }
+        using var scope = context.Traversal.ReplaceBindings(bindings);
+        return ModelAdapterSemantics.Clone(inner, value, context);
     }
 
     public bool Equals(T left, T right, EqualityContext context)
     {
-        var previous = context.Adapters;
-        context.Adapters = bindings;
-        try
-        {
-            return ModelAdapterSemantics.Equals(inner, left, right, context);
-        }
-        finally
-        {
-            context.Adapters = previous;
-        }
+        using var scope = context.Traversal.ReplaceBindings(bindings);
+        return ModelAdapterSemantics.Equals(inner, left, right, context);
     }
 
     public int GetHashCode(T value, HashContext context)
     {
-        var previous = context.Adapters;
-        context.Adapters = bindings;
-        try
-        {
-            return ModelAdapterSemantics.Hash(inner, value, context);
-        }
-        finally
-        {
-            context.Adapters = previous;
-        }
+        using var scope = context.Traversal.ReplaceBindings(bindings);
+        return ModelAdapterSemantics.Hash(inner, value, context);
     }
 }

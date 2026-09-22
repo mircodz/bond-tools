@@ -6,9 +6,10 @@ using System.Reflection;
 using System.Threading.Tasks;
 using Bond.Parser.CodeGeneration;
 using Bond.Parser.Parser;
+using Bond.TestSupport;
 using BondTools.Models;
 
-namespace Bond.Parser.Tests;
+namespace Bond.Models.Tests;
 
 public sealed class GeneratedSummaryTests
 {
@@ -256,7 +257,7 @@ public sealed class GeneratedSummaryTests
         Assert.DoesNotContain("IModelAdapter", result.Code!);
         Assert.DoesNotContain("SchemaDescriptor", result.Code!);
 
-        return CSharpGeneratorTests.Compile(result.Code!, extra);
+        return GeneratedCode.Compile(result.Code!, extra);
     }
 
     private static object New(Assembly assembly, string name) =>

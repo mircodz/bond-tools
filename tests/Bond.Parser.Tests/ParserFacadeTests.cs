@@ -8,10 +8,8 @@ namespace Bond.Parser.Tests;
 
 public class ParserFacadeTests
 {
-    private async Task<ParseResult> Parse(string input, ImportResolver? importResolver = null)
-    {
-        return await ParserFacade.ParseStringAsync(input, importResolver);
-    }
+    private static Task<ParseResult> Parse(string input, ImportResolver? importResolver = null) =>
+        ParserFacade.ParseStringAsync(input, importResolver);
 
     private static Task<(string, string)> MockImportResolver(string currentFile, string importPath)
     {
@@ -943,6 +941,52 @@ public class ParserFacadeTests
         aliasDecl!.TypeParameters.Should().ContainSingle();
     }
 
+    [Fact]
+    public async Task MapWithAliasKeyIsParsed()
+    {
+        var input = """
+            namespace Test
+            using guid = string;
+            struct User {
+                0: required map<guid, int16> properties;
+            }
+        """;
+
+        var result = await Parse(input);
+
+        result.Success.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Alias_IsFileScoped_WhenImportDefinesSameAlias()
+    {
+        var input = """
+                        import "common.bond"
+                        namespace Test
+                        using ID = string;
+                        struct User { 0: required ID id; }
+                    """;
+
+        Task<(string, string)> Resolver(string _, string importPath)
+        {
+            var content = """
+                              namespace Test
+                              using ID = int32;
+                              struct Other { 0: required ID id; }
+                          """;
+            return Task.FromResult((importPath, content));
+        }
+
+        var result = await Parse(input, Resolver);
+
+        result.Success.Should().BeTrue();
+        var user = result.Ast!.Declarations.OfType<StructDeclaration>().First(d => d.Name == "User");
+        var fieldType = user.Fields[0].Type as BondType.TypeReference;
+        fieldType.Should().NotBeNull();
+        var alias = fieldType!.Declaration.Should().BeOfType<AliasDeclaration>().Subject;
+        alias.AliasedType.Should().BeOfType<BondType.String>();
+    }
+
     #endregion
 
     #region Forward Declarations
@@ -1043,8 +1087,7 @@ public class ParserFacadeTests
     [Fact]
     public async Task MapWithContainerKeyType_Fails()
     {
-        // Grammar restricts keyType to basicType|userType, so container keys must be expressed
-        // via an alias that resolves to a container type — the semantic check catches it.
+        // Use an alias to reach semantic validation; the grammar rejects container keys.
         var input = """
             namespace Test
             using MyList = list<int32>;
@@ -1060,8 +1103,7 @@ public class ParserFacadeTests
     [Fact]
     public async Task SetWithContainerKeyType_Fails()
     {
-        // Grammar restricts keyType to basicType|userType, so container keys must be expressed
-        // via an alias that resolves to a container type — the semantic check catches it.
+        // Use an alias to reach semantic validation; the grammar rejects container keys.
         var input = """
             namespace Test
             using MyVec = vector<int32>;
@@ -1148,58 +1190,7 @@ public class ParserFacadeTests
 
         var result = await ParserFacade.ParseContentAsync(files[aPath], aPath, resolver);
 
-        // The important invariant: it terminates and returns something
         result.Should().NotBeNull();
-    }
-
-    #endregion
-
-    #region Issues
-
-    [Fact]
-    public async Task SetWithAlias_IsParsed()
-    {
-        var input = """
-            namespace Test
-            using guid = string;
-            struct User {
-                0: required map<guid, int16> properties;
-            }
-        """;
-
-        var result = await Parse(input);
-
-        result.Success.Should().BeTrue();
-    }
-
-    [Fact]
-    public async Task Alias_IsFileScoped_WhenImportDefinesSameAlias()
-    {
-        var input = """
-                        import "common.bond"
-                        namespace Test
-                        using ID = string;
-                        struct User { 0: required ID id; }
-                    """;
-
-        async Task<(string, string)> Resolver(string _, string importPath)
-        {
-            var content = """
-                              namespace Test
-                              using ID = int32;
-                              struct Other { 0: required ID id; }
-                          """;
-            return await Task.FromResult((importPath, content));
-        }
-
-        var result = await Parse(input, Resolver);
-
-        result.Success.Should().BeTrue();
-        var user = result.Ast!.Declarations.OfType<StructDeclaration>().First(d => d.Name == "User");
-        var fieldType = user.Fields[0].Type as BondType.TypeReference;
-        fieldType.Should().NotBeNull();
-        var alias = fieldType!.Declaration.Should().BeOfType<AliasDeclaration>().Subject;
-        alias.AliasedType.Should().BeOfType<BondType.String>();
     }
 
     #endregion

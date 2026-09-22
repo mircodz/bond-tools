@@ -226,7 +226,7 @@ public static partial class CSharpGenerator
                 }
 
                 var type = MapType(field.Type, field.Location);
-                var initialValue = DefaultValue(field, type, structure);
+                var initialValue = FieldDefaultValue(field, type, structure);
 
                 EmitDocumentation(field.LeadingTrivia, field.TrailingTrivia, 2);
                 EmitAttributes(field.Attributes, 2);
@@ -512,9 +512,9 @@ public static partial class CSharpGenerator
             return type;
         }
 
-        private string? DefaultValue(Field field, MappedType mapped, StructDeclaration? owner = null)
+        private string? FieldDefaultValue(Field field, MappedType mapped, StructDeclaration owner)
         {
-            if (mapped.IsCustom && owner != null)
+            if (mapped.IsCustom)
             {
                 if (field.DefaultValue is Default.Nothing || field.Type is BondType.Nullable or BondType.Maybe)
                 {
@@ -524,6 +524,11 @@ public static partial class CSharpGenerator
                 return CustomDefaultValue(field, mapped, owner);
             }
 
+            return WireDefaultValue(field, mapped);
+        }
+
+        private string? WireDefaultValue(Field field, MappedType mapped)
+        {
             if (field.Type is BondType.MetaName)
             {
                 return "name";

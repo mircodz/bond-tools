@@ -13,25 +13,23 @@ report_dir="out/coverage-report"
 rm -rf "$out_dir" "$report_dir"
 mkdir -p "$out_dir"
 
-dotnet test --project Bond.Parser.Tests/Bond.Parser.Tests.csproj \
+dotnet test --solution Bond.sln \
   --coverlet --coverlet-output-format cobertura \
   --coverlet-exclude-by-file "**/*.g4.cs" \
   --results-directory "$PWD/$out_dir"
 
-coverage_file=$(find "$out_dir" -name "coverage.cobertura*.xml" | head -n 1)
+coverage_file=$(find "$out_dir" -name "*coverage.cobertura*.xml" -print -quit)
 
 if [ -z "$coverage_file" ]; then
   echo "Error: Coverage file not generated" >&2
   exit 1
 fi
 
-echo "Coverage file: $coverage_file"
-
 mkdir -p "$report_dir"
 dotnet tool update -g dotnet-reportgenerator-globaltool >/dev/null 2>&1 || true
 
 reportgenerator \
-  -reports:"$coverage_file" \
+  -reports:"$out_dir/*coverage.cobertura*.xml" \
   -targetdir:"$report_dir" \
   -reporttypes:Html
 

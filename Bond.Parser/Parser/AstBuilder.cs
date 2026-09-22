@@ -259,81 +259,52 @@ public class AstBuilder : BondBaseVisitor<object?>
 
         _currentTypeParams.AddRange(typeParams);
 
-        Declaration result;
-        if (context.structView() != null)
+        var view = context.structView();
+        BondType? baseType = null;
+        string[]? viewTarget = null;
+        string[] viewFields = [];
+        Field[] fields = [];
+
+        if (view != null)
         {
-            result = VisitStructView(context.structView(), name, typeParams, attributes, location, leading, trailing);
+            viewTarget = (string[])Visit(view.qualifiedName())!;
+            viewFields = view.viewFieldList().identifier().Select(id => (string)Visit(id)!).ToArray();
         }
-        else if (context.structDef() != null)
+        else if (context.structDef() is { } definition)
         {
-            result = VisitStructDef(context.structDef(), name, typeParams, attributes, location, leading, trailing);
+            baseType = definition.userType() != null
+                ? (BondType)Visit(definition.userType())!
+                : null;
+
+            fields = definition.field()
+                .Select(f => (Field)Visit(f)!)
+                .OrderBy(f => f.Ordinal)
+                .ToArray();
         }
         else
         {
             throw new InvalidOperationException("Struct must have either view or definition");
         }
 
-        _currentTypeParams.RemoveRange(_currentTypeParams.Count - typeParams.Length, typeParams.Length);
-
-        return result;
-    }
-
-    private StructDeclaration VisitStructView(
-        BondParser.StructViewContext context,
-        string name,
-        TypeParam[] typeParams,
-        Syntax.Attribute[] attributes,
-        SourceLocation location,
-        Trivia[] leading,
-        Trivia? trailing)
-    {
-        return new StructDeclaration
-        {
-            Namespaces = _currentNamespaces.ToArray(),
-            Attributes = attributes,
-            Name = name,
-            TypeParameters = typeParams,
-            BaseType = null,
-            IsView = true,
-            ViewTarget = (string[])Visit(context.qualifiedName())!,
-            ViewFields = context.viewFieldList().identifier().Select(id => (string)Visit(id)!).ToArray(),
-            Fields = [],
-            Location = location,
-            LeadingTrivia = leading,
-            TrailingTrivia = trailing
-        };
-    }
-
-    private StructDeclaration VisitStructDef(
-        BondParser.StructDefContext context,
-        string name,
-        TypeParam[] typeParams,
-        Syntax.Attribute[] attributes,
-        SourceLocation location,
-        Trivia[] leading,
-        Trivia? trailing)
-    {
-        var baseType = context.userType() != null
-            ? (BondType)Visit(context.userType())!
-            : null;
-
-        var fields = context.field()
-            .Select(f => (Field)Visit(f)!)
-            .OrderBy(f => f.Ordinal)
-            .ToArray();
-
-        return new StructDeclaration
+        var result = new StructDeclaration
         {
             Namespaces = _currentNamespaces.ToArray(),
             Attributes = attributes,
             Name = name,
             TypeParameters = typeParams,
             BaseType = baseType,
+            IsView = view != null,
+            ViewTarget = viewTarget,
+            ViewFields = viewFields,
             Fields = fields,
             Location = location,
             LeadingTrivia = leading,
             TrailingTrivia = trailing
         };
+
+        _currentTypeParams.RemoveRange(_currentTypeParams.Count - typeParams.Length, typeParams.Length);
+
+        return result;
     }
 
     public override EnumDeclaration VisitEnum(BondParser.EnumContext context)
@@ -683,62 +654,43 @@ public class AstBuilder : BondBaseVisitor<object?>
 
     public override BondType VisitUserType(BondParser.UserTypeContext context)
     {
-        var name = (string[])Visit(context.qualifiedName())!;
-
-        if (name.Length == 1)
-        {
-            var typeParam = _currentTypeParams.FirstOrDefault(p => p.Name == name[0]);
-            if (typeParam != null)
-            {
-                RejectParameterArguments(context.typeArgs(), context.Start);
-                return new BondType.TypeParameter(typeParam);
-            }
-        }
-
-        var typeArgs = context.typeArgs() != null
-            ? (BondType[])Visit(context.typeArgs())!
-            : [];
-
-        return new BondType.UnresolvedType(name, typeArgs);
+        return BuildNamedType(context.qualifiedName(), context.typeArgs(), context.Start);
     }
 
     public override BondType VisitUserStructRef(BondParser.UserStructRefContext context)
     {
-        var name = (string[])Visit(context.qualifiedName())!;
-
-        if (name.Length == 1)
-        {
-            var typeParam = _currentTypeParams.FirstOrDefault(p => p.Name == name[0]);
-            if (typeParam != null)
-            {
-                RejectParameterArguments(context.typeArgs(), context.Start);
-                return new BondType.TypeParameter(typeParam);
-            }
-        }
-
-        var typeArgs = context.typeArgs() != null
-            ? (BondType[])Visit(context.typeArgs())!
-            : [];
-
-        return new BondType.UnresolvedType(name, typeArgs);
+        return BuildNamedType(context.qualifiedName(), context.typeArgs(), context.Start);
     }
 
     public override BondType VisitServiceType(BondParser.ServiceTypeContext context)
     {
-        var name = (string[])Visit(context.qualifiedName())!;
+        return BuildNamedType(context.qualifiedName(), context.typeArgs(), context.Start);
+    }
+
+    private BondType BuildNamedType(
+        BondParser.QualifiedNameContext qualifiedName,
+        BondParser.TypeArgsContext? arguments,
+        IToken start)
+    {
+        var name = (string[])Visit(qualifiedName)!;
 
         if (name.Length == 1)
         {
             var typeParam = _currentTypeParams.FirstOrDefault(p => p.Name == name[0]);
             if (typeParam != null)
             {
-                RejectParameterArguments(context.typeArgs(), context.Start);
+                if (arguments is not null)
+                {
+                    throw new SemanticErrorException("A type parameter cannot have type arguments",
+                        new SourceLocation(start.Line, start.Column + 1));
+                }
+
                 return new BondType.TypeParameter(typeParam);
             }
         }
 
-        var typeArgs = context.typeArgs() != null
-            ? (BondType[])Visit(context.typeArgs())!
+        var typeArgs = arguments != null
+            ? (BondType[])Visit(arguments)!
             : [];
 
         return new BondType.UnresolvedType(name, typeArgs);
@@ -749,15 +701,6 @@ public class AstBuilder : BondBaseVisitor<object?>
         return context.typeArg()
             .Select(a => (BondType)Visit(a)!)
             .ToArray();
-    }
-
-    private static void RejectParameterArguments(BondParser.TypeArgsContext? arguments, IToken token)
-    {
-        if (arguments is not null)
-        {
-            throw new SemanticErrorException("A type parameter cannot have type arguments",
-                new SourceLocation(token.Line, token.Column + 1));
-        }
     }
 
     public override BondType VisitTypeArg(BondParser.TypeArgContext context)

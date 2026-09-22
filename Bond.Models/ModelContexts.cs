@@ -13,7 +13,7 @@ public sealed class CloneContext
     private readonly MaterializationCache _payloads = new();
 
     internal ModelTraversal Traversal { get; } = new();
-    internal ModelAdapterFrame? Adapters { get => Traversal.Adapters; set => Traversal.Adapters = value; }
+    internal ModelAdapterFrame? Adapters => Traversal.Adapters;
 
     /// <summary>Looks up a compatible clone in the active adapter scope, preserving sharing and cycles.</summary>
     public bool TryGetClone<T>(object source, out T clone) =>
@@ -150,7 +150,7 @@ public sealed class EqualityContext
     private readonly MaterializationCache _payloads;
 
     internal ModelTraversal Traversal { get; private init; } = new();
-    internal ModelAdapterFrame? Adapters { get => Traversal.Adapters; set => Traversal.Adapters = value; }
+    internal ModelAdapterFrame? Adapters => Traversal.Adapters;
 
     /// <summary>Starts an independent equality operation.</summary>
     public EqualityContext() : this(new MaterializationCache())
@@ -217,10 +217,10 @@ public sealed class EqualityContext
 public sealed class HashContext
 {
     private readonly MaterializationCache _payloads;
-    private readonly Dictionary<ModelReferenceKey, Dictionary<int, int>> _hashes;
+    private readonly Dictionary<(ModelReferenceKey Reference, int Depth), int> _hashes;
 
     internal ModelTraversal Traversal { get; private init; } = new();
-    internal ModelAdapterFrame? Adapters { get => Traversal.Adapters; set => Traversal.Adapters = value; }
+    internal ModelAdapterFrame? Adapters => Traversal.Adapters;
 
     /// <summary>The maximum number of traversed edges in a standard value hash.</summary>
     public const int DefaultDepth = 16;
@@ -233,7 +233,8 @@ public sealed class HashContext
     {
     }
 
-    private HashContext(int depth, MaterializationCache payloads, Dictionary<ModelReferenceKey, Dictionary<int, int>> hashes)
+    private HashContext(int depth, MaterializationCache payloads,
+        Dictionary<(ModelReferenceKey Reference, int Depth), int> hashes)
     {
         RemainingDepth = depth;
         _payloads = payloads;
@@ -253,20 +254,14 @@ public sealed class HashContext
 
     internal int HashReference(object source, Func<int> compute)
     {
-        var key = new ModelReferenceKey(source, Traversal.Semantics);
-        if (!_hashes.TryGetValue(key, out var depths))
-        {
-            depths = new Dictionary<int, int>();
-            _hashes.Add(key, depths);
-        }
-
-        if (depths.TryGetValue(RemainingDepth, out var hash))
+        var key = (new ModelReferenceKey(source, Traversal.Semantics), RemainingDepth);
+        if (_hashes.TryGetValue(key, out var hash))
         {
             return hash;
         }
 
         hash = compute();
-        depths.Add(RemainingDepth, hash);
+        _hashes.Add(key, hash);
         return hash;
     }
 }

@@ -2,10 +2,33 @@ using System;
 using System.Collections.Generic;
 using BondTools.Models;
 
-namespace Bond.Parser.Tests;
+namespace Bond.Models.Tests;
 
-public sealed class ModelsAdapterRegressionTests
+public sealed class ModelAdapterTests
 {
+    [Fact]
+    public void ByteArrayAdaptersPreserveSharedStorageWithBlobs()
+    {
+        var source = new byte[] { 1, 2, 3 };
+        var context = new CloneContext();
+        var array = ModelAdapters.Value<byte[]>().Clone(source, context);
+        var segment = ModelAdapters.Blob.Clone(new ArraySegment<byte>(source, 1, 2), context);
+        Assert.NotSame(source, array);
+        Assert.Same(array, segment.Array);
+        Assert.True(ModelOperations.ValueEquals(source, array));
+        Assert.Equal(ModelOperations.ValueHashCode(source), ModelOperations.ValueHashCode(array));
+    }
+
+    [Fact]
+    public void ImmutableDateAndDurationValuesCloneWithoutRegisteredAdapters()
+    {
+        var duration = TimeSpan.FromHours(3);
+        var date = new DateOnly(2024, 3, 5);
+
+        Assert.Equal(duration, ModelOperations.Clone(duration));
+        Assert.Equal(date, ModelOperations.Clone(date));
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

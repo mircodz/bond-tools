@@ -101,25 +101,32 @@ public static partial class CSharpGenerator
         private string[] MapNamespace(string[] original) =>
             _namespaceMappings.GetValueOrDefault(string.Join(".", original), original);
 
+        private bool TryGetAliasTemplate(AliasDeclaration alias, [NotNullWhen(true)] out string? template)
+        {
+            if (_typeMappings.TryGetValue(IdlFullName(alias), out template))
+            {
+                return true;
+            }
+
+            var isLocalAlias = ast.Declarations.Any(root => ReferenceEquals(root, alias));
+            if (!isLocalAlias)
+            {
+                return false;
+            }
+
+            return _typeMappings.TryGetValue(alias.Name, out template);
+        }
+
         private bool TryMapAlias(AliasDeclaration alias, BondType[] arguments, SourceLocation location,
             [NotNullWhen(true)] out MappedType? mapped)
         {
             mapped = null;
-            if (_suppressTypeMappings != 0)
+            if (_suppressTypeMappings != 0 || !TryGetAliasTemplate(alias, out var template))
             {
                 return false;
             }
 
             var identity = IdlFullName(alias);
-            if (!_typeMappings.TryGetValue(identity, out var template))
-            {
-                var isLocalAlias = ast.Declarations.Any(root => ReferenceEquals(root, alias));
-                if (!isLocalAlias || !_typeMappings.TryGetValue(alias.Name, out template))
-                {
-                    return false;
-                }
-            }
-
             var typeParameters = new HashSet<string>(StringComparer.Ordinal);
             var expanded = ExpandTemplate(template, index =>
             {
@@ -135,45 +142,42 @@ public static partial class CSharpGenerator
                     : MapType(argument, location).Name;
             });
             var name = new ClrTypeParser(expanded, typeParameters, location).Parse();
-            var underlying = WithoutTypeMappings(() =>
-            {
-                var substituted = Substitute(alias.AliasedType, alias, arguments);
-                return MapType(substituted, location);
-            });
+            var substituted = Substitute(alias.AliasedType, alias, arguments);
+            var underlying = MapWireType(substituted, location);
             if (name == underlying.Name)
             {
                 mapped = underlying;
                 return true;
             }
 
-            var schema = WithoutTypeMappings(() =>
-                MapType(Substitute(alias.AliasedType, alias, arguments), location), useBlobSchemaTags: true);
+            // Converters use the wire CLR type; annotations must preserve nested blob tags.
+            var schema = MapWireType(substituted, location, useBlobSchemaTags: true);
             mapped = new MappedType(name, schema.SchemaType, IsScalar: underlying.IsScalar,
                 IsValueType: KnownValueTypes.Contains(name), IsSchemaValueType: schema.IsSchemaValueType,
                 IsCustom: true);
             return true;
         }
 
-        private T WithoutTypeMappings<T>(Func<T> action, bool useBlobSchemaTags = false)
+        private MappedType MapWireType(BondType type, SourceLocation location, bool useBlobSchemaTags = false)
         {
             _suppressTypeMappings++;
-            var previous = _useBlobSchemaTags;
+            var previousBlobSchemaTags = _useBlobSchemaTags;
             _useBlobSchemaTags |= useBlobSchemaTags;
             try
             {
-                return action();
+                return MapType(type, location);
             }
             finally
             {
-                _useBlobSchemaTags = previous;
+                _useBlobSchemaTags = previousBlobSchemaTags;
                 _suppressTypeMappings--;
             }
         }
 
         private string CustomDefaultValue(Field field, MappedType mapped, StructDeclaration owner)
         {
-            var wireType = WithoutTypeMappings(() => MapType(field.Type, field.Location));
-            var value = DefaultValue(field, wireType) ?? $"default({wireType.Name})";
+            var wireType = MapWireType(field.Type, field.Location);
+            var value = WireDefaultValue(field, wireType) ?? $"default({wireType.Name})";
             if (!HasRuntimeCompatibleMappedDefault(field))
             {
                 Fail($"The Bond runtime cannot preserve the non-zero or non-empty default of custom-mapped field '{field.Name}'. " +

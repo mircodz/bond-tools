@@ -232,10 +232,7 @@ public static partial class CSharpGenerator
                         }
 
                         ValidateAlias(alias);
-                        var identity = IdlFullName(alias);
-                        if (_typeMappings.TryGetValue(identity, out var template)
-                            || ast.Declarations.Any(root => ReferenceEquals(root, alias))
-                            && _typeMappings.TryGetValue(alias.Name, out template))
+                        if (TryGetAliasTemplate(alias, out var template))
                         {
                             return MetadataMappedAliasName(alias, reference.TypeArguments, template, location);
                         }

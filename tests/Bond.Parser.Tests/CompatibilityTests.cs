@@ -10,11 +10,11 @@ using FluentAssertions;
 
 namespace Bond.Parser.Tests;
 
-public class CompatibilityRegressionTests
+public class CompatibilityTests
 {
     private readonly CompatibilityChecker _checker = new();
 
-    internal static async Task<Syntax.Bond> Parse(string text)
+    private static async Task<Syntax.Bond> Parse(string text)
     {
         var result = await ParserFacade.ParseStringAsync(text);
         result.Success.Should().BeTrue(string.Join("; ", result.Errors.Select(e => e.Message)));
@@ -22,9 +22,9 @@ public class CompatibilityRegressionTests
         return result.Ast!;
     }
 
-    internal static Syntax.Bond Root(params Declaration[] declarations) => new([], [], declarations);
+    private static Syntax.Bond Root(params Declaration[] declarations) => new([], [], declarations);
 
-    internal static StructDeclaration Structure(params Field[] fields) =>
+    private static StructDeclaration Structure(params Field[] fields) =>
         new()
         {
             Name = "Record",
@@ -33,8 +33,727 @@ public class CompatibilityRegressionTests
             Fields = fields
         };
 
-    internal static Field Field(ushort ordinal = 0, string name = "value", BondType? type = null) =>
+    private static Field Field(ushort ordinal = 0, string name = "value", BondType? type = null) =>
         new([], ordinal, FieldModifier.Optional, type ?? BondType.Int32.Instance, name, null);
+
+    [Fact]
+    public async Task AddingRequiredField_IsBreaking()
+    {
+        var oldSchema = await Parse("""
+            namespace Test
+            struct User { 0: required string id; }
+        """);
+        var newSchema = await Parse("""
+            namespace Test
+            struct User {
+                0: required string id;
+                1: required string email;
+            }
+        """);
+
+        var changes = _checker.CheckCompatibility(oldSchema, newSchema);
+
+        changes.Should().ContainSingle(c =>
+            c.Category == ChangeCategory.BreakingWire &&
+            c.Description.ToLower().Contains("required") &&
+            c.Description.Contains("email"));
+    }
+
+    [Fact]
+    public async Task RemovingRequiredField_IsBreaking()
+    {
+        var oldSchema = await Parse("""
+            namespace Test
+            struct User {
+                0: required string id;
+                1: required string email;
+            }
+        """);
+        var newSchema = await Parse("""
+            namespace Test
+            struct User { 0: required string id; }
+        """);
+
+        var changes = _checker.CheckCompatibility(oldSchema, newSchema);
+
+        changes.Should().ContainSingle(c =>
+            c.Category == ChangeCategory.BreakingWire &&
+            c.Description.Contains("removed"));
+    }
+
+    [Fact]
+    public async Task ChangingFieldOrdinal_IsBreaking()
+    {
+        var oldSchema = await Parse("""
+            namespace Test
+            struct User { 0: required string id; }
+        """);
+        var newSchema = await Parse("""
+            namespace Test
+            struct User { 1: required string id; }
+        """);
+
+        var changes = _checker.CheckCompatibility(oldSchema, newSchema);
+
+        // Changing ordinals is detected as remove + add.
+        changes.Should().HaveCount(2);
+        changes.Should().Contain(c =>
+            c.Category == ChangeCategory.BreakingWire &&
+            c.Description.ToLower().Contains("removed"));
+        changes.Should().Contain(c =>
+            c.Category == ChangeCategory.BreakingWire &&
+            c.Description.ToLower().Contains("added"));
+    }
+
+    [Fact]
+    public async Task ChangingFieldType_IsBreaking()
+    {
+        var oldSchema = await Parse("""
+            namespace Test
+            struct User { 0: required int32 age; }
+        """);
+        var newSchema = await Parse("""
+            namespace Test
+            struct User { 0: required string age; }
+        """);
+
+        var changes = _checker.CheckCompatibility(oldSchema, newSchema);
+
+        changes.Should().ContainSingle(c =>
+            c.Category == ChangeCategory.BreakingWire &&
+            c.Description.ToLower().Contains("type"));
+    }
+
+    [Fact]
+    public async Task ChangingAlwaysWrittenDefaultValue_IsCompatible()
+    {
+        var oldSchema = await Parse("""
+            namespace Test
+            struct User { 0: required int32 status = 0; }
+        """);
+        var newSchema = await Parse("""
+            namespace Test
+            struct User { 0: required int32 status = 1; }
+        """);
+
+        var changes = _checker.CheckCompatibility(oldSchema, newSchema);
+
+        changes.Should().ContainSingle(c =>
+            c.Category == ChangeCategory.Compatible &&
+            c.Description.ToLower().Contains("default"));
+    }
+
+    [Fact]
+    public async Task DirectOptionalToRequired_IsBreaking()
+    {
+        var oldSchema = await Parse("""
+            namespace Test
+            struct User { 0: optional string name; }
+        """);
+        var newSchema = await Parse("""
+            namespace Test
+            struct User { 0: required string name; }
+        """);
+
+        var changes = _checker.CheckCompatibility(oldSchema, newSchema);
+
+        changes.Should().ContainSingle(c =>
+            c.Category == ChangeCategory.BreakingWire &&
+            c.Description.ToLower().Contains("modifier"));
+    }
+
+    [Fact]
+    public async Task DirectRequiredToOptional_IsBreaking()
+    {
+        var oldSchema = await Parse("""
+            namespace Test
+            struct User { 0: required string name; }
+        """);
+        var newSchema = await Parse("""
+            namespace Test
+            struct User { 0: optional string name; }
+        """);
+
+        var changes = _checker.CheckCompatibility(oldSchema, newSchema);
+
+        changes.Should().ContainSingle(c =>
+            c.Category == ChangeCategory.BreakingWire &&
+            c.Description.ToLower().Contains("modifier"));
+    }
+
+    [Fact]
+    public async Task RenamingField_IsBreakingText()
+    {
+        var oldSchema = await Parse("""
+            namespace Test
+            struct User { 0: optional string name; }
+        """);
+        var newSchema = await Parse("""
+            namespace Test
+            struct User { 0: optional string full_name; }
+        """);
+
+        var changes = _checker.CheckCompatibility(oldSchema, newSchema);
+
+        changes.Should().ContainSingle(c =>
+            c.Category == ChangeCategory.BreakingText &&
+            c.Description.Contains("name") &&
+            c.Description.Contains("full_name"));
+    }
+
+    [Fact]
+    public async Task AddingOptionalField_IsCompatible()
+    {
+        var oldSchema = await Parse("""
+            namespace Test
+            struct User { 0: required string id; }
+        """);
+        var newSchema = await Parse("""
+            namespace Test
+            struct User {
+                0: required string id;
+                1: optional string email;
+            }
+        """);
+
+        var changes = _checker.CheckCompatibility(oldSchema, newSchema);
+
+        changes.Should().ContainSingle(c =>
+            c.Category == ChangeCategory.Compatible &&
+            c.Description.Contains("email"));
+    }
+
+    [Fact]
+    public async Task RemovingOptionalField_IsCompatible()
+    {
+        var oldSchema = await Parse("""
+            namespace Test
+            struct User {
+                0: required string id;
+                1: optional string email;
+            }
+        """);
+        var newSchema = await Parse("""
+            namespace Test
+            struct User { 0: required string id; }
+        """);
+
+        var changes = _checker.CheckCompatibility(oldSchema, newSchema);
+
+        changes.Should().ContainSingle(c =>
+            c.Category == ChangeCategory.Compatible &&
+            c.Description.Contains("removed"));
+    }
+
+    [Fact]
+    public async Task OptionalToRequiredOptional_IsCompatible()
+    {
+        var oldSchema = await Parse("""
+            namespace Test
+            struct User { 0: optional string name; }
+        """);
+        var newSchema = await Parse("""
+            namespace Test
+            struct User { 0: required_optional string name; }
+        """);
+
+        var changes = _checker.CheckCompatibility(oldSchema, newSchema);
+
+        changes.Should().ContainSingle(c =>
+            c.Category == ChangeCategory.Compatible &&
+            c.Description.ToLower().Contains("modifier"));
+    }
+
+    [Fact]
+    public async Task RequiredOptionalToRequired_IsCompatible()
+    {
+        var oldSchema = await Parse("""
+            namespace Test
+            struct User { 0: required_optional string name; }
+        """);
+        var newSchema = await Parse("""
+            namespace Test
+            struct User { 0: required string name; }
+        """);
+
+        var changes = _checker.CheckCompatibility(oldSchema, newSchema);
+
+        changes.Should().ContainSingle(c =>
+            c.Category == ChangeCategory.Compatible &&
+            c.Description.ToLower().Contains("modifier"));
+    }
+
+    [Fact]
+    public async Task Int32ToInt64Promotion_IsCompatible()
+    {
+        var oldSchema = await Parse("""
+            namespace Test
+            struct User { 0: required int32 value; }
+        """);
+        var newSchema = await Parse("""
+            namespace Test
+            struct User { 0: required int64 value; }
+        """);
+
+        var changes = _checker.CheckCompatibility(oldSchema, newSchema);
+
+        changes.Should().ContainSingle(c =>
+            c.Category == ChangeCategory.Compatible &&
+            c.Description.Contains("int32") &&
+            c.Description.Contains("int64"));
+    }
+
+    [Fact]
+    public async Task FloatToDoublePromotion_IsCompatible()
+    {
+        var oldSchema = await Parse("""
+            namespace Test
+            struct User { 0: required float value; }
+        """);
+        var newSchema = await Parse("""
+            namespace Test
+            struct User { 0: required double value; }
+        """);
+
+        var changes = _checker.CheckCompatibility(oldSchema, newSchema);
+
+        changes.Should().ContainSingle(c =>
+            c.Category == ChangeCategory.Compatible &&
+            c.Description.Contains("float") &&
+            c.Description.Contains("double"));
+    }
+
+    [Fact]
+    public async Task VectorToList_IsCompatible()
+    {
+        var oldSchema = await Parse("""
+            namespace Test
+            struct User { 0: required vector<string> tags; }
+        """);
+        var newSchema = await Parse("""
+            namespace Test
+            struct User { 0: required list<string> tags; }
+        """);
+
+        var changes = _checker.CheckCompatibility(oldSchema, newSchema);
+
+        changes.Should().ContainSingle(c =>
+            c.Category == ChangeCategory.Compatible &&
+            c.Description.Contains("vector") &&
+            c.Description.Contains("list"));
+    }
+
+    [Fact]
+    public async Task Int32ToEnum_IsCompatible()
+    {
+        var oldSchema = await Parse("""
+            namespace Test
+            struct User { 0: required int32 status; }
+        """);
+        var newSchema = await Parse("""
+            namespace Test
+            enum Status { Active = 0 }
+            struct User { 0: required Status status; }
+        """);
+
+        var changes = _checker.CheckCompatibility(oldSchema, newSchema);
+
+        changes.Should().ContainSingle(c =>
+            c.Category == ChangeCategory.Compatible &&
+            c.Description.Contains("int32"));
+    }
+
+    [Fact]
+    public async Task AddingEnumConstant_IsCompatible()
+    {
+        var oldSchema = await Parse("""
+            namespace Test
+            enum Status { Active = 0 }
+        """);
+        var newSchema = await Parse("""
+            namespace Test
+            enum Status { Active = 0, Inactive = 1 }
+        """);
+
+        var changes = _checker.CheckCompatibility(oldSchema, newSchema);
+
+        changes.Should().ContainSingle(c =>
+            c.Category == ChangeCategory.Compatible &&
+            c.Description.Contains("Inactive"));
+    }
+
+    [Fact]
+    public async Task ChangingEnumConstantValue_IsBreaking()
+    {
+        var oldSchema = await Parse("""
+            namespace Test
+            enum Status { Active = 0, Inactive = 1 }
+        """);
+        var newSchema = await Parse("""
+            namespace Test
+            enum Status { Active = 0, Inactive = 5 }
+        """);
+
+        var changes = _checker.CheckCompatibility(oldSchema, newSchema);
+
+        changes.Should().ContainSingle(c =>
+            c.Category == ChangeCategory.BreakingWire &&
+            c.Description.Contains("value") &&
+            c.Description.Contains("Inactive"));
+    }
+
+    [Fact]
+    public async Task RemovingEnumConstant_IsCompatible()
+    {
+        var oldSchema = await Parse("""
+            namespace Test
+            enum Status { Active = 0, Inactive = 1 }
+        """);
+        var newSchema = await Parse("""
+            namespace Test
+            enum Status { Active = 0 }
+        """);
+
+        var changes = _checker.CheckCompatibility(oldSchema, newSchema);
+
+        changes.Should().ContainSingle(c =>
+            c.Category == ChangeCategory.Compatible &&
+            c.Description.Contains("removed") &&
+            c.Description.Contains("Inactive"));
+    }
+
+    [Fact]
+    public async Task ChangingBaseStruct_IsBreaking()
+    {
+        var oldSchema = await Parse("""
+            namespace Test
+            struct Base1 { 0: required string id; }
+            struct Base2 { 0: required int32 id; }
+            struct User : Base1 { 1: required string name; }
+        """);
+        var newSchema = await Parse("""
+            namespace Test
+            struct Base1 { 0: required string id; }
+            struct Base2 { 0: required int32 id; }
+            struct User : Base2 { 1: required string name; }
+        """);
+
+        var changes = _checker.CheckCompatibility(oldSchema, newSchema);
+
+        changes.Should().ContainSingle(c =>
+            c.Category == ChangeCategory.BreakingWire &&
+            c.Description.Contains("Inheritance"));
+    }
+
+    [Fact]
+    public async Task AddingBaseStruct_IsBreaking()
+    {
+        var oldSchema = await Parse("""
+            namespace Test
+            struct Base { 0: required string id; }
+            struct User { 1: required string name; }
+        """);
+        var newSchema = await Parse("""
+            namespace Test
+            struct Base { 0: required string id; }
+            struct User : Base { 1: required string name; }
+        """);
+
+        var changes = _checker.CheckCompatibility(oldSchema, newSchema);
+
+        changes.Should().ContainSingle(c =>
+            c.Category == ChangeCategory.BreakingWire &&
+            c.Description.Contains("Inheritance"));
+    }
+
+    [Fact]
+    public async Task RemovingDeclarationAlone_IsCompatible()
+    {
+        var oldSchema = await Parse("""
+            namespace Test
+            struct User { 0: required string id; }
+            struct Profile { 0: required string bio; }
+        """);
+        var newSchema = await Parse("""
+            namespace Test
+            struct User { 0: required string id; }
+        """);
+
+        var changes = _checker.CheckCompatibility(oldSchema, newSchema);
+
+        changes.Should().ContainSingle(c =>
+            c.Category == ChangeCategory.Compatible &&
+            c.Description.Contains("removed") &&
+            c.Description.Contains("Profile"));
+    }
+
+    [Fact]
+    public async Task AddingDeclaration_IsCompatible()
+    {
+        var oldSchema = await Parse("""
+            namespace Test
+            struct User { 0: required string id; }
+        """);
+        var newSchema = await Parse("""
+            namespace Test
+            struct User { 0: required string id; }
+            struct Profile { 0: required string bio; }
+        """);
+
+        var changes = _checker.CheckCompatibility(oldSchema, newSchema);
+
+        changes.Should().ContainSingle(c =>
+            c.Category == ChangeCategory.Compatible &&
+            c.Description.Contains("added") &&
+            c.Description.Contains("Profile"));
+    }
+
+    [Fact]
+    public async Task ChangingDeclarationType_IsBreaking()
+    {
+        var oldSchema = await Parse("""
+            namespace Test
+            struct Status { 0: required int32 value; }
+        """);
+        var newSchema = await Parse("""
+            namespace Test
+            enum Status { Active = 0 }
+        """);
+
+        var changes = _checker.CheckCompatibility(oldSchema, newSchema);
+
+        changes.Should().ContainSingle(c =>
+            c.Category == ChangeCategory.BreakingWire &&
+            c.Description.Contains("kind changed"));
+    }
+
+    [Fact]
+    public async Task IdenticalSchemas_NoChanges()
+    {
+        var schema = await Parse("""
+            namespace Test
+            struct User {
+                0: required string id;
+                1: optional string name;
+            }
+        """);
+
+        var changes = _checker.CheckCompatibility(schema, schema);
+
+        changes.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ImportedSchemasResolveTypesForCompatibilityChecks()
+    {
+        var root = Path.GetFullPath(Path.Combine("bond-parser-tests", Guid.NewGuid().ToString("N")));
+        var mainPath = Path.Combine(root, "schema.bond");
+        var commonPath = Path.Combine(root, "common.bond");
+
+        var commonSchema = """
+            namespace Test
+            struct Common { 0: required int32 id; }
+        """;
+
+        var oldSchema = """
+            import "common.bond"
+            namespace Test
+            struct User { 0: required Common c; }
+        """;
+
+        var newSchema = """
+            import "common.bond"
+            namespace Test
+            struct User {
+                0: required Common c;
+                1: optional int32 age;
+            }
+        """;
+
+        var files = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [commonPath] = commonSchema
+        };
+
+        ImportResolver resolver = (currentFile, importPath) =>
+        {
+            var currentDir = Path.GetDirectoryName(currentFile) ?? root;
+            var absolutePath = Path.GetFullPath(Path.Combine(currentDir, importPath));
+            if (!files.TryGetValue(absolutePath, out var content))
+            {
+                throw new FileNotFoundException($"Imported file not found: {importPath}", absolutePath);
+            }
+
+            return Task.FromResult((absolutePath, content));
+        };
+
+        var oldResult = await ParserFacade.ParseContentAsync(oldSchema, mainPath, resolver);
+        oldResult.Success.Should().BeTrue($"parsing should succeed but got errors: {string.Join(", ", oldResult.Errors.Select(e => e.Message))}");
+
+        var newResult = await ParserFacade.ParseContentAsync(newSchema, mainPath, resolver);
+        newResult.Success.Should().BeTrue($"parsing should succeed but got errors: {string.Join(", ", newResult.Errors.Select(e => e.Message))}");
+
+        var changes = _checker.CheckCompatibility(oldResult.Ast!, newResult.Ast!);
+
+        changes.Should().Contain(c =>
+            c.Category == ChangeCategory.Compatible &&
+            c.Description.Contains("age"));
+    }
+
+    [Fact]
+    public async Task ServiceInheritanceChange_IsBreaking()
+    {
+        var oldSchema = await Parse("""
+            namespace Test
+            service Base1 { void Method1(void); }
+            service Base2 { void Method2(void); }
+            service MySvc : Base1 { void Method3(void); }
+        """);
+        var newSchema = await Parse("""
+            namespace Test
+            service Base1 { void Method1(void); }
+            service Base2 { void Method2(void); }
+            service MySvc : Base2 { void Method3(void); }
+        """);
+
+        var changes = _checker.CheckCompatibility(oldSchema, newSchema);
+
+        changes.Should().ContainSingle(c =>
+            c.Category == ChangeCategory.BreakingWire &&
+            c.Description.Contains("Inheritance"));
+    }
+
+    [Fact]
+    public async Task ServiceInheritanceAdded_IsBreaking()
+    {
+        var oldSchema = await Parse("""
+            namespace Test
+            service Base { void BaseMethod(void); }
+            service MySvc { void MyMethod(void); }
+        """);
+        var newSchema = await Parse("""
+            namespace Test
+            service Base { void BaseMethod(void); }
+            service MySvc : Base { void MyMethod(void); }
+        """);
+
+        var changes = _checker.CheckCompatibility(oldSchema, newSchema);
+
+        changes.Should().ContainSingle(c =>
+            c.Category == ChangeCategory.BreakingWire &&
+            c.Description.Contains("Inheritance"));
+    }
+
+    [Fact]
+    public async Task ServiceInheritanceRemoved_IsBreaking()
+    {
+        var oldSchema = await Parse("""
+            namespace Test
+            service Base { void BaseMethod(void); }
+            service MySvc : Base { void MyMethod(void); }
+        """);
+        var newSchema = await Parse("""
+            namespace Test
+            service Base { void BaseMethod(void); }
+            service MySvc { void MyMethod(void); }
+        """);
+
+        var changes = _checker.CheckCompatibility(oldSchema, newSchema);
+
+        changes.Should().ContainSingle(c =>
+            c.Category == ChangeCategory.BreakingWire &&
+            c.Description.Contains("Inheritance"));
+    }
+
+    [Fact]
+    public async Task AddingEnumConstantInMiddle_WithoutShiftingValues_IsLegalNumericAlias()
+    {
+        var oldSchema = await Parse("""
+            namespace Test
+            enum Status { Active = 0, Inactive = 1 }
+        """);
+        var newSchema = await Parse("""
+            namespace Test
+            enum Status { Active = 0, Pending, Inactive = 1 }
+        """);
+
+        var changes = _checker.CheckCompatibility(oldSchema, newSchema);
+
+        changes.Should().ContainSingle(c =>
+            c.Category == ChangeCategory.Compatible &&
+            c.Description.Contains("Pending"));
+        changes.Should().NotContain(c => c.Severity == ChangeSeverity.Error);
+    }
+
+    [Fact]
+    public async Task UnusedAliasTypeChangesDoNotAffectWireCompatibility()
+    {
+        var oldSchema = await Parse("""
+            namespace Test
+            using MyType = string;
+        """);
+        var newSchema = await Parse("""
+            namespace Test
+            using MyType = int32;
+        """);
+
+        var changes = _checker.CheckCompatibility(oldSchema, newSchema);
+
+        changes.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task AliasChange_VectorToList_IsCompatible()
+    {
+        // Unused aliases do not affect payloads; vector<T> and list<T> also share the wire encoding.
+        var oldSchema = await Parse("""
+            namespace Test
+            using Items = vector<int32>;
+        """);
+        var newSchema = await Parse("""
+            namespace Test
+            using Items = list<int32>;
+        """);
+
+        var changes = _checker.CheckCompatibility(oldSchema, newSchema);
+
+        changes.Should().NotContain(c => c.Category == ChangeCategory.BreakingWire);
+    }
+
+    [Fact]
+    public async Task EnumInsertion_ShiftsImplicitValues_IsBreaking()
+    {
+        // Insertion shifts B from 1 to 2 and C from 2 to 3.
+        var oldSchema = await Parse("""
+            namespace Test
+            enum Status { A, B, C }
+        """);
+        var newSchema = await Parse("""
+            namespace Test
+            enum Status { A, X, B, C }
+        """);
+
+        var changes = _checker.CheckCompatibility(oldSchema, newSchema);
+
+        changes.Should().Contain(c => c.Category == ChangeCategory.BreakingWire);
+    }
+
+    [Fact]
+    public async Task EnumInsertion_ExplicitSurroundings_NoCollision_IsCompatible()
+    {
+        var oldSchema = await Parse("""
+            namespace Test
+            enum Status { A = 0, B = 5 }
+        """);
+        var newSchema = await Parse("""
+            namespace Test
+            enum Status { A = 0, X, B = 5 }
+        """);
+
+        var changes = _checker.CheckCompatibility(oldSchema, newSchema);
+
+        changes.Should().NotContain(c => c.Category == ChangeCategory.BreakingWire);
+    }
 
     [Theory]
     [InlineData("struct Node { 0: nullable<Node> next; }")]
@@ -366,6 +1085,20 @@ public class CompatibilityRegressionTests
         _checker.Compare(nothing, nullable).Changes.Should().Contain(c => c.Id == DiagnosticIds.FieldType && c.Category == ChangeCategory.BreakingWire);
     }
 
+    [Theory]
+    [InlineData("int32", "nothing")]
+    [InlineData("uint64", "18446744073709551615")]
+    [InlineData("double", "-0.0")]
+    [InlineData("State", "Alias")]
+    public async Task AliasExpansionPreservesNothingAndTypedDefaults(string type, string value)
+    {
+        const string prefix = "namespace Test enum State { A = 1, Alias = 1 } using Value<T> = T; ";
+        var old = await Parse(prefix + $"struct Record {{ 0: Value<{type}> value = {value}; }}");
+        var current = await Parse(prefix + $"struct Record {{ 0: {type} value = {value}; }}");
+
+        _checker.Compare(old, current).Changes.Should().BeEmpty();
+    }
+
     [Fact]
     public async Task JsonNamePinnedRenamePasses_ChangedEffectiveNameBreaks()
     {
@@ -459,6 +1192,30 @@ public class CompatibilityRegressionTests
             result.Changes.Should().ContainSingle(c => c.Severity == ChangeSeverity.Error
                 && c.Id == DiagnosticIds.FieldType && c.Category == ChangeCategory.BreakingText);
         }
+    }
+
+    [Fact]
+    public async Task JsonPayloadMismatchStopsBeforeLaterExpandingGenericFields()
+    {
+        // The reverse pass would reach recursion before the incompatible scalar.
+        const string prefix = """
+            namespace Test
+            struct OldLoop<T> { 0: nullable<OldLoop<vector<T>>> next; }
+            struct NewLoop<T> { 0: nullable<NewLoop<vector<T>>> next; }
+            struct Old { 0: int32 first; 1: OldLoop<int32> later; }
+            struct New { 0: NewLoop<int32> later; 1: string first; }
+            """;
+        var old = await Parse(prefix + "struct Record { 0: Old value; }");
+        var current = await Parse(prefix + "struct Record { 1: New value; }");
+
+        var result = _checker.Compare(old, current);
+
+        result.ExitCode.Should().Be(1);
+        result.Changes.Should().HaveCount(3);
+        result.Changes.Should().ContainSingle(change => change.Id == DiagnosticIds.FieldType
+            && change.Category == ChangeCategory.BreakingText && change.Severity == ChangeSeverity.Error
+            && change.Location == "Test.Record.value");
+        result.Changes.Should().NotContain(change => change.Id == DiagnosticIds.IncompleteDefinition);
     }
 
     [Fact]

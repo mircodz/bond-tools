@@ -65,21 +65,36 @@ internal sealed class ModelTraversal
 {
     private object? _adapter;
 
-    internal ModelAdapterFrame? Adapters { get; set; }
+    internal ModelAdapterFrame? Adapters { get; private set; }
     internal ModelOperationSemantics Semantics => new(_adapter, Adapters?.Semantics);
 
     internal ModelTraversal Fork() => new() { _adapter = _adapter, Adapters = Adapters };
 
-    internal Scope Enter(object? adapter)
+    internal AdapterScope Enter(object? adapter)
     {
-        var scope = new Scope(this, _adapter);
+        var scope = new AdapterScope(this, _adapter);
         _adapter = adapter;
         return scope;
     }
 
-    internal readonly struct Scope(ModelTraversal traversal, object? previous) : IDisposable
+    internal BindingScope PushBindings(IReadOnlyList<ModelAdapterArgument> arguments) =>
+        ReplaceBindings(new ModelAdapterFrame(arguments, Adapters));
+
+    internal BindingScope ReplaceBindings(ModelAdapterFrame bindings)
+    {
+        var scope = new BindingScope(this, Adapters);
+        Adapters = bindings;
+        return scope;
+    }
+
+    internal readonly struct AdapterScope(ModelTraversal traversal, object? previous) : IDisposable
     {
         public void Dispose() => traversal._adapter = previous;
+    }
+
+    internal readonly struct BindingScope(ModelTraversal traversal, ModelAdapterFrame? previous) : IDisposable
+    {
+        public void Dispose() => traversal.Adapters = previous;
     }
 }
 

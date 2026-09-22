@@ -20,7 +20,7 @@ build-release: ## Build the project in Release mode
 	dotnet build Bond.sln -c Release
 
 test: ## Run all tests
-	dotnet test --project Bond.Parser.Tests/Bond.Parser.Tests.csproj
+	dotnet test --solution Bond.sln
 
 coverage: ## Run tests with coverage report
 	bash scripts/coverage.sh

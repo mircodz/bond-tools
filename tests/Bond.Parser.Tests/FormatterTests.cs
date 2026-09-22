@@ -378,6 +378,29 @@ public class FormatterTests
         result.FormattedText.Should().Be(expected);
     }
 
+    [Theory]
+    [InlineData("-32", -32)]
+    [InlineData("-0X20", -32)]
+    [InlineData("+32", 32)]
+    public async Task FormattingPreservesSignedGenericArguments(string literal, long expected)
+    {
+        var schema = $$"""
+            namespace Example
+            using Values<T, N> = vector<T>;
+            struct Item { 0: Values<int32, {{literal}}> values; }
+            """;
+        var formatted = BondFormatter.Format(schema, "item.bond");
+        Assert.True(formatted.Success);
+        Assert.Contains("Values<int32, " + literal + ">", formatted.FormattedText!);
+
+        var parsed = await ParserFacade.ParseStringAsync(formatted.FormattedText!);
+        Assert.True(parsed.Success);
+        var structure = Assert.Single(parsed.Ast!.Declarations.OfType<StructDeclaration>());
+        var reference = Assert.IsType<BondType.TypeReference>(Assert.Single(structure.Fields).Type);
+        Assert.Equal(expected, Assert.IsType<BondType.IntTypeArg>(reference.TypeArguments[1]).Value);
+        Assert.Equal(formatted.FormattedText, BondFormatter.Format(formatted.FormattedText!, "item.bond").FormattedText);
+    }
+
     [Fact]
     public void Format_PreservesFieldAndEnumTrailingComments()
     {

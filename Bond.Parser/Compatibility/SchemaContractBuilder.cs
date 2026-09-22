@@ -133,51 +133,9 @@ internal sealed class SchemaContractBuilder(bool includeImports, bool allowUnres
             _ => []
         }, name);
 
-        var fields = new List<ContractField>();
-        if (declaration is StructDeclaration structure)
-        {
-            Require(structure.Fields is not null, "Missing struct fields.", name);
-            var ordinals = new HashSet<ushort>();
-            var fieldNames = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var field in structure.Fields!)
-            {
-                Require(field is not null, "Null field.", name);
-                if (!ordinals.Add(field!.Ordinal) || !fieldNames.Add(field.Name))
-                {
-                    throw Invalid($"Duplicate field ordinal or name '{field.Ordinal}: {field.Name}'.", name, DiagnosticIds.DuplicateField);
-                }
-
-                var type = Type(field.Type);
-                if (field.DefaultValue is Default.Nothing && type.Kind != "maybe")
-                {
-                    type = TypeShape.Of("maybe", type);
-                }
-
-                ValidateAttributes(field.Attributes, name + "." + field.Name);
-                var jsonName = field.Attributes
-                    .FirstOrDefault(attribute => attribute.QualifiedName.Length == 1 && attribute.QualifiedName[0] == "JsonName")
-                    ?.Value ?? field.Name;
-
-                string modifier;
-                if (type.Kind is "meta_name" or "meta_full_name")
-                {
-                    modifier = "required_optional";
-                }
-                else
-                {
-                    modifier = field.Modifier switch
-                    {
-                        FieldModifier.Optional => "optional",
-                        FieldModifier.Required => "required",
-                        FieldModifier.RequiredOptional => "required_optional",
-                        _ => throw Invalid("Invalid field modifier.", name + "." + field.Name)
-                    };
-                }
-
-                fields.Add(new ContractField(field.Ordinal, field.Name, jsonName, modifier,
-                    type, DefaultValue(field.DefaultValue, type, declaration)));
-            }
-        }
+        IReadOnlyList<ContractField> fields = declaration is StructDeclaration structure
+            ? ProjectFields(structure, parameters)
+            : [];
 
         var methods = new List<ContractMethod>();
         if (declaration is ServiceDeclaration service)
@@ -231,6 +189,56 @@ internal sealed class SchemaContractBuilder(bool includeImports, bool allowUnres
 
         return new ContractDeclaration(name, declarationKind, _roots.Contains(name), constraints,
             baseType is null ? null : Type(baseType), fields, _enums.GetValueOrDefault(name) ?? [], methods);
+    }
+
+    private IReadOnlyList<ContractField> ProjectFields(StructDeclaration declaration, Dictionary<string, TypeShape> parameters)
+    {
+        var name = Identity(declaration);
+        Require(declaration.Fields is not null, "Missing struct fields.", name);
+
+        var fields = new List<ContractField>();
+        var ordinals = new HashSet<ushort>();
+        var fieldNames = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var field in declaration.Fields!)
+        {
+            Require(field is not null, "Null field.", name);
+            if (!ordinals.Add(field!.Ordinal) || !fieldNames.Add(field.Name))
+            {
+                throw Invalid($"Duplicate field ordinal or name '{field.Ordinal}: {field.Name}'.", name, DiagnosticIds.DuplicateField);
+            }
+
+            var type = Shape(field.Type, parameters, new HashSet<Declaration>(ReferenceEqualityComparer.Instance), name);
+            if (field.DefaultValue is Default.Nothing && type.Kind != "maybe")
+            {
+                type = TypeShape.Of("maybe", type);
+            }
+
+            ValidateAttributes(field.Attributes, name + "." + field.Name);
+            var jsonName = field.Attributes
+                .FirstOrDefault(attribute => attribute.QualifiedName.Length == 1 && attribute.QualifiedName[0] == "JsonName")
+                ?.Value ?? field.Name;
+
+            string modifier;
+            if (type.Kind is "meta_name" or "meta_full_name")
+            {
+                modifier = "required_optional";
+            }
+            else
+            {
+                modifier = field.Modifier switch
+                {
+                    FieldModifier.Optional => "optional",
+                    FieldModifier.Required => "required",
+                    FieldModifier.RequiredOptional => "required_optional",
+                    _ => throw Invalid("Invalid field modifier.", name + "." + field.Name)
+                };
+            }
+
+            fields.Add(new ContractField(field.Ordinal, field.Name, jsonName, modifier,
+                type, DefaultValue(field.DefaultValue, type, declaration)));
+        }
+
+        return fields;
     }
 
     private TypeShape Shape(BondType type, Dictionary<string, TypeShape> parameters,

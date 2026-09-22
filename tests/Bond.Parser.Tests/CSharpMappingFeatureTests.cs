@@ -1,16 +1,13 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.IO;
 using System.Linq;
 using System.Reflection;
-using System.Text.Json;
 using System.Threading.Tasks;
-using Bond.Parser.CLI;
 using Bond.Parser.CodeGeneration;
 using Bond.Parser.Parser;
 using BondTools.Models;
-using static Bond.Parser.Tests.CSharpGeneratorTests;
+using static Bond.TestSupport.GeneratedCode;
 
 namespace Bond.Parser.Tests;
 
@@ -59,6 +56,43 @@ public sealed class CSharpMappingFeatureTests
             Assert.NotSame(value, copy);
             Assert.Equal(42, type.GetProperty("id")!.GetValue(copy));
         }
+    }
+
+    [Theory]
+    [InlineData(CSharpModelFeatures.Cloning)]
+    [InlineData(CSharpModelFeatures.Equality)]
+    [InlineData(CSharpModelFeatures.Debugger)]
+    [InlineData(CSharpModelFeatures.StringRepresentation)]
+    public async Task IncompleteBaseDefinitionsCannotSilentlyProducePartialOperations(CSharpModelFeatures feature)
+    {
+        var parsed = await ParserFacade.ParseStringAsync("namespace Example struct Base; struct Child : Base {}");
+        Assert.True(parsed.Success);
+
+        var generated = CSharpGenerator.Generate(parsed.Ast!, "child.bond",
+            new CSharpGenerationOptions { ModelFeatures = feature });
+        Assert.False(generated.Success);
+        Assert.Null(generated.Code);
+        Assert.Contains(generated.Errors, error => error.Message.Contains("base 'Example.Base'", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(CSharpModelFeatures.None)]
+    [InlineData(CSharpModelFeatures.Descriptors)]
+    public async Task ExternalBasesStillSupportPlainModelsAndSymbolicDescriptors(CSharpModelFeatures feature)
+    {
+        var parsed = await ParserFacade.ParseStringAsync("namespace Example struct Base; struct Child : Base {}");
+        Assert.True(parsed.Success);
+
+        var generated = CSharpGenerator.Generate(parsed.Ast!, "child.bond",
+            new CSharpGenerationOptions { ModelFeatures = feature });
+        Assert.True(generated.Success, string.Join("\n", generated.Errors.Select(error => error.Message)));
+        Compile(generated.Code!, """
+            namespace Example {
+                [Bond.Schema] public class Base {
+                    [Bond.Id(0)] public System.Collections.Generic.List<int> values { get; set; } = new();
+                }
+            }
+            """);
     }
 
     [Fact]
@@ -364,19 +398,6 @@ public sealed class CSharpMappingFeatureTests
         }
     }
 
-    [Fact]
-    public void ByteArrayAdaptersPreserveSharedStorageWithBlobs()
-    {
-        var source = new byte[] { 1, 2, 3 };
-        var context = new CloneContext();
-        var array = ModelAdapters.Value<byte[]>().Clone(source, context);
-        var segment = ModelAdapters.Blob.Clone(new ArraySegment<byte>(source, 1, 2), context);
-        Assert.NotSame(source, array);
-        Assert.Same(array, segment.Array);
-        Assert.True(ModelOperations.ValueEquals(source, array));
-        Assert.Equal(ModelOperations.ValueHashCode(source), ModelOperations.ValueHashCode(array));
-    }
-
     [Theory]
     [InlineData("namespace", "Example")]
     [InlineData("namespace", "Example=")]
@@ -399,154 +420,6 @@ public sealed class CSharpMappingFeatureTests
         Assert.NotEmpty(result.Errors);
     }
 
-    [Theory]
-    [InlineData("--descriptors", CSharpModelFeatures.Descriptors)]
-    [InlineData("--clone", CSharpModelFeatures.Cloning)]
-    [InlineData("--clonable", CSharpModelFeatures.Cloning)]
-    [InlineData("--equality", CSharpModelFeatures.Equality)]
-    [InlineData("--default-equals", CSharpModelFeatures.Equality)]
-    [InlineData("--debugger", CSharpModelFeatures.Debugger)]
-    [InlineData("--to-string", CSharpModelFeatures.StringRepresentation)]
-    public async Task CliFlagsSelectOnlyRequestedFeatures(string flag, CSharpModelFeatures features)
-    {
-        var root = NewTestDirectory();
-        try
-        {
-            var input = Path.Combine(root, "item.bond");
-            var output = Path.Combine(root, "generated");
-            await File.WriteAllTextAsync(input, "namespace Example struct Item { 0: int32 id; }",
-                TestContext.Current.CancellationToken);
-
-            using var standardOutput = new StringWriter();
-            using var standardError = new StringWriter();
-            var exitCode = await GenerateCommand.RunAsync(
-                ["csharp", input, "-o", output, flag, "--namespace=Example=Application"],
-                standardOutput, standardError, TestContext.Current.CancellationToken);
-            Assert.Equal(0, exitCode);
-            Assert.Equal("", standardError.ToString());
-
-            var code = await File.ReadAllTextAsync(Path.Combine(output, "item.g.cs"),
-                TestContext.Current.CancellationToken);
-            var assembly = Compile(code);
-            var type = assembly.GetType("Application.Item", true)!;
-            Assert.Equal(features.HasFlag(CSharpModelFeatures.Cloning), typeof(ICloneable).IsAssignableFrom(type));
-            Assert.Equal(features.HasFlag(CSharpModelFeatures.Descriptors),
-                assembly.GetType("Application.ItemSchema") != null);
-            Assert.Equal(features.HasFlag(CSharpModelFeatures.Debugger),
-                type.GetCustomAttribute<DebuggerDisplayAttribute>() != null);
-            Assert.Equal(features.HasFlag(CSharpModelFeatures.Equality),
-                typeof(IGeneratedEquatable).IsAssignableFrom(type));
-            Assert.Equal(features.HasFlag(CSharpModelFeatures.StringRepresentation),
-                typeof(IGeneratedSummary).IsAssignableFrom(type));
-        }
-        finally
-        {
-            Directory.Delete(root, recursive: true);
-        }
-    }
-
-    [Fact]
-    public async Task CliCombinesExplicitFeaturesWithUsingsAndSeparateTypeMappingsForEveryInput()
-    {
-        var root = NewTestDirectory();
-        try
-        {
-            var input = Path.Combine(root, "item.bond");
-            var otherInput = Path.Combine(root, "other.bond");
-            var output = Path.Combine(root, "generated");
-            await File.WriteAllTextAsync(input,
-                "namespace Example using Timestamp = int64; struct Item { 0: Timestamp created; }",
-                TestContext.Current.CancellationToken);
-            await File.WriteAllTextAsync(otherInput, "namespace Example struct Other { 0: int32 id; }",
-                TestContext.Current.CancellationToken);
-
-            using var standardOutput = new StringWriter();
-            using var standardError = new StringWriter();
-            var exitCode = await GenerateCommand.RunAsync(
-                ["csharp", input, otherInput, "-o", output,
-                    "--descriptors", "--clone", "--equality", "--debugger",
-                    "-u", "System", "--using=System.Collections.Generic", "-u=System",
-                    "--using", "System.Text", "--namespace=Example=Application",
-                    "--type-map=Example.Timestamp=System.DateTime"],
-                standardOutput, standardError, TestContext.Current.CancellationToken);
-            Assert.Equal(0, exitCode);
-            Assert.Empty(standardError.ToString());
-
-            var sources = new List<string>();
-            foreach (var file in new[] { "item.g.cs", "other.g.cs" })
-            {
-                var code = await File.ReadAllTextAsync(Path.Combine(output, file),
-                    TestContext.Current.CancellationToken);
-                Assert.Equal(new[] { "using System;", "using System.Collections.Generic;", "using System.Text;" },
-                    code.Split('\n').Where(line => line.StartsWith("using ", StringComparison.Ordinal)));
-                sources.Add(code);
-            }
-
-            sources.Add("""
-                namespace Application {
-                    public static class BondTypeAliasConverter {
-                        public static System.DateTime Convert(long value, System.DateTime unused) =>
-                            System.DateTime.UnixEpoch.AddTicks(value);
-                        public static long Convert(System.DateTime value, long unused) =>
-                            (value - System.DateTime.UnixEpoch).Ticks;
-                    }
-                }
-                """);
-
-            var assembly = Compile(sources.ToArray());
-            foreach (var name in new[] { "Application.Item", "Application.Other" })
-            {
-                var type = assembly.GetType(name, true)!;
-                Assert.True(typeof(IGeneratedModel).IsAssignableFrom(type));
-                Assert.True(typeof(ICloneable).IsAssignableFrom(type));
-                Assert.NotNull(type.GetCustomAttribute<DebuggerTypeProxyAttribute>());
-            }
-
-            var item = assembly.GetType("Application.Item", true)!;
-            Assert.Equal(typeof(DateTime), item.GetProperty("created")!.PropertyType);
-            Assert.Equal(DateTime.UnixEpoch, item.GetProperty("created")!.GetValue(Activator.CreateInstance(item)));
-        }
-        finally
-        {
-            Directory.Delete(root, recursive: true);
-        }
-    }
-
-    [Theory]
-    [InlineData("--clone=false")]
-    [InlineData("--to-string=false")]
-    [InlineData("--model-features=all")]
-    [InlineData("--model-features=none")]
-    [InlineData("--namespace=Example")]
-    [InlineData("--type-map=Example.Value=System.String;bad")]
-    [InlineData("--using=Example.Value=System.String")]
-    [InlineData("-u=System;class Injected{}")]
-    public async Task CliReportsInvalidFeatureOrMappingAsJsonWithoutWriting(string flag)
-    {
-        var root = NewTestDirectory();
-        try
-        {
-            var input = Path.Combine(root, "item.bond");
-            var output = Path.Combine(root, "generated");
-            await File.WriteAllTextAsync(input, "namespace Example struct Item {}",
-                TestContext.Current.CancellationToken);
-
-            using var standardOutput = new StringWriter();
-            using var standardError = new StringWriter();
-            var exitCode = await GenerateCommand.RunAsync(
-                ["csharp", input, "-o", output, flag, "--error-format=json"],
-                standardOutput, standardError, TestContext.Current.CancellationToken);
-            Assert.NotEqual(0, exitCode);
-            using var error = JsonDocument.Parse(standardError.ToString());
-            Assert.Equal("generation_error", error.RootElement.GetProperty("error").GetString());
-            Assert.False(Directory.Exists(output));
-        }
-        finally
-        {
-            Directory.Delete(root, recursive: true);
-        }
-    }
-
     private static async Task<CSharpGenerationResult> GenerateResult(string schema, CSharpGenerationOptions options)
     {
         var parsed = await ParserFacade.ParseStringAsync(schema);
@@ -556,12 +429,4 @@ public sealed class CSharpMappingFeatureTests
 
     private static string Messages(CSharpGenerationResult result) =>
         string.Join("\n", result.Errors.Select(error => error.Message));
-
-    private static string NewTestDirectory()
-    {
-        var root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..",
-            "mapping-tests", Guid.NewGuid().ToString("N")));
-        Directory.CreateDirectory(root);
-        return root;
-    }
 }

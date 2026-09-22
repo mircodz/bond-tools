@@ -72,6 +72,82 @@ public class CodegenParserParityTests
     }
 
     [Fact]
+    public async Task ViewsKeepTheirOwnTriviaAndTheSelectedGenericFieldsTrivia()
+    {
+        var ast = await Parse("""
+            namespace Example
+            // Source documentation.
+            struct Source<T> {
+                // Later field.
+                9: T later; // Later detail.
+                // First field.
+                1: T first; // First detail.
+            } // Source detail.
+            // View documentation.
+            struct Selected view_of Source { later; first } // View detail.
+            // Following documentation.
+            struct Following {}
+            """);
+
+        var source = ast.Declarations.OfType<StructDeclaration>().Single(declaration => declaration.Name == "Source");
+        var view = ast.Declarations.OfType<StructDeclaration>().Single(declaration => declaration.Name == "Selected");
+        var following = ast.Declarations.OfType<StructDeclaration>().Single(declaration => declaration.Name == "Following");
+
+        source.LeadingTrivia.Select(trivia => trivia.Text).Should().Equal("// Source documentation.");
+        source.TrailingTrivia!.Text.Should().Be("// Source detail.");
+        view.LeadingTrivia.Select(trivia => trivia.Text).Should().Equal("// View documentation.");
+        view.TrailingTrivia!.Text.Should().Be("// View detail.");
+        following.LeadingTrivia.Select(trivia => trivia.Text).Should().Equal("// Following documentation.");
+        following.TrailingTrivia.Should().BeNull();
+        view.TypeParameters.Should().ContainSingle().Which.Name.Should().Be("T");
+        view.Fields.Select(field => field.Ordinal).Should().Equal((ushort)1, (ushort)9);
+        view.Fields.Select(field => field.Type).Should()
+            .OnlyContain(type => type is BondType.TypeParameter);
+        view.Fields[0].LeadingTrivia.Select(trivia => trivia.Text).Should().Equal("// First field.");
+        view.Fields[0].TrailingTrivia!.Text.Should().Be("// First detail.");
+        view.Fields[1].LeadingTrivia.Select(trivia => trivia.Text).Should().Equal("// Later field.");
+        view.Fields[1].TrailingTrivia!.Text.Should().Be("// Later detail.");
+    }
+
+    [Fact]
+    public async Task SyntaxOnlyStructAndViewConstructionPreservesTriviaAndParameterScopes()
+    {
+        var result = await ParserFacade.ParseStringAsync("""
+            namespace Example
+            // Source documentation.
+            struct Source<T> {
+                9: T later;
+                1: T first;
+            } // Source detail.
+            // View documentation.
+            struct Selected view_of Source { later; first } // View detail.
+            struct Following { 0: T value; }
+            """, options: new ParseOptions(IgnoreImports: true));
+        result.Success.Should().BeTrue(string.Join("; ", result.Errors.Select(error => error.Message)));
+        var declarations = result.Ast!.Declarations.OfType<StructDeclaration>().ToArray();
+        var source = declarations[0];
+        var view = declarations[1];
+        var following = declarations[2];
+
+        source.LeadingTrivia.Select(trivia => trivia.Text).Should().Equal("// Source documentation.");
+        source.TrailingTrivia!.Text.Should().Be("// Source detail.");
+        source.TypeParameters.Should().ContainSingle().Which.Name.Should().Be("T");
+        source.Fields.Select(field => field.Ordinal).Should().Equal((ushort)1, (ushort)9);
+        foreach (var field in source.Fields)
+        {
+            field.Type.Should().BeOfType<BondType.TypeParameter>().Which.Param.Should().BeSameAs(source.TypeParameters[0]);
+        }
+
+        view.LeadingTrivia.Select(trivia => trivia.Text).Should().Equal("// View documentation.");
+        view.TrailingTrivia!.Text.Should().Be("// View detail.");
+        view.IsView.Should().BeTrue();
+        view.TypeParameters.Should().BeEmpty();
+        view.Fields.Should().BeEmpty();
+        view.ViewFields.Should().Equal("later", "first");
+        following.Fields.Should().ContainSingle().Which.Type.Should().BeOfType<BondType.UnresolvedType>();
+    }
+
+    [Fact]
     public async Task ImportedEnvironmentKeepsBoundGenericAliasesAndInheritanceWithoutAddingRoots()
     {
         var ast = await Parse("""
@@ -265,6 +341,22 @@ public class CodegenParserParityTests
         diagnostic.FilePath.Should().Be("schema.bond");
         diagnostic.Line.Should().Be(2);
         diagnostic.Column.Should().BeGreaterThan(0);
+    }
+
+    [Theory]
+    [InlineData("struct Generic<T> { 0: T<T<int32>> value; }")]
+    [InlineData("struct Generic<T> { 0: bonded<T<T<int32>>> value; }")]
+    [InlineData("service Generic<T> : T<T<int32>> {}")]
+    public async Task TypeParameterArgumentsAreRejectedAtTheOuterReferenceBeforeVisitingArguments(string declaration)
+    {
+        var result = await ParserFacade.ParseContentAsync("namespace Example\n" + declaration, "schema.bond");
+
+        result.Success.Should().BeFalse();
+        var error = result.Errors.Should().ContainSingle().Subject;
+        error.Message.Should().Be("A type parameter cannot have type arguments");
+        error.FilePath.Should().Be("schema.bond");
+        error.Line.Should().Be(2);
+        error.Column.Should().Be(declaration.IndexOf("T<T<int32>>", StringComparison.Ordinal) + 1);
     }
 
     [Fact]

@@ -12,7 +12,7 @@ public static class TypeResolver
     public static Syntax.Bond Resolve(Syntax.Bond ast, SymbolTable symbols, IReadOnlyList<AliasDeclaration> aliases) =>
         new Binder(symbols, aliases).Resolve(ast);
 
-    private sealed class Binder(SymbolTable symbols, IReadOnlyList<AliasDeclaration> aliases)
+    private sealed class Binder(SymbolTable symbols, IReadOnlyList<AliasDeclaration> fallbackAliases)
     {
         private readonly Dictionary<Declaration, Declaration> _resolved = new(ReferenceEqualityComparer.Instance);
         private readonly HashSet<Declaration> _active = new(ReferenceEqualityComparer.Instance);
@@ -173,8 +173,8 @@ public static class TypeResolver
 
         private Declaration? FindSymbol(string[] name, Declaration owner, SourceLocation? location = null)
         {
-            var localAliases = symbols.GetAliases(owner);
-            return symbols.FindSymbol(name, owner.Namespaces, localAliases ?? aliases, location ?? owner.Location, EquivalentAliases);
+            var effectiveAliases = symbols.GetEffectiveAliases(owner) ?? fallbackAliases;
+            return symbols.FindSymbol(name, owner.Namespaces, effectiveAliases, location ?? owner.Location, EquivalentAliases);
         }
 
         private bool EquivalentAliases(AliasDeclaration left, AliasDeclaration right)

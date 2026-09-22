@@ -100,38 +100,40 @@ public static class BondFormatter
 
                 var afterSeparator = previousToken?.Type is BondLexer.SEMI or BondLexer.COMMA;
                 var beforeTerminator = nextToken?.Type is BondLexer.SEMI or BondLexer.COMMA or BondLexer.RBRACE;
+                Dictionary<int, List<IToken>> commentMap;
+                int anchorIndex;
+
                 if (token.Type == BondLexer.COMMENT
                     && nextToken != null
                     && token.Line == nextToken.Line
                     && !afterSeparator
                     && !beforeTerminator)
                 {
-                    if (!_inlineLeading.ContainsKey(nextToken.TokenIndex))
-                    {
-                        _inlineLeading[nextToken.TokenIndex] = new List<IToken>();
-                    }
-
-                    _inlineLeading[nextToken.TokenIndex].Add(token);
+                    commentMap = _inlineLeading;
+                    anchorIndex = nextToken.TokenIndex;
                 }
                 else if (previousToken != null && token.Line == previousToken.Line)
                 {
-                    if (!_trailing.TryGetValue(previousToken.TokenIndex, out var comments))
-                    {
-                        comments = [];
-                        _trailing[previousToken.TokenIndex] = comments;
-                    }
-
-                    comments.Add(token);
+                    commentMap = _trailing;
+                    anchorIndex = previousToken.TokenIndex;
                 }
                 else if (nextToken != null)
                 {
-                    if (!_standaloneLeading.ContainsKey(nextToken.TokenIndex))
-                    {
-                        _standaloneLeading[nextToken.TokenIndex] = new List<IToken>();
-                    }
-
-                    _standaloneLeading[nextToken.TokenIndex].Add(token);
+                    commentMap = _standaloneLeading;
+                    anchorIndex = nextToken.TokenIndex;
                 }
+                else
+                {
+                    continue;
+                }
+
+                if (!commentMap.TryGetValue(anchorIndex, out var comments))
+                {
+                    comments = [];
+                    commentMap[anchorIndex] = comments;
+                }
+
+                comments.Add(token);
             }
         }
 

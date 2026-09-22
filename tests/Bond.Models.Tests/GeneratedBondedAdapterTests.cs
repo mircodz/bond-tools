@@ -1,12 +1,9 @@
-using System;
 using System.Linq;
-using System.Reflection;
-using System.Runtime.ExceptionServices;
 using System.Threading.Tasks;
 using Bond.Parser.CodeGeneration;
 using Bond.Parser.Parser;
 
-namespace Bond.Parser.Tests;
+namespace Bond.Models.Tests;
 
 public sealed class GeneratedBondedAdapterTests
 {
@@ -230,33 +227,6 @@ public sealed class GeneratedBondedAdapterTests
         var generated = CSharpGenerator.Generate(parsed.Ast!, "input.bond",
             new CSharpGenerationOptions { ModelFeatures = features });
         Assert.True(generated.Success, string.Join("\n", generated.Errors.Select(error => error.Message)));
-        var assembly = CSharpGeneratorTests.Compile(generated.Code!, """
-            using System;
-            using System.Collections.Generic;
-            using System.Linq;
-            public static class Scenario
-            {
-                private static void Require(bool condition, string message)
-                {
-                    if (!condition)
-                    {
-                        throw new Exception(message);
-                    }
-                }
-
-                public static void Run()
-                {
-            """ + body + """
-                }
-            }
-            """, extraSource);
-        try
-        {
-            assembly.GetType("Scenario", true)!.GetMethod("Run")!.Invoke(null, null);
-        }
-        catch (TargetInvocationException error) when (error.InnerException is not null)
-        {
-            ExceptionDispatchInfo.Capture(error.InnerException).Throw();
-        }
+        GeneratedScenario.Run(generated.Code!, body, extraSource);
     }
 }

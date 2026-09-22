@@ -70,10 +70,10 @@ public static class ModelAdapters
 
     internal static object? EffectiveSemantics<T>(IModelAdapter<T> adapter, ModelAdapterFrame? arguments)
     {
-        if (adapter is ValueAdapter<T>)
+        if (adapter is ValueAdapter<T> dispatcher)
         {
-            var selected = ModelOperations.Registered<T>() ?? arguments?.Find<T>();
-            return selected is null || ReferenceEquals(selected, adapter) ? null : ModelAdapterSemantics.For(selected);
+            var selected = dispatcher.ResolveOverride(arguments);
+            return selected is null ? null : ModelAdapterSemantics.For(selected);
         }
 
         return ModelAdapterSemantics.For(adapter);
@@ -84,6 +84,17 @@ public static class ModelAdapters
         internal static readonly ValueAdapter<T> Instance = new();
         public object? Semantics => null;
 
+        internal IModelAdapter<T>? ResolveOverride(ModelAdapterFrame? bindings)
+        {
+            if (ModelOperations.Registered<T>() is { } registered)
+            {
+                return registered;
+            }
+
+            var contextual = bindings?.Find<T>();
+            return ReferenceEquals(contextual, this) ? null : contextual;
+        }
+
         public T Clone(T value, CloneContext context)
         {
             using var scope = context.Traversal.Enter(null);
@@ -92,14 +103,9 @@ public static class ModelAdapters
                 return value;
             }
 
-            if (ModelOperations.Registered<T>() is { } adapter)
+            if (ResolveOverride(context.Adapters) is { } adapter)
             {
                 return ModelAdapterSemantics.Clone(adapter, value, context);
-            }
-
-            if (context.Adapters?.Find<T>() is { } contextual && !ReferenceEquals(contextual, this))
-            {
-                return ModelAdapterSemantics.Clone(contextual, value, context);
             }
 
             if (value is IGeneratedCloneable model)
@@ -138,14 +144,9 @@ public static class ModelAdapters
                 return false;
             }
 
-            if (ModelOperations.Registered<T>() is { } adapter)
+            if (ResolveOverride(context.Adapters) is { } adapter)
             {
                 return ModelAdapterSemantics.Equals(adapter, left, right, context);
-            }
-
-            if (context.Adapters?.Find<T>() is { } contextual && !ReferenceEquals(contextual, this))
-            {
-                return ModelAdapterSemantics.Equals(contextual, left, right, context);
             }
 
             if (left is IGeneratedEquatable model)
@@ -180,14 +181,9 @@ public static class ModelAdapters
                 return 0;
             }
 
-            if (ModelOperations.Registered<T>() is { } adapter)
+            if (ResolveOverride(context.Adapters) is { } adapter)
             {
                 return ModelAdapterSemantics.Hash(adapter, value, context);
-            }
-
-            if (context.Adapters?.Find<T>() is { } contextual && !ReferenceEquals(contextual, this))
-            {
-                return ModelAdapterSemantics.Hash(contextual, value, context);
             }
 
             if (value is IGeneratedEquatable model)

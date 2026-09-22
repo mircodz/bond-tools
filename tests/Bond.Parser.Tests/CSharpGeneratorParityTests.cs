@@ -7,7 +7,7 @@ using System.Threading.Tasks;
 using Bond.Parser.CodeGeneration;
 using Bond.Parser.Parser;
 using Bond.Parser.Syntax;
-using static Bond.Parser.Tests.CSharpGeneratorTests;
+using static Bond.TestSupport.GeneratedCode;
 
 namespace Bond.Parser.Tests;
 

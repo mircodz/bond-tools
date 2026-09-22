@@ -12,36 +12,37 @@ namespace Bond.Parser.Parser;
 public class SymbolTable
 {
     private readonly List<Declaration> _globalDeclarations = [];
-    private readonly List<AliasDeclaration> _aliases = [];
+    private readonly List<AliasDeclaration> _aliasDeclarations = [];
     private readonly List<ForwardDeclaration> _forwards = [];
     private readonly List<Declaration> _boundDeclarations = [];
     private readonly HashSet<string> _processedImports = [];
-    private readonly Dictionary<Declaration, (IReadOnlyList<AliasDeclaration> Aliases, string? File)> _contexts =
+    private readonly Dictionary<Declaration, (IReadOnlyList<AliasDeclaration> LocalAliases, string? File)> _contexts =
         new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<string, FileAliasScope> _fileScopes = [];
 
-    private sealed class FileAliasScope(IReadOnlyList<AliasDeclaration> aliases)
+    private sealed class FileAliasScope(IReadOnlyList<AliasDeclaration> localAliases)
     {
-        public IReadOnlyList<AliasDeclaration> LocalAliases { get; } = aliases;
+        // Kept live while recursive import registration fills each file's local aliases.
+        public IReadOnlyList<AliasDeclaration> LocalAliases { get; } = localAliases;
         public List<string> Imports { get; } = [];
         public List<AliasDeclaration>? EffectiveAliases { get; set; }
     }
 
-    internal IEnumerable<Declaration> Declarations => _globalDeclarations.Concat(_aliases).Concat(_forwards);
+    internal IEnumerable<Declaration> Declarations => _globalDeclarations.Concat(_aliasDeclarations).Concat(_forwards);
     internal IEnumerable<Declaration> BoundDeclarations => _boundDeclarations;
 
-    internal void SetFileAliases(string filePath, IReadOnlyList<AliasDeclaration> aliases) =>
-        _fileScopes[filePath] = new FileAliasScope(aliases);
+    internal void SetFileAliases(string filePath, IReadOnlyList<AliasDeclaration> localAliases) =>
+        _fileScopes[filePath] = new FileAliasScope(localAliases);
 
     internal void AddImport(string filePath, string importedFilePath) =>
         _fileScopes[filePath].Imports.Add(importedFilePath);
 
-    internal void SetContext(Declaration declaration, IReadOnlyList<AliasDeclaration> aliases, string? filePath)
+    internal void SetContext(Declaration declaration, IReadOnlyList<AliasDeclaration> localAliases, string? filePath)
     {
-        _contexts[declaration] = (aliases, filePath);
+        _contexts[declaration] = (localAliases, filePath);
         if (declaration is AliasDeclaration alias)
         {
-            _aliases.Add(alias);
+            _aliasDeclarations.Add(alias);
         }
 
         if (declaration is ForwardDeclaration forward)
@@ -50,7 +51,7 @@ public class SymbolTable
         }
     }
 
-    internal IReadOnlyList<AliasDeclaration>? GetAliases(Declaration declaration)
+    internal IReadOnlyList<AliasDeclaration>? GetEffectiveAliases(Declaration declaration)
     {
         if (!_contexts.TryGetValue(declaration, out var context))
         {
@@ -59,7 +60,7 @@ public class SymbolTable
 
         if (context.File is null || !_fileScopes.TryGetValue(context.File, out var scope))
         {
-            return context.Aliases;
+            return context.LocalAliases;
         }
 
         if (scope.EffectiveAliases is null)
@@ -70,7 +71,7 @@ public class SymbolTable
         return scope.EffectiveAliases!;
     }
 
-    private void CompleteAliasScopes()
+    internal void CompleteAliasScopes()
     {
         var dependents = _fileScopes.Values.ToDictionary(scope => scope, _ => new List<FileAliasScope>());
         var seen = new Dictionary<FileAliasScope, HashSet<AliasDeclaration>>();

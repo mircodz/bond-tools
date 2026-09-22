@@ -11,17 +11,18 @@ public static partial class CSharpGenerator
     private sealed partial class Emitter
     {
         private const string ModelSupport = "global::BondTools.Models.";
+        private const CSharpModelFeatures Features = CSharpModelFeatures.Descriptors
+                                                   | CSharpModelFeatures.Cloning
+                                                   | CSharpModelFeatures.Equality
+                                                   | CSharpModelFeatures.Debugger;
 
         private string ModelSelf(StructDeclaration structure) =>
-            QualifiedName(structure) + TypeArguments(structure.TypeParameters.Select(parameter =>
-                Identifier(parameter.Name, structure.Location, typeName: true)));
+            QualifiedName(structure) + TypeArguments(structure.TypeParameters.Select(parameter => Identifier(parameter.Name, structure.Location, typeName: true)));
 
         private string ModelInterfaces(StructDeclaration structure)
         {
             var interfaces = new List<string>();
-            const CSharpModelFeatures coreFeatures = CSharpModelFeatures.Descriptors | CSharpModelFeatures.Cloning
-                | CSharpModelFeatures.Equality | CSharpModelFeatures.Debugger;
-            if ((options.ModelFeatures & coreFeatures) == coreFeatures)
+            if ((options.ModelFeatures & Features) == Features)
             {
                 interfaces.Add(ModelSupport + "IGeneratedModel");
             }
@@ -81,25 +82,6 @@ public static partial class CSharpGenerator
             var fields = options.GenerateCloning || options.GenerateEquality || options.GenerateDebuggerSupport
                 ? OperationFields(structure).ToArray() : [];
 
-            string Local(string name)
-            {
-                var candidate = "__bond" + name;
-                while (structure.TypeParameters.Any(parameter => parameter.Name == candidate))
-                {
-                    candidate += "_";
-                }
-
-                return candidate;
-            }
-
-            var context = Local("Context");
-            var clone = Local("Clone");
-            var existing = Local("Existing");
-            var other = Local("Other");
-            var right = Local("Right");
-            var hash = Local("Hash");
-            var child = Local("Child");
-
             Line(0);
             if (options.GenerateDescriptors)
             {
@@ -109,87 +91,18 @@ public static partial class CSharpGenerator
 
             if (options.GenerateCloning)
             {
-                Line(2, $"object global::System.ICloneable.Clone() => {ModelSupport}ModelOperations.Clone(this);");
-                Line(0);
-                Line(2, $"{ModelSupport}IGeneratedCloneable {ModelSupport}IGeneratedCloneable.Clone({ModelSupport}CloneContext {context})");
-                Line(2, "{");
-                Line(3, $"if ({context}.TryGetClone<{self}>(this, out {self} {existing})) return {existing};");
-                Line(3, $"if (((object)this).GetType() != typeof({self}))");
-                Line(4, $"throw {ModelSupport}ModelOperations.MissingAdapter(((object)this).GetType());");
-                Line(3, $"{self} {clone} = ({self}){ModelSupport}ModelOperations.ShallowClone(this);");
-                Line(3, $"{context}.Register(this, {clone});");
-                for (var i = 0; i < fields.Length; i++)
-                {
-                    var field = fields[i];
-                    var name = Identifier(field.Field.Name, field.Field.Location);
-                    Line(3, $"(({field.Owner}){clone}).{name} = {operations}.Field{i}.Clone(" +
-                        $"(({field.Owner})this).{name}, {context});");
-                }
-
-                Line(3, $"return {clone};");
-                Line(2, "}");
-                Line(0);
+                EmitCloneMembers(structure, self, operations, fields);
             }
 
             if (options.GenerateEquality)
             {
-                if (CanEmitDefaultEquality(structure))
-                {
-                    Line(2, $"bool global::System.IEquatable<{self}>.Equals({self} {other}) => " +
-                        $"{ModelSupport}ModelOperations.ValueEquals(this, {other});");
-                }
-
-                Line(2, $"bool {ModelSupport}IGeneratedEquatable.ValueEquals({ModelSupport}IGeneratedEquatable {other}, " +
-                    $"{ModelSupport}EqualityContext {context})");
-                Line(2, "{");
-                Line(3, $"if (((object)this).GetType() != typeof({self}))");
-                Line(4, $"throw {ModelSupport}ModelOperations.MissingAdapter(((object)this).GetType());");
-                Line(3, $"if ({other} is not {self} {right} || ((object)this).GetType() != ((object){right}).GetType()) return false;");
-                for (var i = 0; i < fields.Length; i++)
-                {
-                    var field = fields[i];
-                    var name = Identifier(field.Field.Name, field.Field.Location);
-                    Line(3, $"if (!{operations}.Field{i}.Equals((({field.Owner})this).{name}, " +
-                        $"(({field.Owner}){right}).{name}, {context})) return false;");
-                }
-
-                Line(3, "return true;");
-                Line(2, "}");
-                Line(0);
-                Line(2, $"int {ModelSupport}IGeneratedEquatable.ValueHashCode({ModelSupport}HashContext {context})");
-                Line(2, "{");
-                Line(3, $"if (((object)this).GetType() != typeof({self}))");
-                Line(4, $"throw {ModelSupport}ModelOperations.MissingAdapter(((object)this).GetType());");
-                Line(3, $"if ({context}.RemainingDepth == 0) return 0;");
-                Line(3, $"{ModelSupport}HashContext {child} = {context}.Descend();");
-                Line(3, $"int {hash} = 17;");
-                for (var i = 0; i < fields.Length; i++)
-                {
-                    var field = fields[i];
-                    Line(3, $"{hash} = {ModelSupport}HashContext.Combine({hash}, {operations}.Field{i}.GetHashCode(" +
-                        $"(({field.Owner})this).{Identifier(field.Field.Name, field.Field.Location)}, {child}));");
-                }
-
-                Line(3, $"return {hash};");
-                Line(2, "}");
-                Line(0);
+                EmitEqualityMembers(structure, self, operations, fields);
+                EmitHashCodeMember(structure, self, operations, fields);
             }
 
             if (options.GenerateDebuggerSupport)
             {
-                Line(2, $"{ModelSupport}ModelDebugField[] {ModelSupport}IGeneratedDebugView.GetDebugFields()");
-                Line(2, "{");
-                Line(3, $"return new {ModelSupport}ModelDebugField[]");
-                Line(3, "{");
-                foreach (var field in fields)
-                {
-                    Line(4, $"new {ModelSupport}ModelDebugField({Literal(field.DeclaringName)}, {Literal(field.Field.Name)}, " +
-                        $"{field.Field.Ordinal.ToString(CultureInfo.InvariantCulture)}, " +
-                        $"(({field.Owner})this).{Identifier(field.Field.Name, field.Field.Location)}),");
-                }
-
-                Line(3, "};");
-                Line(2, "}");
+                EmitDebugMembers(fields);
             }
 
             if (options.GenerateCloning && CanEmitConvenience(structure, "Clone"))
@@ -200,12 +113,9 @@ public static partial class CSharpGenerator
 
             if (options.GenerateEquality && CanEmitDefaultEquality(structure))
             {
+                var other = ModelLocalName(structure, "Other");
                 Line(2, $"public bool Equals({self} {other}) => {ModelSupport}ModelOperations.ValueEquals(this, {other});");
                 Line(2, $"public override bool Equals(object {other}) => {ModelSupport}ModelOperations.ValueEquals<object>(this, {other});");
-            }
-
-            if (options.GenerateEquality && CanEmitDefaultEquality(structure))
-            {
                 Line(2, $"public override int GetHashCode() => {ModelSupport}ModelOperations.ValueHashCode(this);");
             }
 
@@ -213,6 +123,157 @@ public static partial class CSharpGenerator
             {
                 EmitSummaryMembers(structure);
             }
+        }
+
+        private void EmitCloneMembers(StructDeclaration structure, string self, string operations, OperationField[] fields)
+        {
+            var context = ModelLocalName(structure, "Context");
+            var clone = ModelLocalName(structure, "Clone");
+            var existing = ModelLocalName(structure, "Existing");
+
+            Line(2, $"object global::System.ICloneable.Clone() => {ModelSupport}ModelOperations.Clone(this);");
+            Line(0);
+            Line(2, $"{ModelSupport}IGeneratedCloneable {ModelSupport}IGeneratedCloneable.Clone({ModelSupport}CloneContext {context})");
+            Line(2, "{");
+            Line(3, $"if ({context}.TryGetClone<{self}>(this, out {self} {existing}))");
+            Line(3, "{");
+            Line(4, $"return {existing};");
+            Line(3, "}");
+            Line(0);
+            EmitRuntimeTypeGuard(self);
+
+            Line(3, $"{self} {clone} = ({self}){ModelSupport}ModelOperations.ShallowClone(this);");
+            Line(3, $"{context}.Register(this, {clone});");
+            if (fields.Length != 0)
+            {
+                Line(0);
+            }
+
+            for (var i = 0; i < fields.Length; i++)
+            {
+                var field = fields[i];
+                var name = Identifier(field.Field.Name, field.Field.Location);
+                Line(3, $"(({field.Owner}){clone}).{name} = {operations}.Field{i}.Clone(" +
+                    $"(({field.Owner})this).{name}, {context});");
+            }
+
+            Line(0);
+            Line(3, $"return {clone};");
+            Line(2, "}");
+            Line(0);
+        }
+
+        private void EmitEqualityMembers(StructDeclaration structure, string self, string operations, OperationField[] fields)
+        {
+            var context = ModelLocalName(structure, "Context");
+            var other = ModelLocalName(structure, "Other");
+            var right = ModelLocalName(structure, "Right");
+
+            if (CanEmitDefaultEquality(structure))
+            {
+                Line(2, $"bool global::System.IEquatable<{self}>.Equals({self} {other}) => " +
+                    $"{ModelSupport}ModelOperations.ValueEquals(this, {other});");
+                Line(0);
+            }
+
+            Line(2, $"bool {ModelSupport}IGeneratedEquatable.ValueEquals({ModelSupport}IGeneratedEquatable {other}, " +
+                $"{ModelSupport}EqualityContext {context})");
+            Line(2, "{");
+            EmitRuntimeTypeGuard(self);
+            Line(3, $"if ({other} is not {self} {right} || ((object)this).GetType() != ((object){right}).GetType())");
+            Line(3, "{");
+            Line(4, "return false;");
+            Line(3, "}");
+            Line(0);
+
+            for (var i = 0; i < fields.Length; i++)
+            {
+                var field = fields[i];
+                var name = Identifier(field.Field.Name, field.Field.Location);
+                Line(3, $"if (!{operations}.Field{i}.Equals((({field.Owner})this).{name}, " +
+                    $"(({field.Owner}){right}).{name}, {context}))");
+                Line(3, "{");
+                Line(4, "return false;");
+                Line(3, "}");
+                Line(0);
+            }
+
+            Line(3, "return true;");
+            Line(2, "}");
+            Line(0);
+        }
+
+        private void EmitHashCodeMember(StructDeclaration structure, string self, string operations, OperationField[] fields)
+        {
+            var context = ModelLocalName(structure, "Context");
+            var hash = ModelLocalName(structure, "Hash");
+            var child = ModelLocalName(structure, "Child");
+
+            Line(2, $"int {ModelSupport}IGeneratedEquatable.ValueHashCode({ModelSupport}HashContext {context})");
+            Line(2, "{");
+            EmitRuntimeTypeGuard(self);
+            Line(3, $"if ({context}.RemainingDepth == 0)");
+            Line(3, "{");
+            Line(4, "return 0;");
+            Line(3, "}");
+            Line(0);
+
+            Line(3, $"{ModelSupport}HashContext {child} = {context}.Descend();");
+            Line(3, $"int {hash} = 17;");
+            if (fields.Length != 0)
+            {
+                Line(0);
+            }
+
+            for (var i = 0; i < fields.Length; i++)
+            {
+                var field = fields[i];
+                Line(3, $"{hash} = {ModelSupport}HashContext.Combine({hash}, {operations}.Field{i}.GetHashCode(" +
+                    $"(({field.Owner})this).{Identifier(field.Field.Name, field.Field.Location)}, {child}));");
+            }
+
+            Line(0);
+            Line(3, $"return {hash};");
+            Line(2, "}");
+            Line(0);
+        }
+
+        private void EmitRuntimeTypeGuard(string self)
+        {
+            Line(3, $"if (((object)this).GetType() != typeof({self}))");
+            Line(3, "{");
+            Line(4, $"throw {ModelSupport}ModelOperations.MissingAdapter(((object)this).GetType());");
+            Line(3, "}");
+            Line(0);
+        }
+
+        private void EmitDebugMembers(OperationField[] fields)
+        {
+            Line(2, $"{ModelSupport}ModelDebugField[] {ModelSupport}IGeneratedDebugView.GetDebugFields()");
+            Line(2, "{");
+            Line(3, $"return new {ModelSupport}ModelDebugField[]");
+            Line(3, "{");
+            foreach (var field in fields)
+            {
+                Line(4, $"new {ModelSupport}ModelDebugField({Literal(field.DeclaringName)}, {Literal(field.Field.Name)}, " +
+                    $"{field.Field.Ordinal.ToString(CultureInfo.InvariantCulture)}, " +
+                    $"(({field.Owner})this).{Identifier(field.Field.Name, field.Field.Location)}),");
+            }
+
+            Line(3, "};");
+            Line(2, "}");
+            Line(0);
+        }
+
+        private static string ModelLocalName(StructDeclaration structure, string name)
+        {
+            var candidate = "__bond" + name;
+            while (structure.TypeParameters.Any(parameter => parameter.Name == candidate))
+            {
+                candidate += "_";
+            }
+
+            return candidate;
         }
 
         private bool CanEmitConvenience(StructDeclaration structure, string name) =>
@@ -263,49 +324,69 @@ public static partial class CSharpGenerator
                 EmitSummaryCompanionMembers(structure, self);
             }
 
+            var requiresMaterializedWrapper = false;
             if (options.GenerateCloning || options.GenerateEquality)
             {
                 for (var i = 0; i < fields.Length; i++)
                 {
                     var field = fields[i];
                     var mapped = MapType(field.Type, field.Field.Location);
+                    var adapter = ModelAdapterExpression(field.Type, field.Field.Location);
                     Line(2, $"internal static readonly {ModelSupport}IModelAdapter<{mapped.Name}> Field{i} = " +
-                        $"{ModelAdapterExpression(field.Type, field.Field.Location)};");
+                        $"{adapter.Code};");
+                    requiresMaterializedWrapper |= adapter.RequiresMaterializedWrapper;
                 }
             }
 
-            if ((options.GenerateCloning || options.GenerateEquality)
-                && fields.Any(field => UsesMaterializedAdapter(field.Type, field.Field.Location)))
+            if (requiresMaterializedWrapper)
             {
-                Line(2, "[global::System.Diagnostics.DebuggerDisplay(\"bonded (materialized)\")]");
-                Line(2, $"private sealed class __MaterializedBonded<__Payload> : global::Bond.IBonded<__Payload>, {ModelSupport}IMaterializedModelValue<__Payload>");
-                Line(2, "{");
-                Line(3, "[global::System.Diagnostics.DebuggerBrowsable(global::System.Diagnostics.DebuggerBrowsableState.Never)]");
-                Line(3, $"private readonly {ModelSupport}IModelAdapter<__Payload> _adapter;");
-                Line(3, "[global::System.Diagnostics.DebuggerBrowsable(global::System.Diagnostics.DebuggerBrowsableState.Never)]");
-                Line(3, "public __Payload Value { get; }");
-                Line(3, $"public __MaterializedBonded(__Payload value, {ModelSupport}IModelAdapter<__Payload> adapter)");
-                Line(3, "{");
-                Line(4, "Value = value;");
-                Line(4, "_adapter = adapter;");
-                Line(3, "}");
-                Line(3, $"public __Payload Deserialize() => _adapter.Clone(Value, new {ModelSupport}CloneContext());");
-                Line(3, "public __U Deserialize<__U>() => typeof(__U) == typeof(__Payload)");
-                Line(4, "? (__U)(object)Deserialize() : ((global::Bond.IBonded)new global::Bond.Bonded<__Payload>(Value)).Deserialize<__U>();");
-                Line(3, "public void Serialize<__Writer>(__Writer writer) => ((global::Bond.IBonded)new global::Bond.Bonded<__Payload>(Value)).Serialize(writer);");
-                Line(3, "public global::Bond.IBonded<__U> Convert<__U>() => this as global::Bond.IBonded<__U>;");
                 Line(0);
-                Line(3, $"public static {ModelSupport}IModelAdapter<global::Bond.IBonded<__Payload>> CreateAdapter(" +
-                    $"{ModelSupport}IModelAdapter<__Payload> adapter) =>");
-                Line(4, $"{ModelSupport}ModelAdapters.Materialized<global::Bond.IBonded<__Payload>, __Payload>(");
-                Line(5, $"static value => value is {ModelSupport}IMaterializedModelValue<__Payload> materialized ? materialized.Value : value.Deserialize(),");
-                Line(5, "static (value, capturedAdapter) => new __MaterializedBonded<__Payload>(value, capturedAdapter), adapter);");
-                Line(2, "}");
+                EmitMaterializedBondedWrapper();
             }
 
             Line(1, "}");
             Line(0, "}");
             Line(0);
+        }
+
+        private void EmitMaterializedBondedWrapper()
+        {
+            Line(2, "[global::System.Diagnostics.DebuggerDisplay(\"bonded (materialized)\")]");
+            Line(2, $"private sealed class __MaterializedBonded<__Payload> : global::Bond.IBonded<__Payload>, {ModelSupport}IMaterializedModelValue<__Payload>");
+            Line(2, "{");
+            Line(3, "[global::System.Diagnostics.DebuggerBrowsable(global::System.Diagnostics.DebuggerBrowsableState.Never)]");
+            Line(3, $"private readonly {ModelSupport}IModelAdapter<__Payload> _adapter;");
+            Line(0);
+            Line(3, "[global::System.Diagnostics.DebuggerBrowsable(global::System.Diagnostics.DebuggerBrowsableState.Never)]");
+            Line(3, "public __Payload Value { get; }");
+            Line(0);
+            Line(3, $"public __MaterializedBonded(__Payload value, {ModelSupport}IModelAdapter<__Payload> adapter)");
+            Line(3, "{");
+            Line(4, "Value = value;");
+            Line(4, "_adapter = adapter;");
+            Line(3, "}");
+            Line(0);
+            Line(3, $"public __Payload Deserialize() => _adapter.Clone(Value, new {ModelSupport}CloneContext());");
+            Line(0);
+            Line(3, "public __U Deserialize<__U>()");
+            Line(3, "{");
+            Line(4, "if (typeof(__U) == typeof(__Payload))");
+            Line(4, "{");
+            Line(5, "return (__U)(object)Deserialize();");
+            Line(4, "}");
+            Line(0);
+            Line(4, "return ((global::Bond.IBonded)new global::Bond.Bonded<__Payload>(Value)).Deserialize<__U>();");
+            Line(3, "}");
+            Line(0);
+            Line(3, "public void Serialize<__Writer>(__Writer writer) => ((global::Bond.IBonded)new global::Bond.Bonded<__Payload>(Value)).Serialize(writer);");
+            Line(3, "public global::Bond.IBonded<__U> Convert<__U>() => this as global::Bond.IBonded<__U>;");
+            Line(0);
+            Line(3, $"public static {ModelSupport}IModelAdapter<global::Bond.IBonded<__Payload>> CreateAdapter(" +
+                $"{ModelSupport}IModelAdapter<__Payload> adapter) =>");
+            Line(4, $"{ModelSupport}ModelAdapters.Materialized<global::Bond.IBonded<__Payload>, __Payload>(");
+            Line(5, $"static value => value is {ModelSupport}IMaterializedModelValue<__Payload> materialized ? materialized.Value : value.Deserialize(),");
+            Line(5, "static (value, capturedAdapter) => new __MaterializedBonded<__Payload>(value, capturedAdapter), adapter);");
+            Line(2, "}");
         }
 
         private sealed record OperationField(string Owner, string DeclaringName, Field Field, BondType Type);
@@ -334,13 +415,18 @@ public static partial class CSharpGenerator
             }
         }
 
-        private string ModelAdapterExpression(BondType type, SourceLocation location)
+        private readonly record struct AdapterExpression(
+            string Code,
+            bool RequiresArgumentBinding = false,
+            bool RequiresMaterializedWrapper = false);
+
+        private AdapterExpression ModelAdapterExpression(BondType type, SourceLocation location)
         {
             var mapped = MapType(type, location);
             var adapters = ModelSupport + "ModelAdapters.";
             if (mapped.IsCustom)
             {
-                return $"{adapters}Value<{mapped.Name}>()";
+                return new($"{adapters}Value<{mapped.Name}>()");
             }
 
             if (type is BondType.TypeReference reference && Canonical(reference.Declaration) is AliasDeclaration alias)
@@ -351,59 +437,73 @@ public static partial class CSharpGenerator
             if (type is BondType.TypeReference { TypeArguments.Length: > 0 } generic)
             {
                 var arguments = new List<string>();
+                var requiresMaterializedWrapper = false;
                 foreach (var argument in generic.TypeArguments)
                 {
                     var argumentName = MapType(argument, location).Name;
                     var adapter = ModelAdapterExpression(argument, location);
-                    if (adapter != $"{adapters}Value<{argumentName}>()")
+                    if (adapter.RequiresArgumentBinding)
                     {
-                        arguments.Add($"{ModelSupport}ModelAdapterArgument.Create<{argumentName}>({adapter})");
+                        arguments.Add($"{ModelSupport}ModelAdapterArgument.Create<{argumentName}>({adapter.Code})");
                     }
+
+                    requiresMaterializedWrapper |= adapter.RequiresMaterializedWrapper;
                 }
 
                 if (arguments.Count > 0)
                 {
-                    return $"{adapters}WithArguments({adapters}Value<{mapped.Name}>(), {string.Join(", ", arguments)})";
+                    return new($"{adapters}WithArguments({adapters}Value<{mapped.Name}>(), {string.Join(", ", arguments)})",
+                        RequiresArgumentBinding: true, RequiresMaterializedWrapper: requiresMaterializedWrapper);
                 }
             }
 
-            string Element(BondType element) => ModelAdapterExpression(element, location);
-
-            string Nullable(BondType element) => MapType(element, location).Name == mapped.Name
-                ? Element(element) : $"{adapters}Nullable({Element(element)})";
-
-            if (type is BondType.Bonded bonded)
+            AdapterExpression Container(string name, params BondType[] elements)
             {
-                var payloadType = MapType(bonded.StructType, location).Name;
-                return $"__MaterializedBonded<{payloadType}>.CreateAdapter({Element(bonded.StructType)})";
+                var children = elements.Select(element => ModelAdapterExpression(element, location)).ToArray();
+                var arguments = string.Join(", ", children.Select(child => child.Code));
+                return new($"{adapters}{name}({arguments})", RequiresArgumentBinding: true,
+                    RequiresMaterializedWrapper: children.Any(child => child.RequiresMaterializedWrapper));
             }
 
-            return type switch
+            AdapterExpression Optional(BondType element)
             {
-                BondType.Vector vector => $"{adapters}List({Element(vector.ElementType)})",
-                BondType.List list => $"{adapters}LinkedList({Element(list.ElementType)})",
-                BondType.Set set => $"{adapters}Set({Element(set.KeyType)})",
-                BondType.Map map => $"{adapters}Map({Element(map.KeyType)}, {Element(map.ValueType)})",
-                BondType.Blob => adapters + "Blob",
-                BondType.Nullable nullable => Nullable(nullable.ElementType),
-                BondType.Maybe maybe => Nullable(maybe.ElementType),
-                _ => $"{adapters}Value<{mapped.Name}>()"
-            };
-        }
+                var elementType = MapType(element, location);
+                var adapter = ModelAdapterExpression(element, location);
+                if (elementType.Name == mapped.Name)
+                {
+                    return adapter;
+                }
 
-        private bool UsesMaterializedAdapter(BondType type, SourceLocation location)
-        {
-            if (MapType(type, location).IsCustom)
-            {
-                return false;
+                return new($"{adapters}Nullable({adapter.Code})", RequiresArgumentBinding: true,
+                    RequiresMaterializedWrapper: adapter.RequiresMaterializedWrapper);
             }
 
-            if (type is BondType.TypeReference reference && Canonical(reference.Declaration) is AliasDeclaration alias)
+            switch (type)
             {
-                return UsesMaterializedAdapter(Substitute(alias.AliasedType, alias, reference.TypeArguments), location);
+                case BondType.Vector vector:
+                    return Container("List", vector.ElementType);
+                case BondType.List list:
+                    return Container("LinkedList", list.ElementType);
+                case BondType.Set set:
+                    return Container("Set", set.KeyType);
+                case BondType.Map map:
+                    return Container("Map", map.KeyType, map.ValueType);
+                case BondType.Blob:
+                    return new(adapters + "Blob", RequiresArgumentBinding: true);
+                case BondType.Nullable nullable:
+                    return Optional(nullable.ElementType);
+                case BondType.Maybe maybe:
+                    return Optional(maybe.ElementType);
+                case BondType.Bonded bonded:
+                    {
+                        var payloadType = MapType(bonded.StructType, location).Name;
+                        var payloadAdapter = ModelAdapterExpression(bonded.StructType, location);
+                        return new($"__MaterializedBonded<{payloadType}>.CreateAdapter({payloadAdapter.Code})",
+                            RequiresArgumentBinding: true, RequiresMaterializedWrapper: true);
+                    }
+                default:
+                    return new($"{adapters}Value<{mapped.Name}>()");
             }
-
-            return type is BondType.Bonded || Children(type).Any(child => UsesMaterializedAdapter(child, location));
         }
     }
 }

@@ -157,8 +157,7 @@ internal static class BuildFiles
         var temporary = path + "." + Guid.NewGuid().ToString("N") + ".new";
         try
         {
-            await using (var stream = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None,
-                bufferSize: 4096, useAsync: true))
+            await using (var stream = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None, bufferSize: 4096, useAsync: true))
             {
                 await stream.WriteAsync(bytes, cancellationToken);
                 await stream.FlushAsync(cancellationToken);
