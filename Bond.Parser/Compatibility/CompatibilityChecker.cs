@@ -859,7 +859,7 @@ public class CompatibilityChecker
             return declaration with
             {
                 BaseType = declaration.BaseType is null ? null : Substitute(declaration.BaseType, arguments),
-                Fields = SchemaContractValidation.ReadOnly(declaration.Fields.Select(field =>
+                Fields = declaration.Fields.Select(field =>
                 {
                     var type = Substitute(field.Type, arguments);
                     return field with
@@ -868,7 +868,7 @@ public class CompatibilityChecker
                         Modifier = type.Kind is "meta_name" or "meta_full_name" ? "required_optional" : field.Modifier,
                         Default = field.Default.Kind == "generic" ? SchemaContractBuilder.ImplicitDefault(type, declaration.Name) : field.Default
                     };
-                }))
+                }).ToArray()
             };
         }
 
@@ -881,7 +881,7 @@ public class CompatibilityChecker
 
             return type with
             {
-                Arguments = SchemaContractValidation.ReadOnly(type.Arguments.Select(argument => Substitute(argument, arguments)))
+                Arguments = type.Arguments.Select(argument => Substitute(argument, arguments)).ToArray()
             };
         }
 

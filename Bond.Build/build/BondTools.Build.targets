@@ -1,48 +1,36 @@
 <Project>
-  <PropertyGroup>
-    <DisableFastUpToDateCheck>true</DisableFastUpToDateCheck>
-  </PropertyGroup>
-
   <ItemDefinitionGroup>
     <Bond>
-      <Descriptors>$(BondDescriptors)</Descriptors>
+      <ImportDirectories>$(BondImportDirectories)</ImportDirectories>
+      <Usings>$(BondUsings)</Usings>
+      <NamespaceMappings>$(BondNamespaceMappings)</NamespaceMappings>
+      <TypeMappings>$(BondTypeMappings)</TypeMappings>
       <Clone>$(BondClone)</Clone>
       <Equality>$(BondEquality)</Equality>
-      <Debugger>$(BondDebugger)</Debugger>
       <ToString>$(BondToString)</ToString>
     </Bond>
   </ItemDefinitionGroup>
 
-  <UsingTask TaskName="BondTools.Build.GenerateBond"
-             AssemblyFile="$(MSBuildThisFileDirectory)../tasks/net8.0/Bond.Build.dll"
-             Condition="'$(MSBuildRuntimeType)' == 'Core'" />
+  <ItemGroup>
+    <UpToDateCheckInput Include="@(Bond)" />
+  </ItemGroup>
 
+  <UsingTask TaskName="BondTools.Build.GenerateBond" AssemblyFile="$(MSBuildThisFileDirectory)../tasks/net8.0/Bond.Build.dll" />
+
+  <!-- Runs before the compiler's input cache is computed, so removed schemas also trigger recompilation. -->
   <Target Name="BondGenerateCSharp" BeforeTargets="BeforeCompile;CoreCompile;CompileDesignTime"
           Condition="'$(IsCrossTargetingBuild)' != 'true'">
     <PropertyGroup>
-      <_BondOutputDirectory>$([System.IO.Path]::Combine('$(MSBuildProjectDirectory)', '$(IntermediateOutputPath)', 'bond'))</_BondOutputDirectory>
-      <_BondUnsupportedSdk Condition="'$(NETCoreSdkVersion)' != ''">$([MSBuild]::VersionLessThan('$(NETCoreSdkVersion)', '8.0'))</_BondUnsupportedSdk>
+      <_BondOutputDirectory>$([MSBuild]::NormalizeDirectory('$(MSBuildProjectDirectory)', '$(IntermediateOutputPath)', 'bond'))</_BondOutputDirectory>
     </PropertyGroup>
 
-    <Error Condition="('@(Bond)' != '' or Exists('$(_BondOutputDirectory)/manifest.json')) and ('$(MSBuildRuntimeType)' != 'Core' or '$(_BondUnsupportedSdk)' == 'true')"
-           Code="BOND1001"
-           Text="BondTools.Build requires .NET 8 or newer SDK MSBuild. Use 'dotnet build' with a .NET 8+ SDK instead of legacy Full MSBuild." />
+    <Error Condition="'@(Bond)' != '' and '$(MSBuildRuntimeType)' != 'Core'" Code="BOND1000"
+           Text="BondTools.Build requires .NET SDK MSBuild (dotnet build)." />
 
-    <GenerateBond Condition="'$(MSBuildRuntimeType)' == 'Core' and ('@(Bond)' != '' or Exists('$(_BondOutputDirectory)/manifest.json'))"
-                  ProjectFile="$(MSBuildProjectFullPath)"
-                  OutputDirectory="$(_BondOutputDirectory)"
-                  Sources="@(Bond)"
-                  ImportDirectories="@(BondImportDirectory)"
-                  Usings="@(BondUsing)"
-                  NamespaceMappings="@(BondNamespaceMapping)"
-                  TypeMappings="@(BondTypeMapping)">
-      <Output TaskParameter="GeneratedFiles" ItemName="_BondGeneratedFiles" />
-      <Output TaskParameter="WrittenFiles" ItemName="FileWrites" />
+    <GenerateBond Condition="'@(Bond)' != '' or Exists('$(_BondOutputDirectory)')"
+                  Sources="@(Bond)" ProjectDirectory="$(MSBuildProjectDirectory)" OutputDirectory="$(_BondOutputDirectory)">
+      <Output TaskParameter="GeneratedFiles" ItemName="Compile" />
+      <Output TaskParameter="GeneratedFiles" ItemName="FileWrites" />
     </GenerateBond>
-
-    <ItemGroup>
-      <Compile Remove="@(_BondGeneratedFiles)" />
-      <Compile Include="@(_BondGeneratedFiles)" AutoGen="true" DesignTime="true" Visible="false" />
-    </ItemGroup>
   </Target>
 </Project>

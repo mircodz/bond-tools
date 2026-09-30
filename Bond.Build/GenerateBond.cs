@@ -1,90 +1,101 @@
 using System;
-using System.Globalization;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Text;
-using System.Threading;
+using Bond.Parser.CodeGeneration;
+using Bond.Parser.Parser;
 using Microsoft.Build.Framework;
 using Microsoft.Build.Utilities;
 
 namespace BondTools.Build;
 
-public sealed class GenerateBond : Task, ICancelableTask
+/// <summary>
+/// Generates C# for each Bond item. Generation is cheap, so it always runs; outputs are only rewritten when their
+/// content changes, which keeps the C# compilation incremental.
+/// </summary>
+public sealed class GenerateBond : Microsoft.Build.Utilities.Task
 {
+    public ITaskItem[] Sources { get; set; } = [];
+
     [Required]
-    public string ProjectFile { get; set; } = "";
+    public string ProjectDirectory { get; set; } = "";
 
     [Required]
     public string OutputDirectory { get; set; } = "";
 
-    public ITaskItem[] Sources { get; set; } = [];
-    public ITaskItem[] ImportDirectories { get; set; } = [];
-    public ITaskItem[] Usings { get; set; } = [];
-    public ITaskItem[] NamespaceMappings { get; set; } = [];
-    public ITaskItem[] TypeMappings { get; set; } = [];
     [Output]
     public ITaskItem[] GeneratedFiles { get; private set; } = [];
 
-    [Output]
-    public ITaskItem[] WrittenFiles { get; private set; } = [];
-
-    private readonly CancellationTokenSource _cancellation = new();
-
     public override bool Execute()
     {
-        try
+        Directory.CreateDirectory(OutputDirectory);
+        var outputs = new List<string>();
+        foreach (var source in Sources)
         {
-            var request = BuildRequest.Create(ProjectFile, OutputDirectory, Sources, ImportDirectories, Usings, NamespaceMappings, TypeMappings);
-            var result = GenerationEngine.RunAsync(request, _cancellation.Token).GetAwaiter().GetResult();
-
-            foreach (var error in result.Errors)
+            var path = source.GetMetadata("FullPath");
+            var output = Path.Combine(OutputDirectory, OutputName(path));
+            outputs.Add(output);
+            try
             {
-                Log.LogError(null, "BOND1001", null, error.FilePath ?? ProjectFile, error.Line, error.Column, 0, 0, "{0}", error.Message);
+                Generate(source, path, output);
             }
-
-            if (result.Errors.Count != 0)
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
             {
-                return false;
+                Log.LogError(null, "BOND1001", null, path, 0, 0, 0, 0, "{0}", error.Message);
             }
+        }
 
-            GeneratedFiles = result.GeneratedFiles.Select(CreateOutputItem).ToArray();
-            WrittenFiles = result.WrittenFiles.Select(CreateOutputItem).ToArray();
-            Log.LogMessage(MessageImportance.High, "{0}", result.Status);
-            return true;
-        }
-        catch (OperationCanceledException) when (_cancellation.IsCancellationRequested)
+        foreach (var stale in Directory.EnumerateFiles(OutputDirectory, "*.g.cs").Except(outputs))
         {
-            Log.LogMessage(MessageImportance.High, "Bond generation cancelled.");
-            return false;
+            if (File.ReadLines(stale).FirstOrDefault() == CSharpGenerator.GeneratedHeader)
+            {
+                File.Delete(stale);
+            }
         }
-        catch (Exception error) when (error is IOException or InvalidDataException or UnauthorizedAccessException
-            or ArgumentException or NotSupportedException)
-        {
-            Log.LogError(null, "BOND1001", null, ProjectFile, 0, 0, 0, 0, "{0}", error.Message);
-            return false;
-        }
+
+        GeneratedFiles = outputs.Select(output => (ITaskItem)new TaskItem(Escape(output))).ToArray();
+        return !Log.HasLoggedErrors;
     }
 
-    private static ITaskItem CreateOutputItem(string path)
+    private void Generate(ITaskItem source, string path, string output)
     {
-        // TaskItem expects an MSBuild-escaped include, not a literal filesystem path.
-        var escaped = new StringBuilder(path.Length);
-        foreach (var character in path)
+        var options = new CSharpGenerationOptions
         {
-            switch (character)
-            {
-                case '%' or '*' or '?' or '@' or '$' or '(' or ')' or ';' or '\'':
-                    escaped.Append('%');
-                    escaped.Append(((int)character).ToString("X2", CultureInfo.InvariantCulture));
-                    break;
-                default:
-                    escaped.Append(character);
-                    break;
-            }
+            UsingNamespaces = List(source, "Usings"),
+            NamespaceMappings = List(source, "NamespaceMappings"),
+            TypeMappings = List(source, "TypeMappings"),
+            ModelFeatures = Feature(source, "Clone", CSharpModelFeatures.Cloning)
+                | Feature(source, "Equality", CSharpModelFeatures.Equality)
+                | Feature(source, "ToString", CSharpModelFeatures.StringRepresentation)
+        };
+        var imports = List(source, "ImportDirectories").Select(directory => Path.GetFullPath(directory, ProjectDirectory));
+        var parsed = ParserFacade.ParseFileAsync(path, DefaultImportResolver.Create(imports)).GetAwaiter().GetResult();
+        var generated = parsed.Success ? CSharpGenerator.Generate(parsed.Ast!, path, options) : null;
+        foreach (var error in generated?.Errors ?? parsed.Errors)
+        {
+            Log.LogError(null, "BOND1001", null, error.FilePath ?? path, error.Line, error.Column, 0, 0, "{0}", error.Message);
         }
 
-        return new TaskItem(escaped.ToString());
+        if (generated is { Success: true } && !(File.Exists(output) && File.ReadAllText(output) == generated.Code))
+        {
+            File.WriteAllText(output, generated.Code);
+        }
     }
 
-    public void Cancel() => _cancellation.Cancel();
+    // Unique per source path, so schemas with the same name in different directories do not collide.
+    private static string OutputName(string source) =>
+        Path.GetFileNameWithoutExtension(source) + "." +
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(source)))[..8].ToLowerInvariant() + ".g.cs";
+
+    private static string[] List(ITaskItem item, string name) =>
+        item.GetMetadata(name).Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+    private static CSharpModelFeatures Feature(ITaskItem item, string name, CSharpModelFeatures feature) =>
+        string.Equals(item.GetMetadata(name), "true", StringComparison.OrdinalIgnoreCase) ? feature : CSharpModelFeatures.None;
+
+    // Task item specs are MSBuild-escaped; literal paths may contain characters such as ';' or '%'.
+    private static string Escape(string path) =>
+        string.Concat(path.Select(character => "%*?@$();'".Contains(character) ? $"%{(int)character:X2}" : character.ToString()));
 }

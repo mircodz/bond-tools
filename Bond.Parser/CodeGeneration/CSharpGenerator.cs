@@ -82,11 +82,6 @@ public static partial class CSharpGenerator
 
             Line(0, GeneratedHeader);
             Line(0, $"// bond-tools {Version}");
-            if (options.GenerateModelFeatures)
-            {
-                Line(0, $"// BondTools.Models {Version}");
-            }
-
             Line(0, "#nullable disable");
             Line(0);
             foreach (var name in _usingNamespaces)
@@ -107,11 +102,6 @@ public static partial class CSharpGenerator
                     {
                         case StructDeclaration structure:
                             EmitStruct((StructDeclaration)Canonical(structure));
-                            if (options.GenerateCloning || options.GenerateEquality || options.GenerateToString)
-                            {
-                                EmitModelCompanions((StructDeclaration)Canonical(structure));
-                            }
-
                             break;
                         case EnumDeclaration enumeration:
                             EmitEnum((EnumDeclaration)Canonical(enumeration));
@@ -124,18 +114,6 @@ public static partial class CSharpGenerator
                             Fail($"Declaration kind '{declaration.Kind}' cannot be represented in C#.", declaration.Location);
                             break;
                     }
-                }
-                catch (GenerationException error)
-                {
-                    _errors.Add(new ParseError(error.Message, filePath, error.Location.Line, error.Location.Column));
-                }
-            }
-
-            if (options.GenerateDescriptors && _errors.Count == 0)
-            {
-                try
-                {
-                    EmitMetadata();
                 }
                 catch (GenerationException error)
                 {
@@ -162,7 +140,9 @@ public static partial class CSharpGenerator
 
             if (options.GenerateModelFeatures)
             {
-                EmitModelMembers(structure);
+                var self = QualifiedName(structure) + TypeArguments(structure.TypeParameters.Select(parameter =>
+                    Identifier(parameter.Name, structure.Location, typeName: true)));
+                EmitModelMembers(structure, self);
             }
 
             Line(1, "}");
@@ -176,20 +156,15 @@ public static partial class CSharpGenerator
                 Identifier(parameter.Name, structure.Location, typeName: true)));
             var baseType = structure.BaseType == null ? "" :
                 " : " + MapType(structure.BaseType, structure.Location).Name;
-            if (options.GenerateModelFeatures)
+            if (options.GenerateCloning)
             {
-                baseType += (baseType.Length == 0 ? " : " : ", ") + ModelInterfaces(structure);
+                baseType += (baseType.Length == 0 ? " : " : ", ") + "global::System.ICloneable";
             }
 
             BeginNamespace(structure);
             EmitDocumentation(structure.LeadingTrivia, structure.TrailingTrivia, 1);
             EmitAttributes(structure.Attributes, 1);
             EmitNamespaceAttribute(structure);
-            if (options.GenerateDebuggerSupport)
-            {
-                EmitModelAttributes(structure);
-            }
-
             Line(1, "[global::Bond.Schema]");
             Line(1, $"public partial class {name}{parameters}{baseType}");
             foreach (var parameter in structure.TypeParameters)
@@ -341,7 +316,7 @@ public static partial class CSharpGenerator
             Line(0);
         }
 
-        private MappedType MapType(BondType type, SourceLocation location)
+        private MappedType MapType(BondType type, SourceLocation location, TypeMode mode = TypeMode.Clr)
         {
             switch (type)
             {
@@ -377,26 +352,26 @@ public static partial class CSharpGenerator
                     return new("string", "string", "fullName");
                 case BondType.Blob:
                     return new("global::System.ArraySegment<byte>",
-                        _useBlobSchemaTags ? "global::Bond.Tag.blob" : "global::System.ArraySegment<byte>",
-                        "new global::System.ArraySegment<byte>()", IsValueType: true, IsSchemaValueType: !_useBlobSchemaTags);
+                        mode == TypeMode.Schema ? "global::Bond.Tag.blob" : "global::System.ArraySegment<byte>",
+                        "new global::System.ArraySegment<byte>()", IsValueType: true, IsSchemaValueType: mode != TypeMode.Schema);
                 case BondType.Vector vector:
-                    return Collection("List", location, vector.ElementType);
+                    return Collection("List", location, mode, vector.ElementType);
                 case BondType.List list:
-                    return Collection("LinkedList", location, list.ElementType);
+                    return Collection("LinkedList", location, mode, list.ElementType);
                 case BondType.Set set:
-                    return Collection("HashSet", location, set.KeyType);
+                    return Collection("HashSet", location, mode, set.KeyType);
                 case BondType.Map map:
-                    return Collection("Dictionary", location, map.KeyType, map.ValueType);
+                    return Collection("Dictionary", location, mode, map.KeyType, map.ValueType);
                 case BondType.Nullable nullable:
                     {
-                        var element = MapType(nullable.ElementType, location);
+                        var element = MapType(nullable.ElementType, location, mode);
                         return new(element.Name + (element.IsScalar ? "?" : ""),
                             $"global::Bond.Tag.nullable<{element.SchemaType}>",
                             IsValueType: !element.IsScalar && element.IsValueType, IsCustom: element.IsCustom);
                     }
                 case BondType.Maybe maybe:
                     {
-                        var element = MapType(maybe.ElementType, location);
+                        var element = MapType(maybe.ElementType, location, mode);
                         var suffix = element.IsScalar ? "?" : "";
 
                         // gbc retains an alias's annotation, without adding the "nothing" wrapper.
@@ -416,12 +391,12 @@ public static partial class CSharpGenerator
                             Fail("bonded<T> requires a struct or type parameter.", location);
                         }
 
-                        var element = MapType(bonded.StructType, location);
+                        var element = MapType(bonded.StructType, location, mode);
                         return new($"global::Bond.IBonded<{element.Name}>", $"global::Bond.IBonded<{element.SchemaType}>",
                             $"global::Bond.Bonded<{element.Name}>.Empty");
                     }
                 case BondType.TypeReference reference:
-                    return MapReferencedType(reference, location);
+                    return MapReferencedType(reference, location, mode);
                 case BondType.TypeParameter parameter:
                     {
                         var name = Identifier(parameter.Param.Name, location, typeName: true);
@@ -437,20 +412,20 @@ public static partial class CSharpGenerator
             }
         }
 
-        private MappedType MapReferencedType(BondType.TypeReference reference, SourceLocation location)
+        private MappedType MapReferencedType(BondType.TypeReference reference, SourceLocation location, TypeMode mode)
         {
             var declaration = Canonical(reference.Declaration);
-            ValidateTypeArguments(declaration, reference.TypeArguments, location);
+            ValidateTypeArguments(declaration, reference.TypeArguments, location, mode: mode);
             if (declaration is AliasDeclaration alias)
             {
                 ValidateAlias(alias);
-                if (TryMapAlias(alias, reference.TypeArguments, location, out var custom))
+                if (mode == TypeMode.Clr && TryMapAlias(alias, reference.TypeArguments, location, out var custom))
                 {
                     return custom;
                 }
 
                 var underlying = Substitute(alias.AliasedType, alias, reference.TypeArguments);
-                var mapped = MapType(underlying, location);
+                var mapped = MapType(underlying, location, mode);
                 if (alias.AliasedType is BondType.Blob)
                 {
                     return mapped with
@@ -463,7 +438,7 @@ public static partial class CSharpGenerator
                 return mapped;
             }
 
-            var arguments = reference.TypeArguments.Select(argument => MapType(argument, location)).ToArray();
+            var arguments = reference.TypeArguments.Select(argument => MapType(argument, location, mode)).ToArray();
             var name = QualifiedName(declaration) + TypeArguments(arguments.Select(argument => argument.Name));
             var schema = QualifiedName(declaration) + TypeArguments(arguments.Select(argument => argument.SchemaType));
             return declaration switch
@@ -474,9 +449,9 @@ public static partial class CSharpGenerator
             };
         }
 
-        private MappedType Collection(string name, SourceLocation location, params BondType[] arguments)
+        private MappedType Collection(string name, SourceLocation location, TypeMode mode, params BondType[] arguments)
         {
-            var types = arguments.Select(argument => MapType(argument, location)).ToArray();
+            var types = arguments.Select(argument => MapType(argument, location, mode)).ToArray();
             var clr = $"global::System.Collections.Generic.{name}<{string.Join(", ", types.Select(type => type.Name))}>";
             var schema = $"global::System.Collections.Generic.{name}<{string.Join(", ", types.Select(type => type.SchemaType))}>";
             return new(clr, schema, $"new {clr}()");
@@ -647,8 +622,8 @@ public static partial class CSharpGenerator
             }
         }
 
-        private void ValidateTypeArguments(
-            Declaration declaration, BondType[] arguments, SourceLocation location, bool annotated = false)
+        private void ValidateTypeArguments(Declaration declaration, BondType[] arguments, SourceLocation location,
+            bool annotated = false, TypeMode mode = TypeMode.Clr)
         {
             if (declaration.TypeParameters.Length != arguments.Length)
             {
@@ -667,7 +642,7 @@ public static partial class CSharpGenerator
                     continue;
                 }
 
-                var argument = MapType(arguments[index], location);
+                var argument = MapType(arguments[index], location, mode);
 
                 // The consuming compiler resolves constraints on externally supplied CLR types.
                 if (!annotated && argument.IsCustom)
@@ -842,24 +817,6 @@ public static partial class CSharpGenerator
             "global::" + string.Join(".", CSharpNamespace(declaration)
                 .Select(part => Identifier(part, declaration.Location))
                 .Append(Identifier(declaration.Name, declaration.Location, typeName: true)));
-
-        private string CompanionName(Declaration declaration, string suffix)
-        {
-            var name = declaration.Name + suffix;
-            var namespaceParts = CSharpNamespace(declaration);
-            while (_declarations.Values.Any(candidate => candidate is StructDeclaration or EnumDeclaration
-                && candidate.Name == name && CSharpNamespace(candidate).SequenceEqual(namespaceParts)))
-            {
-                name += "_";
-            }
-
-            return name;
-        }
-
-        private string QualifiedCompanionName(Declaration declaration, string suffix) =>
-            "global::" + string.Join(".", CSharpNamespace(declaration)
-                .Select(part => Identifier(part, declaration.Location))
-                .Append(Identifier(CompanionName(declaration, suffix), declaration.Location, typeName: true)));
 
         private void EmitAttributes(Syntax.Attribute[] attributes, int indent)
         {

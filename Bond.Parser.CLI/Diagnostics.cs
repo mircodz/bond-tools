@@ -1,23 +1,20 @@
+using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
 using System.Text.Json;
-using System.Threading.Tasks;
 using Bond.Parser.Parser;
 
 namespace Bond.Parser.CLI;
 
-internal static class SchemaDiagnostics
+internal static class Diagnostics
 {
-    internal static async Task<int> WriteAsync(TextWriter writer, string format, IEnumerable<ParseError> errors,
-        int exitCode = 2)
+    public static int Report(IEnumerable<ParseError> errors, string format, int exitCode)
     {
         var values = errors.ToArray();
         if (format == "json")
         {
-            await writer.WriteLineAsync(JsonSerializer.Serialize(new
+            Console.Error.WriteLine(JsonSerializer.Serialize(new
             {
-                error = "schema_error",
                 errors = values.Select(error => new
                 {
                     file = error.FilePath,
@@ -31,7 +28,7 @@ internal static class SchemaDiagnostics
         {
             foreach (var error in values)
             {
-                await writer.WriteLineAsync($"{error.FilePath ?? "bond"}({error.Line},{error.Column}): error: {error.Message}");
+                Console.Error.WriteLine($"{error.FilePath ?? "bond"}({error.Line},{error.Column}): error: {error.Message}");
             }
         }
 

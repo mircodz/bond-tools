@@ -7,12 +7,10 @@ namespace Bond.Parser.CodeGeneration;
 public enum CSharpModelFeatures
 {
     None = 0,
-    Descriptors = 1,
-    Cloning = 2,
-    Equality = 4,
-    Debugger = 8,
-    StringRepresentation = 16,
-    All = Descriptors | Cloning | Equality | Debugger | StringRepresentation
+    Cloning = 1,
+    Equality = 2,
+    StringRepresentation = 4,
+    All = Cloning | Equality | StringRepresentation
 }
 
 public sealed record CSharpGenerationOptions
@@ -23,9 +21,7 @@ public sealed record CSharpGenerationOptions
     public CSharpModelFeatures ModelFeatures { get; init; }
 
     public bool GenerateModelFeatures => ModelFeatures != CSharpModelFeatures.None;
-    public bool GenerateDescriptors => ModelFeatures.HasFlag(CSharpModelFeatures.Descriptors);
     public bool GenerateCloning => ModelFeatures.HasFlag(CSharpModelFeatures.Cloning);
     public bool GenerateEquality => ModelFeatures.HasFlag(CSharpModelFeatures.Equality);
-    public bool GenerateDebuggerSupport => ModelFeatures.HasFlag(CSharpModelFeatures.Debugger);
     public bool GenerateToString => ModelFeatures.HasFlag(CSharpModelFeatures.StringRepresentation);
 }

@@ -35,8 +35,7 @@ internal static class GeneratedCode
             .Concat([
                 typeof(global::Bond.SchemaAttribute).Assembly.Location,
                 typeof(global::Bond.Serializer<>).Assembly.Location,
-                typeof(SimpleJsonWriter).Assembly.Location,
-                typeof(global::BondTools.Models.SchemaDescriptor).Assembly.Location
+                typeof(SimpleJsonWriter).Assembly.Location
             ]).Distinct(StringComparer.Ordinal);
 
         var compilation = CSharpCompilation.Create(
