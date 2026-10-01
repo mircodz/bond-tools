@@ -1,6 +1,10 @@
 using System;
 using System.Buffers;
 using System.Buffers.Binary;
+using System.Numerics;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+using System.Runtime.Intrinsics.X86;
 using System.Text;
 
 namespace BondTools.Runtime;
@@ -135,18 +139,79 @@ public ref struct CompactBinaryWriter
         _position++;
     }
 
+    // Values below 2^14 (one or two bytes) are written inline, longer ones out of line.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void WriteVarUInt64(ulong value)
     {
-        var destination = Reserve(MaxVarIntSize);
+        var position = _position;
+        var buffer = _buffer;
+        if ((uint)position + 1 < (uint)buffer.Length)
+        {
+            ref var destination = ref Unsafe.Add(ref MemoryMarshal.GetReference(buffer), position);
+            if (value < 0x80)
+            {
+                destination = (byte)value;
+                _position = position + 1;
+                return;
+            }
+
+            if (value < 0x4000)
+            {
+                destination = (byte)(value | 0x80);
+                Unsafe.Add(ref destination, 1) = (byte)(value >> 7);
+                _position = position + 2;
+                return;
+            }
+        }
+
+        WriteVarUInt64Slow(value);
+    }
+
+    // Also reached for short values when the buffer is nearly full.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private void WriteVarUInt64Slow(ulong value)
+    {
+        ref var destination = ref MemoryMarshal.GetReference(Reserve(MaxVarIntSize));
+        if (FastPdep.IsSupported && value >= 0x4000)
+        {
+            _position += Deposit(ref destination, value);
+            return;
+        }
+
         var size = 0;
         while (value >= 0x80)
         {
-            destination[size++] = (byte)(value | 0x80);
+            Unsafe.Add(ref destination, size++) = (byte)(value | 0x80);
             value >>= 7;
         }
 
-        destination[size++] = (byte)value;
+        Unsafe.Add(ref destination, size++) = (byte)value;
         _position += size;
+    }
+
+    // Spreads the value's 7-bit groups over bytes with pdep, setting the continuation bit on all but the last.
+    private static int Deposit(ref byte destination, ulong value)
+    {
+        const ulong Continues = 0x8080_8080_8080_8080UL;
+        var size = (70 - BitOperations.LeadingZeroCount(value)) / 7;
+        var groups = Bmi2.X64.ParallelBitDeposit(value, 0x7F7F_7F7F_7F7F_7F7FUL);
+        if (size <= 8)
+        {
+            Unsafe.WriteUnaligned(ref destination, groups | Bmi2.X64.ZeroHighBits(Continues, (ulong)(size - 1) * 8));
+            return size;
+        }
+
+        Unsafe.WriteUnaligned(ref destination, groups | Continues);
+        var rest = value >> 56;
+        if (rest < 0x80)
+        {
+            Unsafe.Add(ref destination, 8) = (byte)rest;
+            return 9;
+        }
+
+        Unsafe.Add(ref destination, 8) = (byte)(rest | 0x80);
+        Unsafe.Add(ref destination, 9) = 1;
+        return 10;
     }
 
     // Returns room for at least size bytes at the current position, moving to a new buffer if needed.
