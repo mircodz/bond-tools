@@ -1,0 +1,30 @@
+namespace Bench
+
+struct Address {
+    0: string street;
+    1: string city;
+    2: string zip;
+}
+
+struct Customer {
+    0: string name;
+    1: Address address;
+    2: vector<string> emails;
+    3: map<string, string> attributes;
+}
+
+struct Line {
+    0: string sku;
+    1: uint32 quantity;
+    2: double price;
+}
+
+struct Order {
+    0: int64 id;
+    1: Customer customer;
+    2: vector<Line> lines;
+    3: vector<int32> codes;
+    4: map<string, string> properties;
+    5: set<string> labels;
+    6: bool paid;
+}

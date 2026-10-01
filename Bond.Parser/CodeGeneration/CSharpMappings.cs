@@ -160,6 +160,10 @@ public static partial class CSharpGenerator
             return true;
         }
 
+        // Custom-mapped values are converted by a BondTypeAliasConverter class in their struct's C# namespace, as with gbc.
+        private string ConverterName(StructDeclaration owner, SourceLocation location) =>
+            "global::" + string.Join(".", CSharpNamespace(owner).Select(part => Identifier(part, location))) + ".BondTypeAliasConverter";
+
         private string CustomDefaultValue(Field field, MappedType mapped, StructDeclaration owner)
         {
             var wireType = MapType(field.Type, field.Location, TypeMode.Wire);
@@ -170,9 +174,7 @@ public static partial class CSharpGenerator
                     "Keep its wire CLR type, or use a zero, empty, or nothing default.", field.Location);
             }
 
-            var converter = "global::" + string.Join(".", CSharpNamespace(owner)
-                .Select(part => Identifier(part, field.Location))) + ".BondTypeAliasConverter";
-            return $"{converter}.Convert({value}, default({mapped.Name}))";
+            return $"{ConverterName(owner, field.Location)}.Convert({value}, default({mapped.Name}))";
         }
 
         private bool HasRuntimeCompatibleMappedDefault(Field field)

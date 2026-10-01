@@ -1,0 +1,15 @@
+namespace Bench
+
+struct Item {
+    0: int32 id;
+    1: int64 value;
+    2: string name;
+}
+
+struct Items { 0: vector<Item> values; }
+struct Int32s { 0: vector<int32> values; }
+struct Doubles { 0: vector<double> values; }
+struct StringMap { 0: map<string, string> values; }
+struct IntMap { 0: map<int32, int64> values; }
+struct IntDoubleMap { 0: map<int32, double> values; }
+struct StringDoubleMap { 0: map<string, double> values; }

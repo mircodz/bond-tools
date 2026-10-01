@@ -18,15 +18,48 @@ namespace Bond.TestSupport;
 
 internal static class GeneratedCode
 {
-    public static async Task<string> Generate(string schema)
+    public static Task<string> Generate(string schema) =>
+        Generate(schema, new CSharpGenerationOptions { ModelFeatures = CSharpModelFeatures.All });
+
+    public static async Task<string> Generate(string schema, CSharpGenerationOptions options)
     {
         var parsed = await ParserFacade.ParseStringAsync(schema);
         Assert.True(parsed.Success, string.Join("\n", parsed.Errors.Select(error => error.Message)));
 
-        var result = CSharpGenerator.Generate(parsed.Ast!, "input.bond",
-            new CSharpGenerationOptions { ModelFeatures = CSharpModelFeatures.All });
+        var result = CSharpGenerator.Generate(parsed.Ast!, "input.bond", options);
         Assert.True(result.Success, string.Join("\n", result.Errors.Select(error => error.Message)));
         return result.Code!;
+    }
+
+    /// <summary>Compiles generated code with a <c>Scenario.Run()</c> body, then runs it.</summary>
+    public static void RunScenario(string generated, string body, string extra = "")
+    {
+        var scenario = $$"""
+            using System;
+            using System.Collections.Generic;
+            using System.Linq;
+
+            public static class Scenario
+            {
+                private static void Require(bool condition, string message)
+                {
+                    if (!condition)
+                    {
+                        throw new Exception(message);
+                    }
+                }
+
+                public static void Run()
+                {
+                    {{body}}
+                }
+            }
+
+            {{extra}}
+            """;
+
+        var run = Compile(generated, scenario).GetType("Scenario", true)!.GetMethod("Run")!.CreateDelegate<Action>();
+        run();
     }
 
     public static Assembly Compile(params string[] sources)
@@ -35,7 +68,8 @@ internal static class GeneratedCode
             .Concat([
                 typeof(global::Bond.SchemaAttribute).Assembly.Location,
                 typeof(global::Bond.Serializer<>).Assembly.Location,
-                typeof(SimpleJsonWriter).Assembly.Location
+                typeof(SimpleJsonWriter).Assembly.Location,
+                typeof(global::BondTools.Runtime.CompactBinary).Assembly.Location
             ]).Distinct(StringComparer.Ordinal);
 
         var compilation = CSharpCompilation.Create(

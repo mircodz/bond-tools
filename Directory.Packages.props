@@ -5,6 +5,8 @@
   <ItemGroup>
     <PackageVersion Include="Antlr4.Runtime.Standard" Version="4.13.1" />
     <PackageVersion Include="Antlr4BuildTasks" Version="12.11.0" />
+    <PackageVersion Include="BenchmarkDotNet" Version="0.15.8" />
+    <PackageVersion Include="Bond.Core.CSharp" Version="13.0.2" />
     <PackageVersion Include="Bond.Runtime.CSharp" Version="13.0.2" />
     <PackageVersion Include="coverlet.MTP" Version="10.0.1" />
     <PackageVersion Include="FluentAssertions" Version="8.8.0" />

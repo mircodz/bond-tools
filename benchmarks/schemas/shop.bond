@@ -1,0 +1,87 @@
+namespace Bench.Shop
+
+enum Currency { EUR, USD, GBP, JPY }
+enum Status { Draft, Submitted, Paid, Shipped, Delivered, Cancelled }
+
+struct Money {
+    0: int64 minor;
+    1: Currency currency = EUR;
+}
+
+struct Address {
+    0: string street;
+    1: string city;
+    2: string zip;
+    3: wstring country_name;
+    4: nullable<string> state;
+    5: double latitude;
+    6: double longitude;
+}
+
+// A base struct: its fields come first on the wire, then derived fields.
+struct Entity {
+    0: required string id;
+    1: int64 created_at;
+    2: int64 updated_at;
+    3: map<string, string> tags;
+}
+
+struct Customer : Entity {
+    0: string name;
+    1: string email;
+    2: Address billing;
+    3: nullable<Address> shipping;
+    4: vector<string> phones;
+    5: set<Currency> currencies;
+    6: map<Currency, Money> credit;
+}
+
+struct Discount {
+    0: string code;
+    1: float percent;
+    2: nullable<Money> cap;
+}
+
+struct Line {
+    0: string sku;
+    1: wstring title;
+    2: uint32 quantity = 1;
+    3: Money unit_price;
+    4: vector<Discount> discounts;
+    5: map<string, vector<string>> options;
+    6: set<int32> warehouses;
+    7: blob thumbnail;
+    8: bool gift = false;
+}
+
+struct Shipment {
+    0: string carrier;
+    1: string tracking;
+    2: vector<int32> line_indexes;
+    3: list<int64> events_at;
+    4: Address destination;
+    5: nullable<vector<string>> notes;
+}
+
+struct Order : Entity {
+    0: Status status = Draft;
+    1: Customer customer;
+    2: vector<Line> lines;
+    3: map<string, Shipment> shipments;
+    4: map<int64, map<string, double>> metrics;
+    5: vector<vector<int32>> matrix;
+    6: map<Status, list<int64>> history;
+    7: set<string> labels;
+    8: vector<blob> attachments;
+    9: map<wstring, Money> totals_by_region;
+    10: nullable<Discount> order_discount;
+    11: vector<nullable<Money>> refunds;
+    12: map<double, string> price_breaks;
+    13: map<bool, vector<Line>> by_gift;
+    14: double exchange_rate = 1.0;
+    15: float score = 0.5;
+    16: uint64 checksum;
+    17: int8 priority = -1;
+    18: uint16 channel;
+    19: wstring note;
+}

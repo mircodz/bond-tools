@@ -66,9 +66,10 @@ public sealed class GenerateBond : Microsoft.Build.Utilities.Task
             UsingNamespaces = List(source, "Usings"),
             NamespaceMappings = List(source, "NamespaceMappings"),
             TypeMappings = List(source, "TypeMappings"),
-            ModelFeatures = Feature(source, "Clone", CSharpModelFeatures.Cloning)
-                | Feature(source, "Equality", CSharpModelFeatures.Equality)
-                | Feature(source, "ToString", CSharpModelFeatures.StringRepresentation)
+            ModelFeatures = (IsEnabled(source, "Clone") ? CSharpModelFeatures.Cloning : 0)
+                | (IsEnabled(source, "Equality") ? CSharpModelFeatures.Equality : 0)
+                | (IsEnabled(source, "ToString") ? CSharpModelFeatures.StringRepresentation : 0),
+            Serialization = IsEnabled(source, "Serialization")
         };
         var imports = List(source, "ImportDirectories").Select(directory => Path.GetFullPath(directory, ProjectDirectory));
         var parsed = ParserFacade.ParseFileAsync(path, DefaultImportResolver.Create(imports)).GetAwaiter().GetResult();
@@ -92,8 +93,8 @@ public sealed class GenerateBond : Microsoft.Build.Utilities.Task
     private static string[] List(ITaskItem item, string name) =>
         item.GetMetadata(name).Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
-    private static CSharpModelFeatures Feature(ITaskItem item, string name, CSharpModelFeatures feature) =>
-        string.Equals(item.GetMetadata(name), "true", StringComparison.OrdinalIgnoreCase) ? feature : CSharpModelFeatures.None;
+    private static bool IsEnabled(ITaskItem item, string name) =>
+        string.Equals(item.GetMetadata(name), "true", StringComparison.OrdinalIgnoreCase);
 
     // Task item specs are MSBuild-escaped; literal paths may contain characters such as ';' or '%'.
     private static string Escape(string path) =>

@@ -20,6 +20,9 @@ public sealed record CSharpGenerationOptions
     public IReadOnlyList<string> TypeMappings { get; init; } = [];
     public CSharpModelFeatures ModelFeatures { get; init; }
 
+    /// <summary>Generates Compact Binary serialization, which requires the BondTools.Runtime package.</summary>
+    public bool Serialization { get; init; }
+
     public bool GenerateModelFeatures => ModelFeatures != CSharpModelFeatures.None;
     public bool GenerateCloning => ModelFeatures.HasFlag(CSharpModelFeatures.Cloning);
     public bool GenerateEquality => ModelFeatures.HasFlag(CSharpModelFeatures.Equality);
