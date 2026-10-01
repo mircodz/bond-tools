@@ -2,16 +2,14 @@ using System.Buffers;
 using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Configs;
 using Bond;
-using Bond.IO.Safe;
+using Bond.IO.Unsafe;
 using BondTools.Runtime;
 using Bench;
-using UpstreamReader = Bond.Protocols.CompactBinaryReader<Bond.IO.Safe.InputBuffer>;
-using UpstreamWriter = Bond.Protocols.CompactBinaryWriter<Bond.IO.Safe.OutputBuffer>;
-using UnsafeReader = Bond.Protocols.CompactBinaryReader<Bond.IO.Unsafe.InputBuffer>;
-using UnsafeWriter = Bond.Protocols.CompactBinaryWriter<Bond.IO.Unsafe.OutputBuffer>;
+using UpstreamReader = Bond.Protocols.CompactBinaryReader<Bond.IO.Unsafe.InputBuffer>;
+using UpstreamWriter = Bond.Protocols.CompactBinaryWriter<Bond.IO.Unsafe.OutputBuffer>;
 
 // Each payload is written and read by BondTools.Runtime (the baseline) and by Bond.Runtime.CSharp, reusing buffers
-// and upstream's serializers.
+// and upstream's serializers. Upstream uses Bond.IO.Unsafe buffers, the faster ones by Bond's own advice.
 [MemoryDiagnoser]
 [GroupBenchmarksBy(BenchmarkLogicalGroupRule.ByCategory)]
 [CategoriesColumn]
@@ -20,8 +18,6 @@ public class Benchmarks
 {
     private readonly ArrayBufferWriter<byte> _output = new(64 * 1024);
     private readonly OutputBuffer _upstreamOutput = new(64 * 1024);
-    private readonly Bond.IO.Unsafe.OutputBuffer _unsafeOutput = new(64 * 1024);
-    private Bond.IO.Unsafe.InputBuffer _orderU, _itemU, _intU, _doubleU, _stringMapU, _intDoubleMapU, _bigU;
 
     private Order _order;
     private Items _items;
@@ -99,40 +95,6 @@ public class Benchmarks
         _bigBytes = Bytes(_big);
         (_orderInput, _itemInput, _intInput, _doubleInput) = (new(_orderBytes), new(_itemBytes), new(_intBytes), new(_doubleBytes));
         (_stringMapInput, _intDoubleMapInput, _bigInput) = (new(_stringMapBytes), new(_intDoubleMapBytes), new(_bigBytes));
-        (_orderU, _itemU, _intU, _doubleU) = (new(_orderBytes), new(_itemBytes), new(_intBytes), new(_doubleBytes));
-        (_stringMapU, _intDoubleMapU, _bigU) = (new(_stringMapBytes), new(_intDoubleMapBytes), new(_bigBytes));
-        foreach (var (name, bytes) in new[] { ("Order", UnsafeBytes(_order)), ("Big", UnsafeBytes(_big)), ("Items", UnsafeBytes(_items)) })
-        {
-            if (!bytes.AsSpan().SequenceEqual(name == "Order" ? _orderBytes : name == "Big" ? _bigBytes : _itemBytes))
-            {
-                throw new InvalidOperationException(name + ": unsafe buffers write different bytes.");
-            }
-        }
-    }
-
-    private static byte[] UnsafeBytes<T>(T value)
-    {
-        var output = new Bond.IO.Unsafe.OutputBuffer();
-        UnsafeUpstream<T>.Serializer.Serialize(value, new UnsafeWriter(output));
-        return output.Data.ToArray();
-    }
-
-    private void WriteUnsafe<T>(T value)
-    {
-        _unsafeOutput.Position = 0;
-        UnsafeUpstream<T>.Serializer.Serialize(value, new UnsafeWriter(_unsafeOutput));
-    }
-
-    private static T ReadUnsafe<T>(Bond.IO.Unsafe.InputBuffer input)
-    {
-        input.Position = 0;
-        return UnsafeUpstream<T>.Deserializer.Deserialize<T>(new UnsafeReader(input));
-    }
-
-    private static class UnsafeUpstream<T>
-    {
-        public static readonly Serializer<UnsafeWriter> Serializer = new(typeof(T));
-        public static readonly Deserializer<UnsafeReader> Deserializer = new(typeof(T));
     }
 
     // Both runtimes must write the same bytes, or the comparison means nothing.
@@ -256,46 +218,4 @@ public class Benchmarks
 
     [Benchmark, BenchmarkCategory("4 KB order, read")]
     public Bench.Shop.Order ReadBigUpstream() => ReadUpstream<Bench.Shop.Order>(_bigInput);
-
-    [Benchmark, BenchmarkCategory("Order, write")]
-    public void WriteOrderUnsafe() => WriteUnsafe(_order);
-
-    [Benchmark, BenchmarkCategory("Order, read")]
-    public Order ReadOrderUnsafe() => ReadUnsafe<Order>(_orderU);
-
-    [Benchmark, BenchmarkCategory("100 structs, write")]
-    public void WriteItemsUnsafe() => WriteUnsafe(_items);
-
-    [Benchmark, BenchmarkCategory("100 structs, read")]
-    public Items ReadItemsUnsafe() => ReadUnsafe<Items>(_itemU);
-
-    [Benchmark, BenchmarkCategory("100 int32, write")]
-    public void WriteIntsUnsafe() => WriteUnsafe(_ints);
-
-    [Benchmark, BenchmarkCategory("100 int32, read")]
-    public Int32s ReadIntsUnsafe() => ReadUnsafe<Int32s>(_intU);
-
-    [Benchmark, BenchmarkCategory("1,000 double, write")]
-    public void WriteDoublesUnsafe() => WriteUnsafe(_doubles);
-
-    [Benchmark, BenchmarkCategory("1,000 double, read")]
-    public Doubles ReadDoublesUnsafe() => ReadUnsafe<Doubles>(_doubleU);
-
-    [Benchmark, BenchmarkCategory("map<string, string>, write")]
-    public void WriteStringMapUnsafe() => WriteUnsafe(_stringMap);
-
-    [Benchmark, BenchmarkCategory("map<string, string>, read")]
-    public StringMap ReadStringMapUnsafe() => ReadUnsafe<StringMap>(_stringMapU);
-
-    [Benchmark, BenchmarkCategory("map<int32, double>, write")]
-    public void WriteIntDoubleMapUnsafe() => WriteUnsafe(_intDoubleMap);
-
-    [Benchmark, BenchmarkCategory("map<int32, double>, read")]
-    public IntDoubleMap ReadIntDoubleMapUnsafe() => ReadUnsafe<IntDoubleMap>(_intDoubleMapU);
-
-    [Benchmark, BenchmarkCategory("4 KB order, write")]
-    public void WriteBigUnsafe() => WriteUnsafe(_big);
-
-    [Benchmark, BenchmarkCategory("4 KB order, read")]
-    public Bench.Shop.Order ReadBigUnsafe() => ReadUnsafe<Bench.Shop.Order>(_bigU);
 }

@@ -31,26 +31,26 @@ Values of custom-mapped types are converted by the `BondTypeAliasConverter` clas
 
 ## Performance
 
-Mean time per call on an Intel i7-12700KF with .NET 10; upstream is Bond.Runtime.CSharp 13.0.2.
+Mean time per call on an Intel i7-12700KF with .NET 10; upstream is Bond.Runtime.CSharp 13.0.2 with Bond.IO.Unsafe buffers.
 
 | Write | bond-tools | upstream | Δ |
 |---|--:|--:|--:|
-| Order with nested structs, strings and maps | 342 ns | 586 ns | -42% |
-| 100 small structs | 1.40 µs | 1.96 µs | -28% |
-| 100 `int32` | 165 ns | 212 ns | -22% |
-| 1,000 `double` | 1.07 µs | 3.04 µs | -65% |
-| `map<string, string>`, 100 entries | 1.56 µs | 2.91 µs | -46% |
-| `map<int32, double>`, 100 entries | 257 ns | 1.16 µs | -78% |
-| 4 KB order using most Bond types | 4.72 µs | 6.74 µs | -30% |
+| Order with nested structs, strings and maps | 340 ns | 598 ns | -43% |
+| 100 small structs | 1.40 µs | 1.98 µs | -29% |
+| 100 `int32` | 177 ns | 232 ns | -24% |
+| 1,000 `double` | 1.06 µs | 1.90 µs | -44% |
+| `map<string, string>`, 100 entries | 1.57 µs | 2.94 µs | -47% |
+| `map<int32, double>`, 100 entries | 258 ns | 1.10 µs | -77% |
+| 4 KB order using most Bond types | 4.75 µs | 6.84 µs | -31% |
 
 | Read | bond-tools | upstream | Δ |
 |---|--:|--:|--:|
-| Order with nested structs, strings and maps | 623 ns | 799 ns | -22% |
-| 100 small structs | 2.44 µs | 3.33 µs | -27% |
-| 100 `int32` | 299 ns | 362 ns | -17% |
-| 1,000 `double` | 1.41 µs | 3.24 µs | -56% |
-| `map<string, string>`, 100 entries | 2.80 µs | 3.91 µs | -28% |
-| `map<int32, double>`, 100 entries | 615 ns | 1.74 µs | -65% |
-| 4 KB order using most Bond types | 7.73 µs | 11.4 µs | -32% |
+| Order with nested structs, strings and maps | 621 ns | 792 ns | -22% |
+| 100 small structs | 2.45 µs | 3.20 µs | -23% |
+| 100 `int32` | 303 ns | 344 ns | -12% |
+| 1,000 `double` | 1.43 µs | 3.03 µs | -53% |
+| `map<string, string>`, 100 entries | 2.79 µs | 3.90 µs | -28% |
+| `map<int32, double>`, 100 entries | 599 ns | 1.74 µs | -66% |
+| 4 KB order using most Bond types | 7.75 µs | 11.4 µs | -32% |
 
 `dotnet run -c Release --project benchmarks` runs them. [benchmarks/RESULTS.md](../benchmarks/RESULTS.md) has the full results, also for an Apple M4 Pro.
