@@ -25,7 +25,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\Bond.Build\Bond.Build.csproj" ReferenceOutputAssembly="false" />
-    <ProjectReference Include="..\..\Bond.Models\Bond.Models.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
 </Project>

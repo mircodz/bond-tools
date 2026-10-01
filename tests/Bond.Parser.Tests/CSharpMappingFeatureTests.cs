@@ -1,12 +1,9 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Linq;
-using System.Reflection;
 using System.Threading.Tasks;
 using Bond.Parser.CodeGeneration;
 using Bond.Parser.Parser;
-using BondTools.Models;
 using static Bond.TestSupport.GeneratedCode;
 
 namespace Bond.Parser.Tests;
@@ -14,7 +11,7 @@ namespace Bond.Parser.Tests;
 public sealed class CSharpMappingFeatureTests
 {
     public static IEnumerable<object[]> FeatureSelections() =>
-        Enumerable.Range(0, 32).Select(value => new object[] { (CSharpModelFeatures)value });
+        Enumerable.Range(0, (int)CSharpModelFeatures.All + 1).Select(value => new object[] { (CSharpModelFeatures)value });
 
     [Theory]
     [MemberData(nameof(FeatureSelections))]
@@ -23,30 +20,15 @@ public sealed class CSharpMappingFeatureTests
         var result = await GenerateResult("namespace Example struct Item { 0: int32 id; }",
             new CSharpGenerationOptions { ModelFeatures = features });
         Assert.True(result.Success, Messages(result));
-        var assembly = Compile(result.Code!);
-        var type = assembly.GetType("Example.Item", true)!;
-        Assert.Equal(features.HasFlag(CSharpModelFeatures.Descriptors),
-            assembly.GetType("Example.ItemSchema") != null);
-        Assert.Equal(features.HasFlag(CSharpModelFeatures.Descriptors),
-            typeof(IGeneratedSchemaProvider).IsAssignableFrom(type));
-        Assert.Equal(features.HasFlag(CSharpModelFeatures.Cloning),
-            typeof(ICloneable).IsAssignableFrom(type));
-        Assert.Equal(features.HasFlag(CSharpModelFeatures.Equality),
-            typeof(IGeneratedEquatable).IsAssignableFrom(type));
-        Assert.Equal(features.HasFlag(CSharpModelFeatures.Debugger),
-            type.GetCustomAttribute<DebuggerTypeProxyAttribute>() != null);
-        Assert.Equal(features.HasFlag(CSharpModelFeatures.StringRepresentation),
-            typeof(IGeneratedSummary).IsAssignableFrom(type));
+        var type = Compile(result.Code!).GetType("Example.Item", true)!;
+        Assert.Equal(features.HasFlag(CSharpModelFeatures.Cloning), typeof(ICloneable).IsAssignableFrom(type));
+        Assert.Equal(features.HasFlag(CSharpModelFeatures.Cloning), type.GetMethod("Clone", Type.EmptyTypes) != null);
         Assert.Equal(features.HasFlag(CSharpModelFeatures.StringRepresentation),
             type.GetMethod("ToString", Type.EmptyTypes)!.DeclaringType == type);
         Assert.Equal(features.HasFlag(CSharpModelFeatures.Equality),
             type.GetMethod("Equals", [typeof(object)])!.DeclaringType == type);
         Assert.Equal(features.HasFlag(CSharpModelFeatures.Equality),
             type.GetMethod("GetHashCode", Type.EmptyTypes)!.DeclaringType == type);
-        if (features == CSharpModelFeatures.None)
-        {
-            Assert.DoesNotContain("BondTools.Models", result.Code!);
-        }
 
         var value = Activator.CreateInstance(type)!;
         type.GetProperty("id")!.SetValue(value, 42);
@@ -61,7 +43,6 @@ public sealed class CSharpMappingFeatureTests
     [Theory]
     [InlineData(CSharpModelFeatures.Cloning)]
     [InlineData(CSharpModelFeatures.Equality)]
-    [InlineData(CSharpModelFeatures.Debugger)]
     [InlineData(CSharpModelFeatures.StringRepresentation)]
     public async Task IncompleteBaseDefinitionsCannotSilentlyProducePartialOperations(CSharpModelFeatures feature)
     {
@@ -75,16 +56,13 @@ public sealed class CSharpMappingFeatureTests
         Assert.Contains(generated.Errors, error => error.Message.Contains("base 'Example.Base'", StringComparison.Ordinal));
     }
 
-    [Theory]
-    [InlineData(CSharpModelFeatures.None)]
-    [InlineData(CSharpModelFeatures.Descriptors)]
-    public async Task ExternalBasesStillSupportPlainModelsAndSymbolicDescriptors(CSharpModelFeatures feature)
+    [Fact]
+    public async Task ExternalBasesStillSupportPlainModels()
     {
         var parsed = await ParserFacade.ParseStringAsync("namespace Example struct Base; struct Child : Base {}");
         Assert.True(parsed.Success);
 
-        var generated = CSharpGenerator.Generate(parsed.Ast!, "child.bond",
-            new CSharpGenerationOptions { ModelFeatures = feature });
+        var generated = CSharpGenerator.Generate(parsed.Ast!, "child.bond");
         Assert.True(generated.Success, string.Join("\n", generated.Errors.Select(error => error.Message)));
         Compile(generated.Code!, """
             namespace Example {
@@ -102,17 +80,9 @@ public sealed class CSharpMappingFeatureTests
             namespace Contracts
             namespace csharp Application
             struct Item { 0: int32 id; }
-            """, new CSharpGenerationOptions
-        {
-            ModelFeatures = CSharpModelFeatures.Descriptors,
-            NamespaceMappings = ["Application=Renamed"]
-        });
+            """, new CSharpGenerationOptions { NamespaceMappings = ["Application=Renamed"] });
         Assert.True(result.Success, Messages(result));
-        var assembly = Compile(result.Code!);
-        var type = assembly.GetType("Renamed.Item", true)!;
-        var descriptor = ((IGeneratedSchemaProvider)Activator.CreateInstance(type)!).Descriptor;
-        Assert.Equal("Contracts.Item", descriptor.FullName);
-        Assert.Equal("global::Renamed.Item", descriptor.ClrName);
+        var type = Compile(result.Code!).GetType("Renamed.Item", true)!;
         Assert.Contains("\"qualified_name\":\"Contracts.Item\"", SchemaJson(type));
     }
 
@@ -305,7 +275,6 @@ public sealed class CSharpMappingFeatureTests
             ]
         });
         Assert.True(result.Success, Messages(result));
-        Assert.DoesNotContain("BondTools.Models", result.Code!);
         var assembly = Compile(result.Code!, """
             namespace Example
             {
@@ -406,8 +375,8 @@ public sealed class CSharpMappingFeatureTests
     [InlineData("type", "Example.Value=System.Collections.Generic.List<{x}>")]
     [InlineData("type", "Example.Value=System.Collections.Generic.List<{1}>")]
     [InlineData("type", "Example.Value=System.Collections.Generic.List<")]
-    [InlineData("type", "Example.Value=UnqualifiedType")]
-    [InlineData("type", "Example.Value=global::int")]
+    [InlineData("type", "Example.Value=System.Collections.Generic.List<int>>")]
+    [InlineData("type", "Example.Value=System.DateTime\nclass Injected {}")]
     public async Task MalformedMappingsFailBeforeEmittingCode(string kind, string specification)
     {
         var options = kind == "namespace"

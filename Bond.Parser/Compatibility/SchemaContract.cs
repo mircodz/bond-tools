@@ -30,8 +30,7 @@ internal sealed record ContractMethod(string Name, string Kind, TypeShape Input,
 // Only type expressions are recursive; named types never contain declaration bodies.
 internal sealed record TypeShape(string Kind, string? Name, long? Integer, IReadOnlyList<TypeShape> Arguments)
 {
-    internal static TypeShape Of(string kind, params TypeShape[] arguments) =>
-        new(kind, null, null, Array.AsReadOnly(arguments));
+    internal static TypeShape Of(string kind, params TypeShape[] arguments) => new(kind, null, null, arguments);
 
     internal bool Same(TypeShape? other) => other is not null && Kind == other.Kind && Name == other.Name
         && Integer == other.Integer && Arguments.Count == other.Arguments.Count

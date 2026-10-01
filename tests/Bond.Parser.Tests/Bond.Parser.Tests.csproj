@@ -29,7 +29,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\Bond.Models\Bond.Models.csproj" />
     <ProjectReference Include="..\..\Bond.Parser\Bond.Parser.csproj" />
   </ItemGroup>
 

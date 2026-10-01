@@ -59,8 +59,8 @@ internal sealed class SchemaContractBuilder(bool includeImports, bool allowUnres
             Shape(alias.AliasedType, Parameters(alias), new HashSet<Declaration>(ReferenceEqualityComparer.Instance) { alias }, Identity(alias));
         }
 
-        return Normalize(new SchemaContract(includeImports, allowUnresolvedTypes,
-            _declarations.Values.Select(Project).ToArray()));
+        return new SchemaContract(includeImports, allowUnresolvedTypes,
+            _declarations.Values.Select(Project).OrderBy(declaration => declaration.Name, StringComparer.Ordinal).ToArray());
     }
 
     internal static string Identity(Declaration declaration)
@@ -188,7 +188,9 @@ internal sealed class SchemaContractBuilder(bool includeImports, bool allowUnres
             .ToArray();
 
         return new ContractDeclaration(name, declarationKind, _roots.Contains(name), constraints,
-            baseType is null ? null : Type(baseType), fields, _enums.GetValueOrDefault(name) ?? [], methods);
+            baseType is null ? null : Type(baseType), fields,
+            (_enums.GetValueOrDefault(name) ?? []).OrderBy(constant => constant.Name, StringComparer.Ordinal).ToArray(),
+            methods.OrderBy(method => method.Name, StringComparer.Ordinal).ToArray());
     }
 
     private IReadOnlyList<ContractField> ProjectFields(StructDeclaration declaration, Dictionary<string, TypeShape> parameters)
@@ -238,7 +240,7 @@ internal sealed class SchemaContractBuilder(bool includeImports, bool allowUnres
                 type, DefaultValue(field.DefaultValue, type, declaration)));
         }
 
-        return fields;
+        return fields.OrderBy(field => field.Ordinal).ToArray();
     }
 
     private TypeShape Shape(BondType type, Dictionary<string, TypeShape> parameters,
@@ -279,12 +281,12 @@ internal sealed class SchemaContractBuilder(bool includeImports, bool allowUnres
                         _enums.Add(Identity(enumeration), EnumValues(enumeration));
                     }
 
-                    return new TypeShape(kind, Identity(declaration), null, ReadOnly(arguments));
+                    return new TypeShape(kind, Identity(declaration), null, arguments);
                 }
             case BondType.UnresolvedType unresolved:
                 Require(allowUnresolvedTypes, $"Unresolved type '{string.Join(".", unresolved.QualifiedName)}'. Resolve imports or explicitly allow unresolved types.",
                     location, DiagnosticIds.UnresolvedType);
-                return new TypeShape("unresolved", string.Join(".", unresolved.QualifiedName), null, ReadOnly(unresolved.TypeArguments.Select(Child)));
+                return new TypeShape("unresolved", string.Join(".", unresolved.QualifiedName), null, unresolved.TypeArguments.Select(Child).ToArray());
             case BondType.TypeParameter parameter:
                 Require(parameters.TryGetValue(parameter.Param.Name, out var substitution), $"Unknown type parameter '{parameter.Param.Name}'.", location);
                 return substitution!;
@@ -350,7 +352,7 @@ internal sealed class SchemaContractBuilder(bool includeImports, bool allowUnres
             next = (long)value + 1;
         }
 
-        return ReadOnly(values);
+        return values;
     }
 
     private ContractDefault DefaultValue(Default? value, TypeShape type, Declaration owner)
@@ -425,6 +427,7 @@ internal sealed class SchemaContractBuilder(bool includeImports, bool allowUnres
             number = (float)number;
         }
 
+        Require(double.IsFinite(number), $"Default value is out of range for '{type.Kind}'.");
         return new ContractDefault("float", number.ToString("R", CultureInfo.InvariantCulture));
     }
 }

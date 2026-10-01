@@ -27,7 +27,6 @@
       <IncludeAssets>compile; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
     <ProjectReference Include="../Bond.Parser/Bond.Parser.csproj" PrivateAssets="all" />
-    <None Include="build/BondTools.Build.props" Pack="true" PackagePath="build/" />
     <None Include="build/BondTools.Build.targets" Pack="true" PackagePath="build/" />
     <None Include="README.md" Pack="true" PackagePath="/" />
     <None Include="../LICENSE" Pack="true" PackagePath="/" />
