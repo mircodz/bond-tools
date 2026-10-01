@@ -5,16 +5,15 @@
 ## Intel i7-12700KF
 
 ```
-
 BenchmarkDotNet v0.15.8, Linux Arch Linux
 12th Gen Intel Core i7-12700KF 0.80GHz, 1 CPU, 20 logical and 12 physical cores
 .NET SDK 10.0.110
   [Host]     : .NET 10.0.10 (10.0.10, 42.42.42.42424), X64 RyuJIT x86-64-v3
   Job-DRYOBN : .NET 10.0.10 (10.0.10, 42.42.42.42424), X64 RyuJIT x86-64-v3
 
-IterationCount=12  LaunchCount=1  WarmupCount=6  
-
+IterationCount=12  LaunchCount=1  WarmupCount=6
 ```
+
 | Method                    | Categories                 | Mean        | Error    | StdDev   | Ratio | RatioSD | Gen0   | Gen1   | Allocated | Alloc Ratio |
 |-------------------------- |--------------------------- |------------:|---------:|---------:|------:|--------:|-------:|-------:|----------:|------------:|
 | ReadDoubles               | 1,000 double, read         |  1,433.2 ns | 18.36 ns | 14.34 ns |  1.00 |    0.01 | 0.6180 | 0.0172 |    8080 B |        1.00 |
@@ -47,33 +46,32 @@ IterationCount=12  LaunchCount=1  WarmupCount=6
 | WriteOrder                | Order, write               |    339.9 ns |  2.42 ns |  1.89 ns |  1.00 |    0.01 |      - |      - |         - |          NA |
 | WriteOrderUpstream        | Order, write               |    597.5 ns |  3.08 ns |  2.23 ns |  1.76 |    0.01 | 0.0114 |      - |     152 B |          NA |
 |                           |                            |             |          |          |       |         |        |        |           |             |
-| ReadIntDoubleMap          | map&lt;int32, double&gt;, read   |    598.8 ns |  7.47 ns |  5.83 ns |  1.00 |    0.01 | 0.2413 | 0.0019 |    3152 B |        1.00 |
-| ReadIntDoubleMapUpstream  | map&lt;int32, double&gt;, read   |  1,740.0 ns | 20.98 ns | 16.38 ns |  2.91 |    0.04 | 0.7801 | 0.0172 |   10216 B |        3.24 |
+| ReadIntDoubleMap          | map<int32, double>, read   |    598.8 ns |  7.47 ns |  5.83 ns |  1.00 |    0.01 | 0.2413 | 0.0019 |    3152 B |        1.00 |
+| ReadIntDoubleMapUpstream  | map<int32, double>, read   |  1,740.0 ns | 20.98 ns | 16.38 ns |  2.91 |    0.04 | 0.7801 | 0.0172 |   10216 B |        3.24 |
 |                           |                            |             |          |          |       |         |        |        |           |             |
-| WriteIntDoubleMap         | map&lt;int32, double&gt;, write  |    258.0 ns |  1.38 ns |  1.00 ns |  1.00 |    0.01 |      - |      - |         - |          NA |
-| WriteIntDoubleMapUpstream | map&lt;int32, double&gt;, write  |  1,102.8 ns |  8.47 ns |  6.62 ns |  4.27 |    0.03 | 0.0038 |      - |      56 B |          NA |
+| WriteIntDoubleMap         | map<int32, double>, write  |    258.0 ns |  1.38 ns |  1.00 ns |  1.00 |    0.01 |      - |      - |         - |          NA |
+| WriteIntDoubleMapUpstream | map<int32, double>, write  |  1,102.8 ns |  8.47 ns |  6.62 ns |  4.27 |    0.03 | 0.0038 |      - |      56 B |          NA |
 |                           |                            |             |          |          |       |         |        |        |           |             |
-| ReadStringMap             | map&lt;string, string&gt;, read  |  2,790.7 ns |  9.54 ns |  7.45 ns |  1.00 |    0.00 | 0.8469 | 0.0305 |   11072 B |        1.00 |
-| ReadStringMapUpstream     | map&lt;string, string&gt;, read  |  3,899.6 ns | 33.16 ns | 25.89 ns |  1.40 |    0.01 | 1.3809 | 0.0687 |   18136 B |        1.64 |
+| ReadStringMap             | map<string, string>, read  |  2,790.7 ns |  9.54 ns |  7.45 ns |  1.00 |    0.00 | 0.8469 | 0.0305 |   11072 B |        1.00 |
+| ReadStringMapUpstream     | map<string, string>, read  |  3,899.6 ns | 33.16 ns | 25.89 ns |  1.40 |    0.01 | 1.3809 | 0.0687 |   18136 B |        1.64 |
 |                           |                            |             |          |          |       |         |        |        |           |             |
-| WriteStringMap            | map&lt;string, string&gt;, write |  1,570.0 ns |  9.58 ns |  6.92 ns |  1.00 |    0.01 |      - |      - |         - |          NA |
-| WriteStringMapUpstream    | map&lt;string, string&gt;, write |  2,935.5 ns | 23.54 ns | 18.38 ns |  1.87 |    0.01 | 0.0038 |      - |      56 B |          NA |
+| WriteStringMap            | map<string, string>, write |  1,570.0 ns |  9.58 ns |  6.92 ns |  1.00 |    0.01 |      - |      - |         - |          NA |
+| WriteStringMapUpstream    | map<string, string>, write |  2,935.5 ns | 23.54 ns | 18.38 ns |  1.87 |    0.01 | 0.0038 |      - |      56 B |          NA |
 
 ## Apple M4 Pro
 
 ```
-
 BenchmarkDotNet v0.15.8, macOS Tahoe 26.2 (25C56) [Darwin 25.2.0]
 Apple M4 Pro, 1 CPU, 14 logical and 14 physical cores
 .NET SDK 10.0.103
   [Host]     : .NET 10.0.3 (10.0.3, 10.0.326.7603), Arm64 RyuJIT armv8.0-a
   Job-DRYOBN : .NET 10.0.3 (10.0.3, 10.0.326.7603), Arm64 RyuJIT armv8.0-a
 
-IterationCount=12  LaunchCount=1  WarmupCount=6  
-
+IterationCount=12  LaunchCount=1  WarmupCount=6
 ```
-| Method                    | Categories                 | Mean        | Error     | StdDev    | Ratio | RatioSD | Gen0   | Gen1   | Allocated | Alloc Ratio |
-|-------------------------- |--------------------------- |------------:|----------:|----------:|------:|--------:|-------:|-------:|----------:|------------:|
+
+| Method                    | Categories                 |        Mean |     Error |    StdDev | Ratio | RatioSD |   Gen0 |   Gen1 | Allocated | Alloc Ratio |
+|---------------------------|----------------------------|------------:|----------:|----------:|------:|--------:|-------:|-------:|----------:|------------:|
 | ReadDoubles               | 1,000 double, read         |  1,157.7 ns |  13.61 ns |  10.62 ns |  1.00 |    0.01 | 0.9651 | 0.0267 |    8080 B |        1.00 |
 | ReadDoublesUpstream       | 1,000 double, read         |  3,892.9 ns |  49.55 ns |  38.69 ns |  3.36 |    0.04 | 0.9613 | 0.0229 |    8080 B |        1.00 |
 |                           |                            |             |           |           |       |         |        |        |           |             |
@@ -104,14 +102,14 @@ IterationCount=12  LaunchCount=1  WarmupCount=6
 | WriteOrder                | Order, write               |    267.0 ns |   2.53 ns |   1.97 ns |  1.00 |    0.01 |      - |      - |         - |          NA |
 | WriteOrderUpstream        | Order, write               |    442.1 ns |   2.40 ns |   1.88 ns |  1.66 |    0.01 | 0.0181 |      - |     152 B |          NA |
 |                           |                            |             |           |           |       |         |        |        |           |             |
-| ReadIntDoubleMap          | map&lt;int32, double&gt;, read   |    440.3 ns |   5.00 ns |   3.90 ns |  1.00 |    0.01 | 0.3767 | 0.0043 |    3152 B |        1.00 |
-| ReadIntDoubleMapUpstream  | map&lt;int32, double&gt;, read   |  1,759.1 ns |  17.64 ns |  12.76 ns |  4.00 |    0.04 | 1.2207 | 0.0191 |   10216 B |        3.24 |
+| ReadIntDoubleMap          | map<int32, double>, read   |    440.3 ns |   5.00 ns |   3.90 ns |  1.00 |    0.01 | 0.3767 | 0.0043 |    3152 B |        1.00 |
+| ReadIntDoubleMapUpstream  | map<int32, double>, read   |  1,759.1 ns |  17.64 ns |  12.76 ns |  4.00 |    0.04 | 1.2207 | 0.0191 |   10216 B |        3.24 |
 |                           |                            |             |           |           |       |         |        |        |           |             |
-| WriteIntDoubleMap         | map&lt;int32, double&gt;, write  |    224.4 ns |   1.37 ns |   1.07 ns |  1.00 |    0.01 |      - |      - |         - |          NA |
-| WriteIntDoubleMapUpstream | map&lt;int32, double&gt;, write  |    789.5 ns |   5.75 ns |   4.49 ns |  3.52 |    0.03 | 0.0067 |      - |      56 B |          NA |
+| WriteIntDoubleMap         | map<int32, double>, write  |    224.4 ns |   1.37 ns |   1.07 ns |  1.00 |    0.01 |      - |      - |         - |          NA |
+| WriteIntDoubleMapUpstream | map<int32, double>, write  |    789.5 ns |   5.75 ns |   4.49 ns |  3.52 |    0.03 | 0.0067 |      - |      56 B |          NA |
 |                           |                            |             |           |           |       |         |        |        |           |             |
-| ReadStringMap             | map&lt;string, string&gt;, read  |  2,632.0 ns |  20.10 ns |  14.54 ns |  1.00 |    0.01 | 1.3199 | 0.0496 |   11072 B |        1.00 |
-| ReadStringMapUpstream     | map&lt;string, string&gt;, read  |  3,342.2 ns |  36.69 ns |  28.65 ns |  1.27 |    0.01 | 2.1667 | 0.1068 |   18136 B |        1.64 |
+| ReadStringMap             | map<string, string>, read  |  2,632.0 ns |  20.10 ns |  14.54 ns |  1.00 |    0.01 | 1.3199 | 0.0496 |   11072 B |        1.00 |
+| ReadStringMapUpstream     | map<string, string>, read  |  3,342.2 ns |  36.69 ns |  28.65 ns |  1.27 |    0.01 | 2.1667 | 0.1068 |   18136 B |        1.64 |
 |                           |                            |             |           |           |       |         |        |        |           |             |
-| WriteStringMap            | map&lt;string, string&gt;, write |  1,096.7 ns |   9.43 ns |   7.36 ns |  1.00 |    0.01 |      - |      - |         - |          NA |
-| WriteStringMapUpstream    | map&lt;string, string&gt;, write |  1,961.1 ns |  17.54 ns |  12.68 ns |  1.79 |    0.02 | 0.0038 |      - |      56 B |          NA |
+| WriteStringMap            | map<string, string>, write |  1,096.7 ns |   9.43 ns |   7.36 ns |  1.00 |    0.01 |      - |      - |         - |          NA |
+| WriteStringMapUpstream    | map<string, string>, write |  1,961.1 ns |  17.54 ns |  12.68 ns |  1.79 |    0.02 | 0.0038 |      - |      56 B |          NA |

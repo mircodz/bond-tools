@@ -7,11 +7,9 @@ byte[] bytes = order.Serialize();          // also Serialize(IBufferWriter<byte>
 Order copy = Order.Deserialize(bytes);     // also ReadOnlySequence<byte> and Stream
 ```
 
-Every struct implements `IBondStruct<T>`, so generic code can call `T.Deserialize(...)`.
-
 ## Generic structs
 
-A generic struct takes a codec for each type parameter, because the C# type alone does not determine the Bond type (`string` is either `string` or `wstring`). Fields of other structs pass the codecs for you; at the top level:
+A generic struct takes a codec for each type parameter:
 
 ```csharp
 var codec = BondCodec.Struct<Order>();
