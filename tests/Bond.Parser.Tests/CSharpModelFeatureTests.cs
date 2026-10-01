@@ -263,34 +263,6 @@ public sealed class CSharpModelFeatureTests
         Assert.True(CSharpGenerator.Generate(parsed.Ast!, "input.bond").Success);
     }
 
-    private static async Task Run(string schema, string body, string extra = "")
-    {
-        var scenario = $$"""
-            using System;
-            using System.Collections.Generic;
-            using System.Linq;
-
-            public static class Scenario
-            {
-                private static void Require(bool condition, string message)
-                {
-                    if (!condition)
-                    {
-                        throw new Exception(message);
-                    }
-                }
-
-                public static void Run()
-                {
-                    {{body}}
-                }
-            }
-
-            {{extra}}
-            """;
-
-        var assembly = Compile(await Generate(schema), scenario);
-        var run = assembly.GetType("Scenario", true)!.GetMethod("Run")!.CreateDelegate<Action>();
-        run();
-    }
+    private static async Task Run(string schema, string body, string extra = "") =>
+        RunScenario(await Generate(schema), body, extra);
 }

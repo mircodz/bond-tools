@@ -30,6 +30,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\Bond.Parser\Bond.Parser.csproj" />
+    <ProjectReference Include="..\..\Bond.Runtime\Bond.Runtime.csproj" />
   </ItemGroup>
 
   <ItemGroup>

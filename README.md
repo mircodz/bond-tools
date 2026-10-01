@@ -15,9 +15,7 @@ bond format schema.bond --check
 ## C# generation
 
 ```bash
-bond generate csharp MyApp/order.bond -o MyApp/Generated --clone --equality --to-string
+bond generate csharp MyApp/order.bond -o MyApp/Generated --clone --equality --to-string --serialization
 ```
 
-Generated models need only `Bond.Runtime.CSharp`. `--clone`, `--equality` and `--to-string` add deep `Clone()`,
-structural `Equals()`/`GetHashCode()` and `ToString()`. For generation during `dotnet build`, see
-[BondTools.Build](Bond.Build/README.md).
+More: [BondTools.Runtime](Bond.Runtime/README.md).

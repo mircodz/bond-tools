@@ -133,16 +133,21 @@ public static partial class CSharpGenerator
             var callBaseConstructor = bases.Any(declaration =>
                 declaration.Fields.Any(field => IsMetaType(UnwrapAlias(field.Type, field.Location))));
             var name = Identifier(structure.Name, structure.Location, typeName: true);
+            var self = QualifiedName(structure) + TypeArguments(structure.TypeParameters.Select(parameter =>
+                Identifier(parameter.Name, structure.Location, typeName: true)));
 
-            EmitStructDeclaration(structure, name);
+            EmitStructDeclaration(structure, name, self);
             var initializers = EmitStructProperties(structure, inheritedNames);
             EmitStructConstructors(structure, name, callBaseConstructor, initializers);
 
             if (options.GenerateModelFeatures)
             {
-                var self = QualifiedName(structure) + TypeArguments(structure.TypeParameters.Select(parameter =>
-                    Identifier(parameter.Name, structure.Location, typeName: true)));
                 EmitModelMembers(structure, self);
+            }
+
+            if (options.Serialization)
+            {
+                EmitSerialization(structure, self);
             }
 
             Line(1, "}");
@@ -150,7 +155,7 @@ public static partial class CSharpGenerator
             Line(0);
         }
 
-        private void EmitStructDeclaration(StructDeclaration structure, string name)
+        private void EmitStructDeclaration(StructDeclaration structure, string name, string self)
         {
             var parameters = TypeArguments(structure.TypeParameters.Select(parameter =>
                 Identifier(parameter.Name, structure.Location, typeName: true)));
@@ -159,6 +164,12 @@ public static partial class CSharpGenerator
             if (options.GenerateCloning)
             {
                 baseType += (baseType.Length == 0 ? " : " : ", ") + "global::System.ICloneable";
+            }
+
+            // A generic struct's serialization takes a codec for each type parameter, so it has no IBondStruct methods.
+            if (options.Serialization && structure.TypeParameters.Length == 0)
+            {
+                baseType += (baseType.Length == 0 ? " : " : ", ") + $"global::BondTools.Runtime.IBondStruct<{self}>";
             }
 
             BeginNamespace(structure);

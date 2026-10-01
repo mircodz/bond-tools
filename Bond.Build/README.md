@@ -4,10 +4,10 @@ Generates C# for `Bond` items during `dotnet build` (.NET 8+ SDK).
 
 ```xml
 <PropertyGroup>
-  <!-- Optional defaults; each can also be set per item as metadata, e.g. <Bond Include="..." Clone="true" />. -->
   <BondClone>true</BondClone>
   <BondEquality>true</BondEquality>
   <BondToString>true</BondToString>
+  <BondSerialization>true</BondSerialization>
   <BondImportDirectories>Schemas/Shared</BondImportDirectories>
   <BondUsings>System.Collections.Generic</BondUsings>
   <BondNamespaceMappings>Contracts=MyApp.Contracts</BondNamespaceMappings>
