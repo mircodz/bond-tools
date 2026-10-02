@@ -2,7 +2,10 @@ using System;
 using System.Buffers.Binary;
 using System.Diagnostics.CodeAnalysis;
 using System.IO;
+using System.Numerics;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+using System.Runtime.Intrinsics.X86;
 using System.Text;
 
 namespace BondTools.Runtime;
@@ -140,7 +143,10 @@ public ref struct CompactBinaryReader
     public string ReadString(WireType type)
     {
         Expect(type, WireType.String);
-        return Encoding.UTF8.GetString(Take(ReadLength()));
+        var bytes = Take(ReadLength());
+
+        // ASCII, the common case, is widened as Latin-1, which decodes it as UTF-8 does, only faster.
+        return Ascii.IsValid(bytes) ? Encoding.Latin1.GetString(bytes) : Encoding.UTF8.GetString(bytes);
     }
 
     /// <summary>Reads a UTF-16 string.</summary>
@@ -234,7 +240,8 @@ public ref struct CompactBinaryReader
                 _depth--;
                 break;
             default:
-                throw new InvalidDataException($"Invalid Bond wire type {(byte)type}.");
+                ThrowUnknownType(type);
+                break;
         }
     }
 
@@ -264,7 +271,7 @@ public ref struct CompactBinaryReader
     {
         if (++_depth > MaxDepth)
         {
-            throw new InvalidDataException($"Bond payload is nested deeper than {MaxDepth} levels.");
+            ThrowTooDeep();
         }
     }
 
@@ -328,7 +335,7 @@ public ref struct CompactBinaryReader
         var length = ReadVarUInt32();
         if (length > int.MaxValue)
         {
-            throw new InvalidDataException("Bond length is out of range.");
+            ThrowLengthOutOfRange();
         }
 
         return (int)length;
@@ -347,32 +354,132 @@ public ref struct CompactBinaryReader
         return (int)count;
     }
 
-    // Most varints are one byte: those are read inline.
+    // Varints of one or two bytes (values below 2^14) are read inline, longer ones out of line. Written out once per
+    // width: shared helpers measured slower.
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private ushort ReadVarUInt16() => TryReadOneByte(out var value) ? value : (ushort)ReadVarUInt(lastByte: 2);
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private uint ReadVarUInt32() => TryReadOneByte(out var value) ? value : (uint)ReadVarUInt(lastByte: 4);
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private ulong ReadVarUInt64() => TryReadOneByte(out var value) ? value : ReadVarUInt(lastByte: 8);
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private bool TryReadOneByte(out byte value)
+    private ushort ReadVarUInt16()
     {
-        if ((uint)_position < (uint)_data.Length && _data[_position] < 0x80)
+        var position = _position;
+        var data = _data;
+        if ((uint)position + 1 < (uint)data.Length)
         {
-            value = _data[_position++];
-            return true;
+            ref var p = ref Unsafe.Add(ref MemoryMarshal.GetReference(data), position);
+            uint value = p;
+            if (value < 0x80)
+            {
+                _position = position + 1;
+                return (ushort)value;
+            }
+
+            uint next = Unsafe.Add(ref p, 1);
+            if (next < 0x80)
+            {
+                _position = position + 2;
+                return (ushort)((value & 0x7F) | (next << 7));
+            }
         }
 
-        value = 0;
-        return false;
+        return (ushort)ReadVarUInt(lastByte: 2);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private uint ReadVarUInt32()
+    {
+        var position = _position;
+        var data = _data;
+        if ((uint)position + 1 < (uint)data.Length)
+        {
+            ref var p = ref Unsafe.Add(ref MemoryMarshal.GetReference(data), position);
+            uint value = p;
+            if (value < 0x80)
+            {
+                _position = position + 1;
+                return value;
+            }
+
+            uint next = Unsafe.Add(ref p, 1);
+            if (next < 0x80)
+            {
+                _position = position + 2;
+                return (value & 0x7F) | (next << 7);
+            }
+        }
+
+        return ReadVarUInt32Slow();
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private ulong ReadVarUInt64()
+    {
+        var position = _position;
+        var data = _data;
+        if ((uint)position + 1 < (uint)data.Length)
+        {
+            ref var p = ref Unsafe.Add(ref MemoryMarshal.GetReference(data), position);
+            ulong value = p;
+            if (value < 0x80)
+            {
+                _position = position + 1;
+                return value;
+            }
+
+            ulong next = Unsafe.Add(ref p, 1);
+            if (next < 0x80)
+            {
+                _position = position + 2;
+                return (value & 0x7F) | (next << 7);
+            }
+        }
+
+        return ReadVarUInt64Slow();
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private uint ReadVarUInt32Slow()
+    {
+        var position = _position;
+        if (FastPdep.IsSupported && _data.Length - position >= 8)
+        {
+            // Ends at the first byte that does not continue, or at the fifth, whose high bits fall off the uint.
+            var bytes = Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref MemoryMarshal.GetReference(_data), position));
+            var length = (BitOperations.TrailingZeroCount((~bytes & 0x80_8080_8080UL) | 0x80_0000_0000UL) + 1) >> 3;
+            _position = position + length;
+            return (uint)Bmi2.X64.ParallelBitExtract(Bmi2.X64.ZeroHighBits(bytes, (ulong)length * 8), 0x7F_7F7F_7F7FUL);
+        }
+
+        return (uint)ReadVarUInt(lastByte: 4);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private ulong ReadVarUInt64Slow()
+    {
+        var position = _position;
+        if (FastPdep.IsSupported && _data.Length - position >= 10)
+        {
+            const ulong Payload = 0x7F7F_7F7F_7F7F_7F7FUL;
+            ref var p = ref Unsafe.Add(ref MemoryMarshal.GetReference(_data), position);
+            var bytes = Unsafe.ReadUnaligned<ulong>(ref p);
+            var ends = ~bytes & 0x8080_8080_8080_8080UL;
+            if (ends != 0)
+            {
+                var length = (BitOperations.TrailingZeroCount(ends) + 1) >> 3;
+                _position = position + length;
+                return Bmi2.X64.ParallelBitExtract(Bmi2.X64.ZeroHighBits(bytes, (ulong)length * 8), Payload);
+            }
+
+            // Eight bytes continue: the ninth is taken whole, and a tenth skipped if the ninth continues too.
+            ulong ninth = Unsafe.Add(ref p, 8);
+            _position = position + (ninth >= 0x80 ? 10 : 9);
+            return Bmi2.X64.ParallelBitExtract(bytes, Payload) | (ninth << 56);
+        }
+
+        return ReadVarUInt(lastByte: 8);
     }
 
     // Where the longest varint of the type fits in the remaining data: at most lastByte + 1 bytes, the last taken
     // whole (and for 64 bits, a tenth skipped if the ninth continues), never rejected as too long. Near the end of the
     // data: up to ten bytes, each checked against the end.
+    [MethodImpl(MethodImplOptions.NoInlining)]
     private ulong ReadVarUInt(int lastByte)
     {
         var longest = lastByte == 8 ? 10 : lastByte + 1;
@@ -435,4 +542,15 @@ public ref struct CompactBinaryReader
     [DoesNotReturn]
     private static void ThrowInvalidType(WireType expected, WireType actual) =>
         throw new InvalidDataException($"Invalid Bond wire type {actual}, expected {expected}.");
+
+    [DoesNotReturn]
+    private static void ThrowUnknownType(WireType type) =>
+        throw new InvalidDataException($"Invalid Bond wire type {(byte)type}.");
+
+    [DoesNotReturn]
+    private static void ThrowTooDeep() =>
+        throw new InvalidDataException($"Bond payload is nested deeper than {MaxDepth} levels.");
+
+    [DoesNotReturn]
+    private static void ThrowLengthOutOfRange() => throw new InvalidDataException("Bond length is out of range.");
 }

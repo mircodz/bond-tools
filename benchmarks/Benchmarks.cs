@@ -13,7 +13,7 @@ using UpstreamWriter = Bond.Protocols.CompactBinaryWriter<Bond.IO.Unsafe.OutputB
 [MemoryDiagnoser]
 [GroupBenchmarksBy(BenchmarkLogicalGroupRule.ByCategory)]
 [CategoriesColumn]
-[SimpleJob(launchCount: 1, warmupCount: 6, iterationCount: 12)]
+[SimpleJob(launchCount: 3, warmupCount: 5, iterationCount: 10)]
 public class Benchmarks
 {
     private readonly ArrayBufferWriter<byte> _output = new(64 * 1024);

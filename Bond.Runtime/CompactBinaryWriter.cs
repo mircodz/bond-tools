@@ -1,7 +1,13 @@
 using System;
 using System.Buffers;
 using System.Buffers.Binary;
+using System.Diagnostics.CodeAnalysis;
+using System.Numerics;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+using System.Runtime.Intrinsics.X86;
 using System.Text;
+using System.Text.Unicode;
 
 namespace BondTools.Runtime;
 
@@ -12,6 +18,9 @@ public ref struct CompactBinaryWriter
     private const int MinimumBufferSize = 256;
 
     private const int MaxVarIntSize = 10;
+
+    // The longest string whose UTF-8 bytes, at most 3 per character, have a length of at most two bytes.
+    private const int MaxSinglePassLength = 0x3FFF / 3;
 
     private readonly IBufferWriter<byte> _output;
     private Span<byte> _buffer;
@@ -105,12 +114,65 @@ public ref struct CompactBinaryWriter
     /// <remarks>Invalid UTF-16 is replaced with U+FFFD, as <see cref="Encoding.UTF8"/> does.</remarks>
     public void WriteString(string value)
     {
-        var size = Encoding.UTF8.GetByteCount(value);
-        WriteVarUInt64((uint)size);
+        // ASCII, the common case, takes one narrowing pass: its byte count is its length.
+        var length = value.Length;
+        if (length < 0x4000)
+        {
+            var prefix = length < 0x80 ? 1 : 2;
+            var destination = Reserve(prefix + length);
+            if (Ascii.FromUtf16(value, destination[prefix..], out _) == OperationStatus.Done)
+            {
+                WritePrefix(destination, prefix, length);
+                _position += prefix + length;
+                return;
+            }
+        }
+
+        WriteUtf8String(value);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private void WriteUtf8String(string value)
+    {
+        var length = value.Length;
+        if (length <= MaxSinglePassLength)
+        {
+            // Encoded once, after room for the longest prefix it can need, then moved back if the prefix is shorter.
+            var room = length * 3;
+            var prefix = room < 0x80 ? 1 : 2;
+            var destination = Reserve(prefix + room);
+            Utf8.FromUtf16(value, destination[prefix..], out _, out var size, replaceInvalidSequences: true);
+            if (prefix == 2 && size < 0x80)
+            {
+                destination.Slice(2, size).CopyTo(destination[1..]);
+                prefix = 1;
+            }
+
+            WritePrefix(destination, prefix, size);
+            _position += prefix + size;
+            return;
+        }
+
+        var count = Encoding.UTF8.GetByteCount(value);
+        WriteVarUInt64((uint)count);
 
         // Reserve before reading the position: it may move to a new buffer and reset the position.
-        var destination = Reserve(size);
-        _position += Encoding.UTF8.GetBytes(value, destination);
+        var bytes = Reserve(count);
+        _position += Encoding.UTF8.GetBytes(value, bytes);
+    }
+
+    // A string's length in bytes as a one- or two-byte varint.
+    private static void WritePrefix(Span<byte> destination, int prefix, int size)
+    {
+        if (prefix == 1)
+        {
+            destination[0] = (byte)size;
+        }
+        else
+        {
+            destination[0] = (byte)(size | 0x80);
+            destination[1] = (byte)(size >> 7);
+        }
     }
 
     /// <summary>Writes a UTF-16 string, prefixed with its length in characters.</summary>
@@ -135,18 +197,79 @@ public ref struct CompactBinaryWriter
         _position++;
     }
 
+    // Values below 2^14 (one or two bytes) are written inline, longer ones out of line.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void WriteVarUInt64(ulong value)
     {
-        var destination = Reserve(MaxVarIntSize);
+        var position = _position;
+        var buffer = _buffer;
+        if ((uint)position + 1 < (uint)buffer.Length)
+        {
+            ref var destination = ref Unsafe.Add(ref MemoryMarshal.GetReference(buffer), position);
+            if (value < 0x80)
+            {
+                destination = (byte)value;
+                _position = position + 1;
+                return;
+            }
+
+            if (value < 0x4000)
+            {
+                destination = (byte)(value | 0x80);
+                Unsafe.Add(ref destination, 1) = (byte)(value >> 7);
+                _position = position + 2;
+                return;
+            }
+        }
+
+        WriteVarUInt64Slow(value);
+    }
+
+    // Also reached for short values when the buffer is nearly full.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private void WriteVarUInt64Slow(ulong value)
+    {
+        ref var destination = ref MemoryMarshal.GetReference(Reserve(MaxVarIntSize));
+        if (FastPdep.IsSupported && value >= 0x4000)
+        {
+            _position += Deposit(ref destination, value);
+            return;
+        }
+
         var size = 0;
         while (value >= 0x80)
         {
-            destination[size++] = (byte)(value | 0x80);
+            Unsafe.Add(ref destination, size++) = (byte)(value | 0x80);
             value >>= 7;
         }
 
-        destination[size++] = (byte)value;
+        Unsafe.Add(ref destination, size++) = (byte)value;
         _position += size;
+    }
+
+    // Spreads the value's 7-bit groups over bytes with pdep, setting the continuation bit on all but the last.
+    private static int Deposit(ref byte destination, ulong value)
+    {
+        const ulong Continues = 0x8080_8080_8080_8080UL;
+        var size = (70 - BitOperations.LeadingZeroCount(value)) / 7;
+        var groups = Bmi2.X64.ParallelBitDeposit(value, 0x7F7F_7F7F_7F7F_7F7FUL);
+        if (size <= 8)
+        {
+            Unsafe.WriteUnaligned(ref destination, groups | Bmi2.X64.ZeroHighBits(Continues, (ulong)(size - 1) * 8));
+            return size;
+        }
+
+        Unsafe.WriteUnaligned(ref destination, groups | Continues);
+        var rest = value >> 56;
+        if (rest < 0x80)
+        {
+            Unsafe.Add(ref destination, 8) = (byte)rest;
+            return 9;
+        }
+
+        Unsafe.Add(ref destination, 8) = (byte)(rest | 0x80);
+        Unsafe.Add(ref destination, 9) = 1;
+        return 10;
     }
 
     // Returns room for at least size bytes at the current position, moving to a new buffer if needed.
@@ -154,17 +277,27 @@ public ref struct CompactBinaryWriter
     {
         if (_buffer.Length - _position < size)
         {
-            _output.Advance(_position);
-            _buffer = _output.GetSpan(Math.Max(size, MinimumBufferSize));
-            _position = 0;
-            if (_buffer.Length < size)
-            {
-                throw new InvalidOperationException("The output returned a buffer smaller than requested.");
-            }
+            Grow(size);
         }
 
         return _buffer[_position..];
     }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private void Grow(int size)
+    {
+        _output.Advance(_position);
+        _buffer = _output.GetSpan(Math.Max(size, MinimumBufferSize));
+        _position = 0;
+        if (_buffer.Length < size)
+        {
+            ThrowBufferTooSmall();
+        }
+    }
+
+    [DoesNotReturn]
+    private static void ThrowBufferTooSmall() =>
+        throw new InvalidOperationException("The output returned a buffer smaller than requested.");
 
     private static uint ZigZag(int value) => (uint)((value << 1) ^ (value >> 31));
 
