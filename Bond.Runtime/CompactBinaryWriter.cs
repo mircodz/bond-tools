@@ -1,6 +1,7 @@
 using System;
 using System.Buffers;
 using System.Buffers.Binary;
+using System.Diagnostics.CodeAnalysis;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -276,17 +277,27 @@ public ref struct CompactBinaryWriter
     {
         if (_buffer.Length - _position < size)
         {
-            _output.Advance(_position);
-            _buffer = _output.GetSpan(Math.Max(size, MinimumBufferSize));
-            _position = 0;
-            if (_buffer.Length < size)
-            {
-                throw new InvalidOperationException("The output returned a buffer smaller than requested.");
-            }
+            Grow(size);
         }
 
         return _buffer[_position..];
     }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private void Grow(int size)
+    {
+        _output.Advance(_position);
+        _buffer = _output.GetSpan(Math.Max(size, MinimumBufferSize));
+        _position = 0;
+        if (_buffer.Length < size)
+        {
+            ThrowBufferTooSmall();
+        }
+    }
+
+    [DoesNotReturn]
+    private static void ThrowBufferTooSmall() =>
+        throw new InvalidOperationException("The output returned a buffer smaller than requested.");
 
     private static uint ZigZag(int value) => (uint)((value << 1) ^ (value >> 31));
 

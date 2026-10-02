@@ -240,7 +240,8 @@ public ref struct CompactBinaryReader
                 _depth--;
                 break;
             default:
-                throw new InvalidDataException($"Invalid Bond wire type {(byte)type}.");
+                ThrowUnknownType(type);
+                break;
         }
     }
 
@@ -270,7 +271,7 @@ public ref struct CompactBinaryReader
     {
         if (++_depth > MaxDepth)
         {
-            throw new InvalidDataException($"Bond payload is nested deeper than {MaxDepth} levels.");
+            ThrowTooDeep();
         }
     }
 
@@ -334,7 +335,7 @@ public ref struct CompactBinaryReader
         var length = ReadVarUInt32();
         if (length > int.MaxValue)
         {
-            throw new InvalidDataException("Bond length is out of range.");
+            ThrowLengthOutOfRange();
         }
 
         return (int)length;
@@ -541,4 +542,15 @@ public ref struct CompactBinaryReader
     [DoesNotReturn]
     private static void ThrowInvalidType(WireType expected, WireType actual) =>
         throw new InvalidDataException($"Invalid Bond wire type {actual}, expected {expected}.");
+
+    [DoesNotReturn]
+    private static void ThrowUnknownType(WireType type) =>
+        throw new InvalidDataException($"Invalid Bond wire type {(byte)type}.");
+
+    [DoesNotReturn]
+    private static void ThrowTooDeep() =>
+        throw new InvalidDataException($"Bond payload is nested deeper than {MaxDepth} levels.");
+
+    [DoesNotReturn]
+    private static void ThrowLengthOutOfRange() => throw new InvalidDataException("Bond length is out of range.");
 }
