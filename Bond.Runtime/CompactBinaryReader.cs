@@ -143,7 +143,10 @@ public ref struct CompactBinaryReader
     public string ReadString(WireType type)
     {
         Expect(type, WireType.String);
-        return Encoding.UTF8.GetString(Take(ReadLength()));
+        var bytes = Take(ReadLength());
+
+        // ASCII, the common case, is widened as Latin-1, which decodes it as UTF-8 does, only faster.
+        return Ascii.IsValid(bytes) ? Encoding.Latin1.GetString(bytes) : Encoding.UTF8.GetString(bytes);
     }
 
     /// <summary>Reads a UTF-16 string.</summary>

@@ -6,6 +6,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics.X86;
 using System.Text;
+using System.Text.Unicode;
 
 namespace BondTools.Runtime;
 
@@ -16,6 +17,9 @@ public ref struct CompactBinaryWriter
     private const int MinimumBufferSize = 256;
 
     private const int MaxVarIntSize = 10;
+
+    // The longest string whose UTF-8 bytes, at most 3 per character, have a length of at most two bytes.
+    private const int MaxSinglePassLength = 0x3FFF / 3;
 
     private readonly IBufferWriter<byte> _output;
     private Span<byte> _buffer;
@@ -109,12 +113,65 @@ public ref struct CompactBinaryWriter
     /// <remarks>Invalid UTF-16 is replaced with U+FFFD, as <see cref="Encoding.UTF8"/> does.</remarks>
     public void WriteString(string value)
     {
-        var size = Encoding.UTF8.GetByteCount(value);
-        WriteVarUInt64((uint)size);
+        // ASCII, the common case, takes one narrowing pass: its byte count is its length.
+        var length = value.Length;
+        if (length < 0x4000)
+        {
+            var prefix = length < 0x80 ? 1 : 2;
+            var destination = Reserve(prefix + length);
+            if (Ascii.FromUtf16(value, destination[prefix..], out _) == OperationStatus.Done)
+            {
+                WritePrefix(destination, prefix, length);
+                _position += prefix + length;
+                return;
+            }
+        }
+
+        WriteUtf8String(value);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private void WriteUtf8String(string value)
+    {
+        var length = value.Length;
+        if (length <= MaxSinglePassLength)
+        {
+            // Encoded once, after room for the longest prefix it can need, then moved back if the prefix is shorter.
+            var room = length * 3;
+            var prefix = room < 0x80 ? 1 : 2;
+            var destination = Reserve(prefix + room);
+            Utf8.FromUtf16(value, destination[prefix..], out _, out var size, replaceInvalidSequences: true);
+            if (prefix == 2 && size < 0x80)
+            {
+                destination.Slice(2, size).CopyTo(destination[1..]);
+                prefix = 1;
+            }
+
+            WritePrefix(destination, prefix, size);
+            _position += prefix + size;
+            return;
+        }
+
+        var count = Encoding.UTF8.GetByteCount(value);
+        WriteVarUInt64((uint)count);
 
         // Reserve before reading the position: it may move to a new buffer and reset the position.
-        var destination = Reserve(size);
-        _position += Encoding.UTF8.GetBytes(value, destination);
+        var bytes = Reserve(count);
+        _position += Encoding.UTF8.GetBytes(value, bytes);
+    }
+
+    // A string's length in bytes as a one- or two-byte varint.
+    private static void WritePrefix(Span<byte> destination, int prefix, int size)
+    {
+        if (prefix == 1)
+        {
+            destination[0] = (byte)size;
+        }
+        else
+        {
+            destination[0] = (byte)(size | 0x80);
+            destination[1] = (byte)(size >> 7);
+        }
     }
 
     /// <summary>Writes a UTF-16 string, prefixed with its length in characters.</summary>
