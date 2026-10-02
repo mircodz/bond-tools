@@ -33,22 +33,22 @@ Mean time per call on an Intel i7-12700KF with .NET 10; upstream is Bond.Runtime
 
 | Write | bond-tools | upstream | Δ |
 |---|--:|--:|--:|
-| Order with nested structs, strings and maps | 297 ns | 586 ns | -49% |
-| 100 small structs | 1.40 µs | 1.95 µs | -28% |
-| 100 `int32` | 99 ns | 228 ns | -56% |
-| 1,000 `double` | 1.05 µs | 1.69 µs | -38% |
-| `map<string, string>`, 100 entries | 1.47 µs | 2.99 µs | -51% |
-| `map<int32, double>`, 100 entries | 203 ns | 1.11 µs | -82% |
-| 4 KB order using most Bond types | 4.10 µs | 6.80 µs | -40% |
+| Order with nested structs, strings and maps | 181 ns | 598 ns | -70% |
+| 100 small structs | 993 ns | 1.99 µs | -50% |
+| 100 `int32` | 99 ns | 231 ns | -57% |
+| 1,000 `double` | 1.05 µs | 1.90 µs | -45% |
+| `map<string, string>`, 100 entries | 650 ns | 2.93 µs | -78% |
+| `map<int32, double>`, 100 entries | 209 ns | 1.13 µs | -82% |
+| 4 KB order using most Bond types | 3.47 µs | 6.76 µs | -49% |
 
 | Read | bond-tools | upstream | Δ |
 |---|--:|--:|--:|
-| Order with nested structs, strings and maps | 617 ns | 792 ns | -22% |
-| 100 small structs | 2.26 µs | 3.34 µs | -32% |
-| 100 `int32` | 182 ns | 344 ns | -47% |
-| 1,000 `double` | 1.44 µs | 3.23 µs | -55% |
-| `map<string, string>`, 100 entries | 2.79 µs | 3.91 µs | -29% |
-| `map<int32, double>`, 100 entries | 513 ns | 1.74 µs | -70% |
-| 4 KB order using most Bond types | 7.52 µs | 11.4 µs | -34% |
+| Order with nested structs, strings and maps | 518 ns | 787 ns | -34% |
+| 100 small structs | 1.96 µs | 3.21 µs | -39% |
+| 100 `int32` | 180 ns | 343 ns | -48% |
+| 1,000 `double` | 1.44 µs | 3.04 µs | -53% |
+| `map<string, string>`, 100 entries | 2.34 µs | 3.89 µs | -40% |
+| `map<int32, double>`, 100 entries | 518 ns | 1.71 µs | -70% |
+| 4 KB order using most Bond types | 7.53 µs | 11.5 µs | -34% |
 
 `dotnet run -c Release --project benchmarks` runs them. [benchmarks/RESULTS.md](../benchmarks/RESULTS.md) has the full results, also for an Apple M4 Pro.
