@@ -1,6 +1,6 @@
-# Results
+# Benchmarks
 
-`dotnet run -c Release --project benchmarks` on .NET 10. Rows ending in `Upstream` are Bond.Runtime.CSharp 13.0.2 with Bond.IO.Unsafe buffers; ratios are against bond-tools. Rows ending in `Into` clear an instance and deserialize into it. The i7 run is pinned to performance cores (`taskset -c 4-15`).
+`dotnet run -c Release --project benchmarks` on .NET 10. Rows ending in `Upstream` are Bond.Runtime.CSharp 13.0.2 with Bond.IO.Unsafe buffers; ratios are against bond-tools. Rows ending in `Into` clear an instance and deserialize into it. The i7 run is pinned to performance cores (`taskset -c 4-11`).
 
 ## Intel i7-12700KF
 
@@ -14,56 +14,56 @@ BenchmarkDotNet v0.15.8, Linux Arch Linux
 IterationCount=10  LaunchCount=3  WarmupCount=5
 ```
 
-| Method                    | Categories                 | Mean         | Error     | StdDev     | Median      | Ratio | RatioSD | Gen0   | Gen1   | Allocated | Alloc Ratio |
-|-------------------------- |--------------------------- |-------------:|----------:|-----------:|------------:|------:|--------:|-------:|-------:|----------:|------------:|
-| ReadDoubles               | 1,000 double, read         |  1,510.65 ns | 34.173 ns |  46.776 ns |  1,496.4 ns |  1.00 |    0.04 | 0.6180 | 0.0172 |    8080 B |        1.00 |
-| ReadDoublesInto           | 1,000 double, read         |  1,175.24 ns |  4.917 ns |   7.360 ns |  1,176.2 ns |  0.78 |    0.02 |      - |      - |         - |        0.00 |
-| ReadDoublesUpstream       | 1,000 double, read         |  3,415.81 ns | 52.240 ns |  78.191 ns |  3,390.1 ns |  2.26 |    0.08 | 0.6180 | 0.0153 |    8080 B |        1.00 |
-|                           |                            |              |           |            |             |       |         |        |        |           |             |
-| WriteDoubles              | 1,000 double, write        |  1,063.57 ns |  3.990 ns |   5.972 ns |  1,065.0 ns |  1.00 |    0.01 |      - |      - |         - |          NA |
-| WriteDoublesUpstream      | 1,000 double, write        |  2,145.64 ns | 11.009 ns |  16.478 ns |  2,141.5 ns |  2.02 |    0.02 |      - |      - |         - |          NA |
-|                           |                            |              |           |            |             |       |         |        |        |           |             |
-| ReadInts                  | 100 int32, read            |    189.82 ns |  1.485 ns |   2.177 ns |    189.9 ns |  1.00 |    0.02 | 0.0367 |      - |     480 B |        1.00 |
-| ReadIntsInto              | 100 int32, read            |    156.63 ns |  3.216 ns |   4.814 ns |    158.6 ns |  0.83 |    0.03 |      - |      - |         - |        0.00 |
-| ReadIntsUpstream          | 100 int32, read            |    376.81 ns |  1.885 ns |   2.643 ns |    377.2 ns |  1.99 |    0.03 | 0.0367 |      - |     480 B |        1.00 |
-|                           |                            |              |           |            |             |       |         |        |        |           |             |
-| WriteInts                 | 100 int32, write           |     99.69 ns |  0.824 ns |   1.234 ns |    100.1 ns |  1.00 |    0.02 |      - |      - |         - |          NA |
-| WriteIntsUpstream         | 100 int32, write           |    217.03 ns |  1.542 ns |   2.260 ns |    217.4 ns |  2.18 |    0.03 |      - |      - |         - |          NA |
-|                           |                            |              |           |            |             |       |         |        |        |           |             |
-| ReadItems                 | 100 structs, read          |  2,079.52 ns | 21.298 ns |  31.219 ns |  2,079.2 ns |  1.00 |    0.02 | 0.6790 | 0.0191 |    8880 B |        1.00 |
-| ReadItemsInto             | 100 structs, read          |  2,158.30 ns | 43.847 ns |  64.270 ns |  2,131.7 ns |  1.04 |    0.03 | 0.6104 | 0.0076 |    8000 B |        0.90 |
-| ReadItemsUpstream         | 100 structs, read          |  3,523.77 ns | 13.104 ns |  18.370 ns |  3,523.4 ns |  1.69 |    0.03 | 0.6790 | 0.0191 |    8880 B |        1.00 |
-|                           |                            |              |           |            |             |       |         |        |        |           |             |
-| WriteItems                | 100 structs, write         |    982.66 ns |  5.722 ns |   8.387 ns |    981.7 ns |  1.00 |    0.01 |      - |      - |         - |          NA |
-| WriteItemsUpstream        | 100 structs, write         |  2,017.28 ns | 10.407 ns |  15.577 ns |  2,018.9 ns |  2.05 |    0.02 |      - |      - |         - |          NA |
-|                           |                            |              |           |            |             |       |         |        |        |           |             |
-| ReadBig                   | 4 KB order, read           |  7,922.17 ns | 84.330 ns | 120.943 ns |  7,894.4 ns |  1.00 |    0.02 | 1.9226 | 0.1373 |   25192 B |        1.00 |
-| ReadBigInto               | 4 KB order, read           |  7,677.05 ns | 58.600 ns |  85.895 ns |  7,673.9 ns |  0.97 |    0.02 | 1.6937 | 0.0610 |   22144 B |        0.88 |
-| ReadBigUpstream           | 4 KB order, read           | 12,069.35 ns | 59.841 ns |  89.567 ns | 12,081.2 ns |  1.52 |    0.03 | 1.8921 | 0.1373 |   24920 B |        0.99 |
-|                           |                            |              |           |            |             |       |         |        |        |           |             |
-| WriteBig                  | 4 KB order, write          |  3,524.98 ns | 20.759 ns |  30.428 ns |  3,518.1 ns |  1.00 |    0.01 |      - |      - |         - |          NA |
-| WriteBigUpstream          | 4 KB order, write          |  7,992.00 ns | 30.172 ns |  45.160 ns |  7,992.7 ns |  2.27 |    0.02 | 0.1068 |      - |    1560 B |          NA |
-|                           |                            |              |           |            |             |       |         |        |        |           |             |
-| ReadOrder                 | Order, read                |    547.75 ns |  7.827 ns |  11.225 ns |    544.6 ns |  1.00 |    0.03 | 0.1860 | 0.0010 |    2432 B |        1.00 |
-| ReadOrderInto             | Order, read                |    475.80 ns |  3.265 ns |   4.785 ns |    476.1 ns |  0.87 |    0.02 | 0.1020 |      - |    1344 B |        0.55 |
-| ReadOrderUpstream         | Order, read                |    848.77 ns |  7.572 ns |  11.099 ns |    852.4 ns |  1.55 |    0.04 | 0.1841 | 0.0010 |    2416 B |        0.99 |
-|                           |                            |              |           |            |             |       |         |        |        |           |             |
-| WriteOrder                | Order, write               |    184.00 ns |  2.342 ns |   3.506 ns |    183.8 ns |  1.00 |    0.03 |      - |      - |         - |          NA |
-| WriteOrderUpstream        | Order, write               |    632.62 ns |  8.244 ns |  12.084 ns |    628.3 ns |  3.44 |    0.09 | 0.0114 |      - |     152 B |          NA |
-|                           |                            |              |           |            |             |       |         |        |        |           |             |
-| ReadIntDoubleMap          | map<int32, double>, read   |    541.18 ns | 10.875 ns |  16.278 ns |    533.4 ns |  1.00 |    0.04 | 0.2413 | 0.0019 |    3152 B |        1.00 |
-| ReadIntDoubleMapInto      | map<int32, double>, read   |    427.75 ns |  9.999 ns |  14.966 ns |    436.7 ns |  0.79 |    0.04 |      - |      - |         - |        0.00 |
-| ReadIntDoubleMapUpstream  | map<int32, double>, read   |  1,804.46 ns | 10.948 ns |  15.701 ns |  1,804.0 ns |  3.34 |    0.10 | 0.7801 | 0.0172 |   10216 B |        3.24 |
-|                           |                            |              |           |            |             |       |         |        |        |           |             |
-| WriteIntDoubleMap         | map<int32, double>, write  |    211.69 ns |  1.250 ns |   1.872 ns |    212.0 ns |  1.00 |    0.01 |      - |      - |         - |          NA |
-| WriteIntDoubleMapUpstream | map<int32, double>, write  |  1,164.80 ns |  4.423 ns |   6.484 ns |  1,165.3 ns |  5.50 |    0.06 | 0.0038 |      - |      56 B |          NA |
-|                           |                            |              |           |            |             |       |         |        |        |           |             |
-| ReadStringMap             | map<string, string>, read  |  2,472.27 ns | 20.742 ns |  30.404 ns |  2,477.1 ns |  1.00 |    0.02 | 0.8469 | 0.0305 |   11072 B |        1.00 |
-| ReadStringMapInto         | map<string, string>, read  |  2,605.86 ns | 94.230 ns | 138.120 ns |  2,536.9 ns |  1.05 |    0.06 | 0.6027 | 0.0076 |    7920 B |        0.72 |
-| ReadStringMapUpstream     | map<string, string>, read  |  4,136.15 ns | 25.657 ns |  35.968 ns |  4,140.7 ns |  1.67 |    0.02 | 1.3809 | 0.0687 |   18136 B |        1.64 |
-|                           |                            |              |           |            |             |       |         |        |        |           |             |
-| WriteStringMap            | map<string, string>, write |    662.66 ns |  4.480 ns |   6.425 ns |    660.4 ns |  1.00 |    0.01 |      - |      - |         - |          NA |
-| WriteStringMapUpstream    | map<string, string>, write |  2,959.59 ns | 20.063 ns |  30.029 ns |  2,960.8 ns |  4.47 |    0.06 | 0.0038 |      - |      56 B |          NA |
+| Method                    | Categories                 | Mean         | Error      | StdDev     | Ratio | RatioSD | Gen0   | Gen1   | Allocated | Alloc Ratio |
+|-------------------------- |--------------------------- |-------------:|-----------:|-----------:|------:|--------:|-------:|-------:|----------:|------------:|
+| ReadDoubles               | 1,000 double, read         |  1,482.31 ns |  12.079 ns |  18.080 ns |  1.00 |    0.02 | 0.6180 | 0.0172 |    8080 B |        1.00 |
+| ReadDoublesInto           | 1,000 double, read         |  1,175.69 ns |   4.580 ns |   6.713 ns |  0.79 |    0.01 |      - |      - |         - |        0.00 |
+| ReadDoublesUpstream       | 1,000 double, read         |  3,370.96 ns |  15.343 ns |  22.964 ns |  2.27 |    0.03 | 0.6180 | 0.0153 |    8080 B |        1.00 |
+|                           |                            |              |            |            |       |         |        |        |           |             |
+| WriteDoubles              | 1,000 double, write        |  1,058.23 ns |   4.549 ns |   6.523 ns |  1.00 |    0.01 |      - |      - |         - |          NA |
+| WriteDoublesUpstream      | 1,000 double, write        |  2,127.06 ns |   5.872 ns |   8.421 ns |  2.01 |    0.01 |      - |      - |         - |          NA |
+|                           |                            |              |            |            |       |         |        |        |           |             |
+| ReadInts                  | 100 int32, read            |    186.33 ns |   1.320 ns |   1.893 ns |  1.00 |    0.01 | 0.0367 |      - |     480 B |        1.00 |
+| ReadIntsInto              | 100 int32, read            |    157.88 ns |   0.982 ns |   1.409 ns |  0.85 |    0.01 |      - |      - |         - |        0.00 |
+| ReadIntsUpstream          | 100 int32, read            |    376.18 ns |   2.301 ns |   3.226 ns |  2.02 |    0.03 | 0.0367 |      - |     480 B |        1.00 |
+|                           |                            |              |            |            |       |         |        |        |           |             |
+| WriteInts                 | 100 int32, write           |     99.62 ns |   0.623 ns |   0.894 ns |  1.00 |    0.01 |      - |      - |         - |          NA |
+| WriteIntsUpstream         | 100 int32, write           |    216.00 ns |   0.777 ns |   1.162 ns |  2.17 |    0.02 |      - |      - |         - |          NA |
+|                           |                            |              |            |            |       |         |        |        |           |             |
+| ReadItems                 | 100 structs, read          |  2,021.03 ns |  27.237 ns |  39.923 ns |  1.00 |    0.03 | 0.6790 | 0.0191 |    8880 B |        1.00 |
+| ReadItemsInto             | 100 structs, read          |  2,143.61 ns |  33.625 ns |  48.224 ns |  1.06 |    0.03 | 0.6104 | 0.0076 |    8000 B |        0.90 |
+| ReadItemsUpstream         | 100 structs, read          |  3,464.24 ns |  37.333 ns |  53.542 ns |  1.71 |    0.04 | 0.6790 | 0.0191 |    8880 B |        1.00 |
+|                           |                            |              |            |            |       |         |        |        |           |             |
+| WriteItems                | 100 structs, write         |    969.67 ns |   4.546 ns |   6.805 ns |  1.00 |    0.01 |      - |      - |         - |          NA |
+| WriteItemsUpstream        | 100 structs, write         |  1,993.91 ns |   9.494 ns |  14.210 ns |  2.06 |    0.02 |      - |      - |         - |          NA |
+|                           |                            |              |            |            |       |         |        |        |           |             |
+| ReadBig                   | 4 KB order, read           |  7,717.09 ns |  48.324 ns |  72.329 ns |  1.00 |    0.01 | 1.9226 | 0.1373 |   25192 B |        1.00 |
+| ReadBigInto               | 4 KB order, read           |  7,583.72 ns |  40.952 ns |  61.295 ns |  0.98 |    0.01 | 1.6937 | 0.0687 |   22144 B |        0.88 |
+| ReadBigUpstream           | 4 KB order, read           | 11,799.21 ns |  72.071 ns | 107.872 ns |  1.53 |    0.02 | 1.8921 | 0.1373 |   24920 B |        0.99 |
+|                           |                            |              |            |            |       |         |        |        |           |             |
+| WriteBig                  | 4 KB order, write          |  3,493.00 ns |  28.974 ns |  43.368 ns |  1.00 |    0.02 |      - |      - |         - |          NA |
+| WriteBigUpstream          | 4 KB order, write          |  7,890.07 ns |  26.359 ns |  37.803 ns |  2.26 |    0.03 | 0.1068 |      - |    1560 B |          NA |
+|                           |                            |              |            |            |       |         |        |        |           |             |
+| ReadOrder                 | Order, read                |    528.32 ns |   3.650 ns |   5.235 ns |  1.00 |    0.01 | 0.1860 | 0.0010 |    2432 B |        1.00 |
+| ReadOrderInto             | Order, read                |    473.10 ns |   2.926 ns |   4.196 ns |  0.90 |    0.01 | 0.1025 |      - |    1344 B |        0.55 |
+| ReadOrderUpstream         | Order, read                |    828.30 ns |   6.939 ns |  10.171 ns |  1.57 |    0.02 | 0.1841 | 0.0010 |    2416 B |        0.99 |
+|                           |                            |              |            |            |       |         |        |        |           |             |
+| WriteOrder                | Order, write               |    183.99 ns |   2.371 ns |   3.548 ns |  1.00 |    0.03 |      - |      - |         - |          NA |
+| WriteOrderUpstream        | Order, write               |    611.60 ns |   5.911 ns |   8.665 ns |  3.33 |    0.08 | 0.0114 |      - |     152 B |          NA |
+|                           |                            |              |            |            |       |         |        |        |           |             |
+| ReadIntDoubleMap          | map<int32, double>, read   |    545.50 ns |   5.130 ns |   7.191 ns |  1.00 |    0.02 | 0.2413 | 0.0019 |    3152 B |        1.00 |
+| ReadIntDoubleMapInto      | map<int32, double>, read   |    432.55 ns |   1.787 ns |   2.675 ns |  0.79 |    0.01 |      - |      - |         - |        0.00 |
+| ReadIntDoubleMapUpstream  | map<int32, double>, read   |  1,776.28 ns |  11.127 ns |  16.310 ns |  3.26 |    0.05 | 0.7801 | 0.0172 |   10216 B |        3.24 |
+|                           |                            |              |            |            |       |         |        |        |           |             |
+| WriteIntDoubleMap         | map<int32, double>, write  |    209.47 ns |   0.867 ns |   1.271 ns |  1.00 |    0.01 |      - |      - |         - |          NA |
+| WriteIntDoubleMapUpstream | map<int32, double>, write  |  1,156.70 ns |   3.251 ns |   4.765 ns |  5.52 |    0.04 | 0.0038 |      - |      56 B |          NA |
+|                           |                            |              |            |            |       |         |        |        |           |             |
+| ReadStringMap             | map<string, string>, read  |  2,432.44 ns |  21.802 ns |  32.632 ns |  1.00 |    0.02 | 0.8469 | 0.0305 |   11072 B |        1.00 |
+| ReadStringMapInto         | map<string, string>, read  |  2,638.03 ns | 106.702 ns | 153.028 ns |  1.08 |    0.06 | 0.6027 | 0.0076 |    7920 B |        0.72 |
+| ReadStringMapUpstream     | map<string, string>, read  |  4,142.67 ns |  66.767 ns |  95.755 ns |  1.70 |    0.04 | 1.3809 | 0.0687 |   18136 B |        1.64 |
+|                           |                            |              |            |            |       |         |        |        |           |             |
+| WriteStringMap            | map<string, string>, write |    655.84 ns |   5.786 ns |   8.660 ns |  1.00 |    0.02 |      - |      - |         - |          NA |
+| WriteStringMapUpstream    | map<string, string>, write |  2,934.35 ns |  20.564 ns |  29.493 ns |  4.47 |    0.07 | 0.0038 |      - |      56 B |          NA |
 
 ## Apple M4 Pro
 
