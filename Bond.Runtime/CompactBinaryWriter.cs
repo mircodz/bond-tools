@@ -41,13 +41,22 @@ public ref struct CompactBinaryWriter
         _position = 0;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void WriteFieldBegin(WireType type, ushort id)
     {
         if (id <= 5)
         {
             WriteByte((byte)((uint)type | ((uint)id << 5)));
+            return;
         }
-        else if (id <= 0xFF)
+
+        WriteLongFieldBegin(type, id);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private void WriteLongFieldBegin(WireType type, ushort id)
+    {
+        if (id <= 0xFF)
         {
             WriteByte((byte)((uint)type | (6 << 5)));
             WriteByte((byte)id);
@@ -191,7 +200,23 @@ public ref struct CompactBinaryWriter
         _position += value.Length;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void WriteByte(byte value)
+    {
+        var position = _position;
+        var buffer = _buffer;
+        if ((uint)position < (uint)buffer.Length)
+        {
+            Unsafe.Add(ref MemoryMarshal.GetReference(buffer), position) = value;
+            _position = position + 1;
+            return;
+        }
+
+        WriteByteSlow(value);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private void WriteByteSlow(byte value)
     {
         Reserve(1)[0] = value;
         _position++;
