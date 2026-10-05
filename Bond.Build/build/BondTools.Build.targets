@@ -8,6 +8,7 @@
       <Clone>$(BondClone)</Clone>
       <Equality>$(BondEquality)</Equality>
       <ToString>$(BondToString)</ToString>
+      <Clear>$(BondClear)</Clear>
       <Serialization>$(BondSerialization)</Serialization>
     </Bond>
   </ItemDefinitionGroup>

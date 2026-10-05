@@ -15,7 +15,7 @@ bond format schema.bond --check
 ## C# generation
 
 ```bash
-bond generate csharp MyApp/order.bond -o MyApp/Generated --clone --equality --to-string --serialization
+bond generate csharp MyApp/order.bond -o MyApp/Generated --clone --equality --to-string --clear --serialization
 ```
 
 More: [BondTools.Runtime](Bond.Runtime/README.md).

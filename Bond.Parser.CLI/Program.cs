@@ -44,6 +44,7 @@ public static class Program
           --clone                     Generate deep Clone()
           --equality                  Generate structural Equals() and GetHashCode()
           --to-string                 Generate ToString()
+          --clear                     Generate Clear(), which resets fields and keeps containers for reuse
           --serialization             Generate Compact Binary serialization (requires BondTools.Runtime)
 
         Exit codes:
@@ -146,7 +147,7 @@ public static class Program
 
     private static async Task<int> Generate(string[] rest)
     {
-        var args = Arguments.Parse(rest, ["--clone", "--equality", "--to-string", "--serialization"],
+        var args = Arguments.Parse(rest, ["--clone", "--equality", "--to-string", "--clear", "--serialization"],
             ["--output-dir", "--import-dir", "--namespace", "--using", "--type-map", "--error-format"]);
         if (args.Has("--help"))
         {
@@ -172,7 +173,8 @@ public static class Program
             TypeMappings = args.All("--type-map"),
             ModelFeatures = (args.Has("--clone") ? CSharpModelFeatures.Cloning : 0)
                 | (args.Has("--equality") ? CSharpModelFeatures.Equality : 0)
-                | (args.Has("--to-string") ? CSharpModelFeatures.StringRepresentation : 0),
+                | (args.Has("--to-string") ? CSharpModelFeatures.StringRepresentation : 0)
+                | (args.Has("--clear") ? CSharpModelFeatures.Clearing : 0),
             Serialization = args.Has("--serialization")
         };
 

@@ -33,6 +33,13 @@ public sealed class MsBuildGenerationTests(MsBuildPackageFixture packages) : ICl
                 throw new Exception("Model members are wrong.");
             }
 
+            var values = copy.values;
+            copy.Clear();
+            if (copy.id != 0 || copy.values.Count != 0 || !ReferenceEquals(values, copy.values))
+            {
+                throw new Exception("Clear is wrong.");
+            }
+
             var output = new OutputBuffer();
             Bond.Serialize.To(new CompactBinaryWriter<OutputBuffer>(output, 2), item);
             var decoded = Bond.Deserialize<Item>.From(new CompactBinaryReader<InputBuffer>(new InputBuffer(output.Data), 2));
@@ -41,7 +48,7 @@ public sealed class MsBuildGenerationTests(MsBuildPackageFixture packages) : ICl
         project.Configure(
             new XElement("PropertyGroup",
                 new XElement("BondClone", "true"), new XElement("BondEquality", "true"), new XElement("BondToString", "true"),
-                new XElement("BondUsings", "System.Collections.Generic"),
+                new XElement("BondClear", "true"), new XElement("BondUsings", "System.Collections.Generic"),
                 new XElement("BondNamespaceMappings", "Contracts=Application")),
             new XElement("ItemGroup", new XElement("Bond", new XAttribute("Include", "Schemas/item.bond"))));
 

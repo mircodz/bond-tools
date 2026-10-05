@@ -16,7 +16,8 @@ public static partial class CSharpGenerator
         private int _modelVariables;
 
         /// <summary>A field of a struct or of one of its bases, typed with the struct's base type arguments.</summary>
-        private sealed record ModelField(string Label, string Name, BondType Type, SourceLocation Location, string? Owner)
+        private sealed record ModelField(string Label, string Name, BondType Type, SourceLocation Location, string? Owner,
+            Field Declaration, StructDeclaration Declarer)
         {
             // A field hidden by a derived field with the same name is accessed through its declaring type.
             public string On(string instance) => Owner == null ? $"{instance}.{Name}" : $"(({Owner}){instance}).{Name}";
@@ -52,6 +53,11 @@ public static partial class CSharpGenerator
             {
                 EmitToString(structure.Name, fields);
             }
+
+            if (options.GenerateClear)
+            {
+                EmitClear(fields, isDerived: structure.BaseType != null);
+            }
         }
 
         private IEnumerable<string> ModelMemberNames()
@@ -70,6 +76,11 @@ public static partial class CSharpGenerator
             if (options.GenerateToString)
             {
                 yield return "ToString";
+            }
+
+            if (options.GenerateClear)
+            {
+                yield return "Clear";
             }
         }
 
@@ -108,7 +119,9 @@ public static partial class CSharpGenerator
                     Identifier(field.Name, field.Location),
                     Substitute(field.Type, declaration, reference.TypeArguments),
                     field.Location,
-                    derivedNames.Contains(field.Name) ? owner : null)));
+                    derivedNames.Contains(field.Name) ? owner : null,
+                    field,
+                    declaration)));
                 derivedNames.UnionWith(declaration.Fields.Select(field => field.Name));
             }
 
@@ -229,6 +242,53 @@ public static partial class CSharpGenerator
 
             Line(2, "}");
         }
+
+        // Resets every field to its default, as the constructor sets it. Collections are emptied and structs generated
+        // alongside this one cleared in place, so a cleared instance keeps its storage for the next read.
+        private void EmitClear(IReadOnlyList<ModelField> fields, bool isDerived)
+        {
+            Line(0);
+            Line(2, $"public {(isDerived ? "new " : "")}void Clear()");
+            Line(2, "{");
+            foreach (var field in fields)
+            {
+                var type = UnwrapAlias(field.Type, field.Location);
+                if (IsMetaType(type))
+                {
+                    continue;
+                }
+
+                var mapped = MapType(field.Type, field.Location);
+                var value = FieldDefaultValue(field.Declaration, mapped, field.Declarer) ?? "default";
+                var target = field.On("this");
+                if (value != "default" && !mapped.IsCustom && ClearsInPlace(type))
+                {
+                    Line(3, $"if ({target} != null)");
+                    Line(3, "{");
+                    Line(4, $"{target}.Clear();");
+                    Line(3, "}");
+                    Line(3, "else");
+                    Line(3, "{");
+                    Line(4, $"{target} = {value};");
+                    Line(3, "}");
+                }
+                else
+                {
+                    Line(3, $"{target} = {value};");
+                }
+            }
+
+            Line(2, "}");
+        }
+
+        // Structs from other files may have been generated without Clear, so only this file's are cleared in place.
+        private bool ClearsInPlace(BondType type) => type switch
+        {
+            BondType.Vector or BondType.List or BondType.Set or BondType.Map => true,
+            BondType.TypeReference { Declaration: StructDeclaration declaration } => ast.Declarations
+                .OfType<StructDeclaration>().Any(local => local.QualifiedName == declaration.QualifiedName),
+            _ => false
+        };
 
         // Returns the type that determines how a value is copied, compared, hashed and formatted: aliases, nullable and
         // nothing wrappers removed. Null means a value whose type is unknown to the generator (custom-mapped CLR types
