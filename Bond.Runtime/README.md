@@ -38,26 +38,26 @@ Values of custom-mapped types are converted by the `BondTypeAliasConverter` clas
 
 ## Performance
 
-Mean time per call on an Intel i7-12700KF with .NET 10; upstream is Bond.Runtime.CSharp 13.0.2 with Bond.IO.Unsafe buffers.
+Mean time per call on an Intel i7-12700KF with .NET 10; upstream is Bond.Runtime.CSharp 13.0.2 with Bond.IO.Unsafe buffers. Reused reads clear an instance and deserialize into it.
 
 | Write | bond-tools | upstream | Δ |
 |---|--:|--:|--:|
-| Order with nested structs, strings and maps | 181 ns | 598 ns | -70% |
-| 100 small structs | 993 ns | 1.99 µs | -50% |
-| 100 `int32` | 99 ns | 231 ns | -57% |
-| 1,000 `double` | 1.05 µs | 1.90 µs | -45% |
-| `map<string, string>`, 100 entries | 650 ns | 2.93 µs | -78% |
-| `map<int32, double>`, 100 entries | 209 ns | 1.13 µs | -82% |
-| 4 KB order using most Bond types | 3.47 µs | 6.76 µs | -49% |
+| Order with nested structs, strings and maps | 184 ns | 633 ns | -71% |
+| 100 small structs | 983 ns | 2.02 µs | -51% |
+| 100 `int32` | 100 ns | 217 ns | -54% |
+| 1,000 `double` | 1.06 µs | 2.15 µs | -50% |
+| `map<string, string>`, 100 entries | 663 ns | 2.96 µs | -78% |
+| `map<int32, double>`, 100 entries | 212 ns | 1.16 µs | -82% |
+| 4 KB order using most Bond types | 3.52 µs | 7.99 µs | -56% |
 
-| Read | bond-tools | upstream | Δ |
-|---|--:|--:|--:|
-| Order with nested structs, strings and maps | 518 ns | 787 ns | -34% |
-| 100 small structs | 1.96 µs | 3.21 µs | -39% |
-| 100 `int32` | 180 ns | 343 ns | -48% |
-| 1,000 `double` | 1.44 µs | 3.04 µs | -53% |
-| `map<string, string>`, 100 entries | 2.34 µs | 3.89 µs | -40% |
-| `map<int32, double>`, 100 entries | 518 ns | 1.71 µs | -70% |
-| 4 KB order using most Bond types | 7.53 µs | 11.5 µs | -34% |
+| Read | bond-tools | reused | upstream | Δ | Δ reused |
+|---|--:|--:|--:|--:|--:|
+| Order with nested structs, strings and maps | 548 ns | 476 ns | 849 ns | -35% | -44% |
+| 100 small structs | 2.08 µs | 2.16 µs | 3.52 µs | -41% | -39% |
+| 100 `int32` | 190 ns | 157 ns | 377 ns | -50% | -58% |
+| 1,000 `double` | 1.51 µs | 1.18 µs | 3.42 µs | -56% | -66% |
+| `map<string, string>`, 100 entries | 2.47 µs | 2.61 µs | 4.14 µs | -40% | -37% |
+| `map<int32, double>`, 100 entries | 541 ns | 428 ns | 1.80 µs | -70% | -76% |
+| 4 KB order using most Bond types | 7.92 µs | 7.68 µs | 12.1 µs | -34% | -36% |
 
 `dotnet run -c Release --project benchmarks` runs them. [benchmarks/RESULTS.md](../benchmarks/RESULTS.md) has the full results, also for an Apple M4 Pro.
