@@ -84,6 +84,17 @@ public static partial class CSharpGenerator
             Line(0);
             Line(2, $"public static {modifier}{self} Deserialize(global::System.IO.Stream input{_codecParameters}) =>");
             Line(3, $"{Runtime}CompactBinary.Deserialize(input, {codec});");
+
+            // Overloads of the base's, which take the base type.
+            Line(0);
+            Line(2, $"public static {self} Deserialize(global::System.ReadOnlySpan<byte> data, {self} into{_codecParameters}) =>");
+            Line(3, $"{Runtime}CompactBinary.Deserialize(data, into, {codec});");
+            Line(0);
+            Line(2, $"public static {self} Deserialize(global::System.Buffers.ReadOnlySequence<byte> data, {self} into{_codecParameters}) =>");
+            Line(3, $"{Runtime}CompactBinary.Deserialize(data, into, {codec});");
+            Line(0);
+            Line(2, $"public static {self} Deserialize(global::System.IO.Stream input, {self} into{_codecParameters}) =>");
+            Line(3, $"{Runtime}CompactBinary.Deserialize(input, into, {codec});");
         }
 
         // A generic struct's codec, for its uses as a type argument and for its API.
@@ -119,6 +130,12 @@ public static partial class CSharpGenerator
             Line(3, "{");
             Line(4, $"{Runtime}CompactBinaryReader.Expect(type, {Runtime}WireType.Struct);");
             Line(4, $"return {self}.Read(ref reader{_codecArguments});");
+            Line(3, "}");
+            Line(0);
+            Line(3, $"public override {self} Read(ref {Runtime}CompactBinaryReader reader, {Runtime}WireType type, {self} into)");
+            Line(3, "{");
+            Line(4, $"{Runtime}CompactBinaryReader.Expect(type, {Runtime}WireType.Struct);");
+            Line(4, $"return {self}.Read(ref reader, into{_codecArguments});");
             Line(3, "}");
             Line(0);
             Line(3, $"public override bool IsDefault({self} value) => false;");

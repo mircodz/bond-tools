@@ -45,6 +45,27 @@ public static class CompactBinary
     public static T Deserialize<T>(ReadOnlySequence<byte> data, BondCodec<T> codec) =>
         Deserialize(data.IsSingleSegment ? data.FirstSpan : data.ToArray(), codec);
 
+    /// <summary>Deserializes into an existing instance, as <see cref="IBondStruct{TSelf}"/> explains.</summary>
+    public static T Deserialize<T>(ReadOnlySpan<byte> data, T into, BondCodec<T> codec)
+    {
+        ArgumentNullException.ThrowIfNull(into);
+        ArgumentNullException.ThrowIfNull(codec);
+        var reader = new CompactBinaryReader(data);
+        return codec.Read(ref reader, codec.WireType, into);
+    }
+
+    public static T Deserialize<T>(ReadOnlySequence<byte> data, T into, BondCodec<T> codec) =>
+        Deserialize(data.IsSingleSegment ? data.FirstSpan : data.ToArray(), into, codec);
+
+    public static T Deserialize<T>(Stream input, T into, BondCodec<T> codec)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+        using var buffer = new MemoryStream();
+        input.CopyTo(buffer);
+        var data = buffer.GetBuffer().AsSpan(0, (int)buffer.Length);
+        return Deserialize(data, into, codec);
+    }
+
     /// <summary>Deserializes a payload that takes the rest of the stream.</summary>
     public static T Deserialize<T>(Stream input, BondCodec<T> codec)
     {

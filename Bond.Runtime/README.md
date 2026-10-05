@@ -7,6 +7,15 @@ byte[] bytes = order.Serialize();          // also Serialize(IBufferWriter<byte>
 Order copy = Order.Deserialize(bytes);     // also ReadOnlySequence<byte> and Stream
 ```
 
+## Reusing instances
+
+`Deserialize(bytes, into)` reads into an existing instance, as Bond merges: the payload's fields replace the instance's, nested structs are read into the instance's own, and container elements are appended. With `--clear`, clearing first reads it as a new instance would, while keeping its lists and nested structs, so only strings and new elements are allocated:
+
+```csharp
+order.Clear();
+Order.Deserialize(bytes, into: order);
+```
+
 ## Generic structs
 
 A generic struct takes a codec for each type parameter:
