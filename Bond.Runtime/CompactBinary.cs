@@ -54,8 +54,12 @@ public static class CompactBinary
         return codec.Read(ref reader, codec.WireType, into);
     }
 
-    public static T Deserialize<T>(ReadOnlySequence<byte> data, T into, BondCodec<T> codec) =>
-        Deserialize(data.IsSingleSegment ? data.FirstSpan : data.ToArray(), into, codec);
+    public static T Deserialize<T>(ReadOnlySequence<byte> data, T into, BondCodec<T> codec)
+    {
+        ArgumentNullException.ThrowIfNull(into);
+        ArgumentNullException.ThrowIfNull(codec);
+        return Deserialize(data.IsSingleSegment ? data.FirstSpan : data.ToArray(), into, codec);
+    }
 
     public static T Deserialize<T>(Stream input, T into, BondCodec<T> codec)
     {
