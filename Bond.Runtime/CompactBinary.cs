@@ -60,6 +60,8 @@ public static class CompactBinary
     public static T Deserialize<T>(Stream input, T into, BondCodec<T> codec)
     {
         ArgumentNullException.ThrowIfNull(input);
+        ArgumentNullException.ThrowIfNull(into);
+        ArgumentNullException.ThrowIfNull(codec);
         using var buffer = new MemoryStream();
         input.CopyTo(buffer);
         var data = buffer.GetBuffer().AsSpan(0, (int)buffer.Length);
