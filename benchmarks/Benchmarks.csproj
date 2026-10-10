@@ -24,7 +24,7 @@
     <PropertyGroup>
       <BondGenerated>$(IntermediateOutputPath)bond/</BondGenerated>
     </PropertyGroup>
-    <Exec Command="dotnet &quot;$(BondCli)&quot; generate csharp @(BondSchema->'&quot;%(FullPath)&quot;', ' ') -o &quot;$(BondGenerated)&quot; --serialization" StandardOutputImportance="low" />
+    <Exec Command="dotnet &quot;$(BondCli)&quot; generate csharp @(BondSchema->'&quot;%(FullPath)&quot;', ' ') -o &quot;$(BondGenerated)&quot; --serialization --clear" StandardOutputImportance="low" />
     <ItemGroup>
       <Compile Include="$(BondGenerated)*.g.cs" />
     </ItemGroup>

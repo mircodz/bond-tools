@@ -16,6 +16,9 @@ public abstract class BondCodec<T>
 
     public abstract T Read(ref CompactBinaryReader reader, WireType type);
 
+    /// <summary>Reads a struct into an existing instance; values of other types are read as new ones.</summary>
+    public virtual T Read(ref CompactBinaryReader reader, WireType type, T into) => Read(ref reader, type);
+
     /// <summary>Whether an optional field holding the value is omitted.</summary>
     public abstract bool IsDefault(T value);
 }
@@ -209,6 +212,12 @@ public static class BondCodec
         {
             CompactBinaryReader.Expect(type, WireType.Struct);
             return T.Read(ref reader);
+        }
+
+        public override T Read(ref CompactBinaryReader reader, WireType type, T into)
+        {
+            CompactBinaryReader.Expect(type, WireType.Struct);
+            return T.Read(ref reader, into);
         }
 
         public override bool IsDefault(T value) => false;

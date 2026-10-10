@@ -683,6 +683,60 @@ public sealed class CSharpSerializationTests
     }
 
     [Fact]
+    public async Task DeserializesIntoAnInstanceThroughEveryOverload()
+    {
+        var options = Options with { ModelFeatures = CSharpModelFeatures.Equality | CSharpModelFeatures.Clearing };
+        RunScenario(await Generate(Schema + "struct Page<T> { 0: vector<T> items; }", options), """
+            var payload = new Models.Customer { id = "new" };
+            payload.home.lines.Add("b");
+            payload.previous.Add(new Models.Address { city = "B" });
+            byte[] bytes = payload.Serialize();
+
+            var target = new Models.Customer { name = "kept" };
+            Models.Address home = target.home;
+            home.lines.Add("a");
+            Require(ReferenceEquals(Models.Customer.Deserialize(bytes, target), target), "returned another instance");
+            Require(target.id == "new" && target.name == "kept" && ReferenceEquals(target.home, home), "fields not merged");
+            Require(string.Join(",", home.lines) == "a,b", "container not appended to");
+
+            // Cleared first, an instance reads as a new one would, and keeps its storage.
+            Models.Customer fresh = Models.Customer.Deserialize(bytes);
+            foreach (var read in new Func<Models.Customer, Models.Customer>[]
+            {
+                into => Models.Customer.Deserialize(bytes, into),
+                into => Models.Customer.Deserialize(new System.Buffers.ReadOnlySequence<byte>(bytes), into),
+                into => Models.Customer.Deserialize(new System.IO.MemoryStream(bytes), into),
+                into => Generic.Into(bytes, into),
+            })
+            {
+                List<string> lines = target.home.lines;
+                target.Clear();
+                Require(read(target).Equals(fresh) && ReferenceEquals(target.home.lines, lines), "cleared instance");
+            }
+
+            var codec = BondTools.Runtime.BondCodec.Struct<Models.Address>();
+            var page = new Models.Page<Models.Address>();
+            byte[] pageBytes = new Models.Page<Models.Address> { items = { new Models.Address { city = "C" } } }.Serialize(codec);
+            Require(ReferenceEquals(Models.Page<Models.Address>.Deserialize(pageBytes, page, codec), page)
+                && page.items.Single().city == "C", "generic struct");
+
+            try
+            {
+                Models.Customer.Deserialize(bytes, null);
+                Require(false, "null instance accepted");
+            }
+            catch (ArgumentNullException)
+            {
+            }
+            """, """
+            public static class Generic
+            {
+                public static T Into<T>(byte[] bytes, T into) where T : BondTools.Runtime.IBondStruct<T> => T.Deserialize(bytes, into);
+            }
+            """);
+    }
+
+    [Fact]
     public async Task ReadingIntoAnInstanceFillsItsStructsAndAppendsToItsContainers()
     {
         RunScenario(await Generate(Schema, Options), """
