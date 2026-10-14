@@ -17,7 +17,7 @@ public static class Program
         Usage:
           bond check <schema.bond> [options]
           bond breaking <schema.bond> --against <reference> [options]
-          bond format <schema.bond> [--check]                (alias: fmt)
+          bond format <schema.bond> [--check]
           bond generate csharp <schema.bond>... -o <dir> [options]
 
         Common options:
