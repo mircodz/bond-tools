@@ -10,7 +10,8 @@ public enum CSharpModelFeatures
     Cloning = 1,
     Equality = 2,
     StringRepresentation = 4,
-    All = Cloning | Equality | StringRepresentation
+    Clearing = 8,
+    All = Cloning | Equality | StringRepresentation | Clearing
 }
 
 public sealed record CSharpGenerationOptions
@@ -27,4 +28,5 @@ public sealed record CSharpGenerationOptions
     public bool GenerateCloning => ModelFeatures.HasFlag(CSharpModelFeatures.Cloning);
     public bool GenerateEquality => ModelFeatures.HasFlag(CSharpModelFeatures.Equality);
     public bool GenerateToString => ModelFeatures.HasFlag(CSharpModelFeatures.StringRepresentation);
+    public bool GenerateClear => ModelFeatures.HasFlag(CSharpModelFeatures.Clearing);
 }

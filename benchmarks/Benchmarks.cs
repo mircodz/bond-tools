@@ -9,7 +9,8 @@ using UpstreamReader = Bond.Protocols.CompactBinaryReader<Bond.IO.Unsafe.InputBu
 using UpstreamWriter = Bond.Protocols.CompactBinaryWriter<Bond.IO.Unsafe.OutputBuffer>;
 
 // Each payload is written and read by BondTools.Runtime (the baseline) and by Bond.Runtime.CSharp, reusing buffers
-// and upstream's serializers. Upstream uses Bond.IO.Unsafe buffers, the faster ones by Bond's own advice.
+// and upstream's serializers. Upstream uses Bond.IO.Unsafe buffers, the faster ones by Bond's own advice. The Into
+// reads clear an instance and deserialize into it, reusing its lists and nested structs.
 [MemoryDiagnoser]
 [GroupBenchmarksBy(BenchmarkLogicalGroupRule.ByCategory)]
 [CategoriesColumn]
@@ -29,6 +30,14 @@ public class Benchmarks
 
     private byte[] _orderBytes, _itemBytes, _intBytes, _doubleBytes, _stringMapBytes, _intDoubleMapBytes, _bigBytes;
     private InputBuffer _orderInput, _itemInput, _intInput, _doubleInput, _stringMapInput, _intDoubleMapInput, _bigInput;
+
+    private readonly Order _orderInto = new();
+    private readonly Items _itemsInto = new();
+    private readonly Int32s _intsInto = new();
+    private readonly Doubles _doublesInto = new();
+    private readonly StringMap _stringMapInto = new();
+    private readonly IntDoubleMap _intDoubleMapInto = new();
+    private readonly Bench.Shop.Order _bigInto = new();
 
     [GlobalSetup]
     public void Setup()
@@ -145,6 +154,13 @@ public class Benchmarks
     public Order ReadOrder() => Order.Deserialize(_orderBytes);
 
     [Benchmark, BenchmarkCategory("Order, read")]
+    public Order ReadOrderInto()
+    {
+        _orderInto.Clear();
+        return Order.Deserialize(_orderBytes, _orderInto);
+    }
+
+    [Benchmark, BenchmarkCategory("Order, read")]
     public Order ReadOrderUpstream() => ReadUpstream<Order>(_orderInput);
 
     [Benchmark(Baseline = true), BenchmarkCategory("100 structs, write")]
@@ -155,6 +171,13 @@ public class Benchmarks
 
     [Benchmark(Baseline = true), BenchmarkCategory("100 structs, read")]
     public Items ReadItems() => Items.Deserialize(_itemBytes);
+
+    [Benchmark, BenchmarkCategory("100 structs, read")]
+    public Items ReadItemsInto()
+    {
+        _itemsInto.Clear();
+        return Items.Deserialize(_itemBytes, _itemsInto);
+    }
 
     [Benchmark, BenchmarkCategory("100 structs, read")]
     public Items ReadItemsUpstream() => ReadUpstream<Items>(_itemInput);
@@ -169,6 +192,13 @@ public class Benchmarks
     public Int32s ReadInts() => Int32s.Deserialize(_intBytes);
 
     [Benchmark, BenchmarkCategory("100 int32, read")]
+    public Int32s ReadIntsInto()
+    {
+        _intsInto.Clear();
+        return Int32s.Deserialize(_intBytes, _intsInto);
+    }
+
+    [Benchmark, BenchmarkCategory("100 int32, read")]
     public Int32s ReadIntsUpstream() => ReadUpstream<Int32s>(_intInput);
 
     [Benchmark(Baseline = true), BenchmarkCategory("1,000 double, write")]
@@ -179,6 +209,13 @@ public class Benchmarks
 
     [Benchmark(Baseline = true), BenchmarkCategory("1,000 double, read")]
     public Doubles ReadDoubles() => Doubles.Deserialize(_doubleBytes);
+
+    [Benchmark, BenchmarkCategory("1,000 double, read")]
+    public Doubles ReadDoublesInto()
+    {
+        _doublesInto.Clear();
+        return Doubles.Deserialize(_doubleBytes, _doublesInto);
+    }
 
     [Benchmark, BenchmarkCategory("1,000 double, read")]
     public Doubles ReadDoublesUpstream() => ReadUpstream<Doubles>(_doubleInput);
@@ -193,6 +230,13 @@ public class Benchmarks
     public StringMap ReadStringMap() => StringMap.Deserialize(_stringMapBytes);
 
     [Benchmark, BenchmarkCategory("map<string, string>, read")]
+    public StringMap ReadStringMapInto()
+    {
+        _stringMapInto.Clear();
+        return StringMap.Deserialize(_stringMapBytes, _stringMapInto);
+    }
+
+    [Benchmark, BenchmarkCategory("map<string, string>, read")]
     public StringMap ReadStringMapUpstream() => ReadUpstream<StringMap>(_stringMapInput);
 
     [Benchmark(Baseline = true), BenchmarkCategory("map<int32, double>, write")]
@@ -205,6 +249,13 @@ public class Benchmarks
     public IntDoubleMap ReadIntDoubleMap() => IntDoubleMap.Deserialize(_intDoubleMapBytes);
 
     [Benchmark, BenchmarkCategory("map<int32, double>, read")]
+    public IntDoubleMap ReadIntDoubleMapInto()
+    {
+        _intDoubleMapInto.Clear();
+        return IntDoubleMap.Deserialize(_intDoubleMapBytes, _intDoubleMapInto);
+    }
+
+    [Benchmark, BenchmarkCategory("map<int32, double>, read")]
     public IntDoubleMap ReadIntDoubleMapUpstream() => ReadUpstream<IntDoubleMap>(_intDoubleMapInput);
 
     [Benchmark(Baseline = true), BenchmarkCategory("4 KB order, write")]
@@ -215,6 +266,13 @@ public class Benchmarks
 
     [Benchmark(Baseline = true), BenchmarkCategory("4 KB order, read")]
     public Bench.Shop.Order ReadBig() => Bench.Shop.Order.Deserialize(_bigBytes);
+
+    [Benchmark, BenchmarkCategory("4 KB order, read")]
+    public Bench.Shop.Order ReadBigInto()
+    {
+        _bigInto.Clear();
+        return Bench.Shop.Order.Deserialize(_bigBytes, _bigInto);
+    }
 
     [Benchmark, BenchmarkCategory("4 KB order, read")]
     public Bench.Shop.Order ReadBigUpstream() => ReadUpstream<Bench.Shop.Order>(_bigInput);

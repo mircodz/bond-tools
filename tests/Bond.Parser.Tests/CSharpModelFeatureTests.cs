@@ -202,6 +202,68 @@ public sealed class CSharpModelFeatureTests
             """);
     }
 
+    [Fact]
+    public async Task ClearResetsEveryFieldAndKeepsStorage()
+    {
+        await Run("""
+            namespace Models
+            enum Color { Red, Green = 5 }
+            struct Address { 0: string street = "Main"; 1: vector<string> lines; }
+            struct Base { 0: int32 id = 7; 1: string name; 2: Address home; }
+            struct Item : Base {
+                0: list<int64> numbers;
+                1: set<string> tags;
+                2: map<string, Address> places;
+                3: nullable<Address> extra;
+                4: blob data;
+                5: Color color = Green;
+                6: double ratio = 1.5;
+                7: vector<int32> missing = nothing;
+                8: string name;
+                9: vector<int32> values;
+            }
+            struct Page<T> { 0: vector<T> items; 1: T first; }
+            struct Holder { 0: Page<Address> page; 1: wstring title = "t"; }
+            """, """
+            var item = new Models.Item { id = 1, color = Models.Color.Red, ratio = 2, name = "derived" };
+            ((Models.Base)item).name = "base";
+            item.home.street = "Elm";
+            item.home.lines.Add("x");
+            item.numbers.AddLast(1);
+            item.tags.Add("t");
+            item.places["p"] = new Models.Address();
+            item.extra = new Models.Address();
+            item.data = new ArraySegment<byte>(new byte[] { 1 });
+            item.missing = new List<int> { 1 };
+            for (int i = 0; i < 100; i++)
+            {
+                item.values.Add(i);
+            }
+
+            var (home, lines, values, capacity) = (item.home, item.home.lines, item.values, item.values.Capacity);
+            item.Clear();
+            Require(item.Equals(new Models.Item()), "fields differ from a new instance");
+            Require(item.id == 7 && item.color == Models.Color.Green && item.ratio == 1.5 && item.home.street == "Main",
+                "schema defaults");
+            Require(((Models.Base)item).name == "" && item.name == "", "hidden base field");
+            Require(item.extra == null && item.missing == null && item.data.Array == null, "nullable, nothing or blob");
+            Require(ReferenceEquals(item.home, home) && ReferenceEquals(item.home.lines, lines), "nested struct replaced");
+            Require(ReferenceEquals(item.values, values) && values.Capacity == capacity, "vector replaced");
+
+            item.home = null;
+            item.values = null;
+            item.Clear();
+            Require(item.home != null && item.values != null && item.Equals(new Models.Item()), "null fields not restored");
+
+            var holder = new Models.Holder { title = "x" };
+            holder.page.items.Add(new Models.Address());
+            holder.page.first = new Models.Address { street = "Oak" };
+            var page = holder.page;
+            holder.Clear();
+            Require(ReferenceEquals(holder.page, page) && holder.Equals(new Models.Holder()), "generic struct");
+            """);
+    }
+
     [Theory]
     [MemberData(nameof(Fixtures))]
     public async Task EveryFixtureCompilesWithAllFeatures(string fixture)
@@ -222,9 +284,12 @@ public sealed class CSharpModelFeatureTests
             new CSharpGenerationOptions { ModelFeatures = CSharpModelFeatures.All });
         Assert.True(result.Success, string.Join("\n", result.Errors.Select(error => error.Message)));
 
+        // Stand-ins for the imported structs, compared by value as generated ones would be.
         var external = """
-            namespace tests { [Bond.Schema] public partial class Bar {} }
-            namespace empty { [Bond.Schema] public partial class Empty {} }
+            namespace tests { [Bond.Schema] public partial class Bar
+                { public override bool Equals(object obj) => obj is Bar; public override int GetHashCode() => 0; } }
+            namespace empty { [Bond.Schema] public partial class Empty
+                { public override bool Equals(object obj) => obj is Empty; public override int GetHashCode() => 0; } }
             """;
         foreach (var type in Compile(result.Code!, external).GetTypes().Where(type =>
             typeof(ICloneable).IsAssignableFrom(type) && !type.IsGenericTypeDefinition))
@@ -235,6 +300,8 @@ public sealed class CSharpModelFeatureTests
             Assert.True(value.Equals(copy), type.FullName);
             Assert.Equal(value.GetHashCode(), copy.GetHashCode());
             Assert.StartsWith(type.Name, value.ToString());
+            type.GetMethod("Clear", Type.EmptyTypes)!.Invoke(copy, null);
+            Assert.True(value.Equals(copy), type.FullName + " after Clear()");
         }
     }
 
@@ -252,6 +319,8 @@ public sealed class CSharpModelFeatureTests
     [InlineData(CSharpModelFeatures.StringRepresentation, "ToString", "struct Item { 0: int32 ToString; }")]
     [InlineData(CSharpModelFeatures.Cloning, "Clone", "struct Clone { 0: int32 value; }")]
     [InlineData(CSharpModelFeatures.StringRepresentation, "ToString", "struct Item<ToString> { 0: int32 value; }")]
+    [InlineData(CSharpModelFeatures.Clearing, "Clear", "struct Item { 0: int32 Clear; }")]
+    [InlineData(CSharpModelFeatures.Clearing, "Clear", "struct Base { 0: int32 Clear; } struct Item : Base {}")]
     public async Task NamesCannotShadowGeneratedMembers(CSharpModelFeatures feature, string name, string declarations)
     {
         var parsed = await ParserFacade.ParseStringAsync("namespace Models " + declarations);
