@@ -686,7 +686,7 @@ public sealed class CSharpSerializationTests
     public async Task DeserializesIntoAnInstanceThroughEveryOverload()
     {
         var options = Options with { ModelFeatures = CSharpModelFeatures.Equality | CSharpModelFeatures.Clearing };
-        RunScenario(await Generate(Schema + "struct Page<T> { 0: vector<T> items; }", options), """
+        RunScenario(await Generate(Schema + "struct Page<T> { 0: vector<T> items; 1: T first; }", options), """
             var payload = new Models.Customer { id = "new" };
             payload.home.lines.Add("b");
             payload.previous.Add(new Models.Address { city = "B" });
@@ -715,10 +715,38 @@ public sealed class CSharpSerializationTests
             }
 
             var codec = BondTools.Runtime.BondCodec.Struct<Models.Address>();
+            var source = new Models.Page<Models.Address> { items = { new Models.Address { city = "C" } } };
+            source.first.city = "D";
+            source.first.lines.Add("d");
+            byte[] pageBytes = source.Serialize(codec);
             var page = new Models.Page<Models.Address>();
-            byte[] pageBytes = new Models.Page<Models.Address> { items = { new Models.Address { city = "C" } } }.Serialize(codec);
+            Models.Address first = page.first;
+            first.lines.Add("kept");
             Require(ReferenceEquals(Models.Page<Models.Address>.Deserialize(pageBytes, page, codec), page)
                 && page.items.Single().city == "C", "generic struct");
+            Require(ReferenceEquals(page.first, first) && first.city == "D" && string.Join(",", first.lines) == "kept,d",
+                "type-parameter field was replaced");
+            page.first = null;
+            Require(Models.Page<Models.Address>.Deserialize(pageBytes, page, codec).first?.city == "D",
+                "null type-parameter field");
+
+            // A generic struct as the type argument, read into through its own codec.
+            var pageCodec = Models.Page<Models.Address>.CreateCodec(codec);
+            byte[] nestedBytes = new Models.Page<Models.Page<Models.Address>> { first = source }.Serialize(pageCodec);
+            var nested = new Models.Page<Models.Page<Models.Address>>();
+            Models.Page<Models.Address> inner = nested.first;
+            Models.Page<Models.Page<Models.Address>>.Deserialize(nestedBytes, nested, pageCodec);
+            Require(ReferenceEquals(nested.first, inner) && inner.first.city == "D",
+                "generic type argument was replaced");
+            nested.first = null;
+            Models.Page<Models.Page<Models.Address>>.Deserialize(nestedBytes, nested, pageCodec);
+            Require(nested.first?.first.city == "D", "null generic type argument");
+
+            // Values of other types are read as new ones.
+            var int32 = BondTools.Runtime.BondCodec.Int32;
+            var number = new Models.Page<int> { first = 1 };
+            Models.Page<int>.Deserialize(new Models.Page<int> { first = 5 }.Serialize(int32), number, int32);
+            Require(number.first == 5, "type-parameter scalar");
 
             try
             {

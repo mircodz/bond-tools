@@ -135,7 +135,9 @@ public static partial class CSharpGenerator
             Line(3, $"public override {self} Read(ref {Runtime}CompactBinaryReader reader, {Runtime}WireType type, {self} into)");
             Line(3, "{");
             Line(4, $"{Runtime}CompactBinaryReader.Expect(type, {Runtime}WireType.Struct);");
-            Line(4, $"return {self}.Read(ref reader, into{_codecArguments});");
+            Line(4, $"return into == null");
+            Line(5, $"? {self}.Read(ref reader{_codecArguments})");
+            Line(5, $": {self}.Read(ref reader, into{_codecArguments});");
             Line(3, "}");
             Line(0);
             Line(3, $"public override bool IsDefault({self} value) => false;");
@@ -458,7 +460,9 @@ public static partial class CSharpGenerator
                         break;
                     }
                 case BondType.TypeParameter parameter:
-                    Line(indent, assign($"{Codec(parameter)}.Read(ref reader, {wire})"));
+                    Line(indent, assign(into == null
+                        ? $"{Codec(parameter)}.Read(ref reader, {wire})"
+                        : $"{Codec(parameter)}.Read(ref reader, {wire}, {into})"));
                     break;
                 case BondType.Bonded bonded:
                     Line(indent, assign($"{Runtime}BondedPayload<{MapType(bonded.StructType, location).Name}>.Read(" +
