@@ -259,7 +259,7 @@ public static partial class CSharpGenerator
                 }
 
                 var mapped = MapType(field.Type, field.Location);
-                var value = FieldDefaultValue(field.Declaration, mapped, field.Declarer) ?? "default";
+                var value = FieldDefaultValue(field.Declaration with { Type = field.Type }, mapped, field.Declarer) ?? "default";
                 var target = field.On("this");
                 if (value != "default" && !mapped.IsCustom && ClearsInPlace(type))
                 {
