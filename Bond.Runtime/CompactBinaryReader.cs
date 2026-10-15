@@ -153,7 +153,13 @@ public ref struct CompactBinaryReader
     public string ReadWString(WireType type)
     {
         Expect(type, WireType.WString);
-        return Encoding.Unicode.GetString(Take(ReadLength(), elementSize: 2));
+        var bytes = Take(ReadLength(), elementSize: 2);
+
+        // UTF-16 without surrogates needs no validation, so its chars are copied as they are.
+        var chars = MemoryMarshal.Cast<byte, char>(bytes);
+        return BitConverter.IsLittleEndian && chars.IndexOfAnyInRange('\uD800', '\uDFFF') < 0
+            ? new string(chars)
+            : Encoding.Unicode.GetString(bytes);
     }
 
     /// <summary>Reads a blob, copying its bytes.</summary>
