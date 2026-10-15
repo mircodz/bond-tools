@@ -232,6 +232,38 @@ public sealed class CSharpMappingFeatureTests
     }
 
     [Fact]
+    public async Task ClearUsesTheInheritedFieldsTypeArguments()
+    {
+        var result = await GenerateResult("""
+            namespace Example
+            using Items<T> = vector<T>;
+            struct Base<T> { 0: Items<T> items; }
+            struct Child : Base<int32> {}
+            """, new CSharpGenerationOptions
+        {
+            ModelFeatures = CSharpModelFeatures.Clearing,
+            TypeMappings = ["Items=System.Collections.Generic.LinkedList<{0}>"]
+        });
+        Assert.True(result.Success, Messages(result));
+        var assembly = Compile(result.Code!, """
+            namespace Example
+            {
+                public static class BondTypeAliasConverter
+                {
+                    public static System.Collections.Generic.LinkedList<T> Convert<T>(
+                        System.Collections.Generic.List<T> value,
+                        System.Collections.Generic.LinkedList<T> unused) => new(value);
+                }
+            }
+            """);
+        var child = Activator.CreateInstance(assembly.GetType("Example.Child", true)!)!;
+        var items = (LinkedList<int>)child.GetType().GetProperty("items")!.GetValue(child)!;
+        items.AddLast(1);
+        child.GetType().GetMethod("Clear")!.Invoke(child, null);
+        Assert.Empty((LinkedList<int>)child.GetType().GetProperty("items")!.GetValue(child)!);
+    }
+
+    [Fact]
     public async Task GenericTypeTemplatesPreserveEscapedTypeParameters()
     {
         var result = await GenerateResult("""
