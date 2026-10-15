@@ -153,7 +153,13 @@ public ref struct CompactBinaryReader
     public string ReadWString(WireType type)
     {
         Expect(type, WireType.WString);
-        return Encoding.Unicode.GetString(Take(ReadLength(), elementSize: 2));
+        var bytes = Take(ReadLength(), elementSize: 2);
+
+        // UTF-16 without surrogates needs no validation, so its chars are copied as they are.
+        var chars = MemoryMarshal.Cast<byte, char>(bytes);
+        return BitConverter.IsLittleEndian && chars.IndexOfAnyInRange('\uD800', '\uDFFF') < 0
+            ? new string(chars)
+            : Encoding.Unicode.GetString(bytes);
     }
 
     /// <summary>Reads a blob, copying its bytes.</summary>
@@ -161,7 +167,7 @@ public ref struct CompactBinaryReader
     {
         var count = ReadContainerBegin(type, WireType.List, out var elementType);
         Expect(elementType, WireType.Int8);
-        return new ArraySegment<byte>(Take(count).ToArray());
+        return new ArraySegment<byte>(Copy(Take(count)));
     }
 
     /// <summary>Reads the encoding of a struct without deserializing it.</summary>
@@ -169,7 +175,7 @@ public ref struct CompactBinaryReader
     {
         var start = _position;
         Skip(WireType.Struct);
-        return _data[start.._position].ToArray();
+        return Copy(_data[start.._position]);
     }
 
     /// <summary>Skips a value of the given wire type, such as a field unknown to the reader's schema.</summary>
@@ -306,14 +312,18 @@ public ref struct CompactBinaryReader
         };
     }
 
+    // Compared unsigned, so that the JIT drops the indexer's own bounds check.
     private byte ReadByte()
     {
-        if (_position >= _data.Length)
+        var position = _position;
+        var data = _data;
+        if ((uint)position >= (uint)data.Length)
         {
             ThrowEndOfStream();
         }
 
-        return _data[_position++];
+        _position = position + 1;
+        return data[position];
     }
 
     // The next count elements of elementSize bytes, after checking that they are in the data.
@@ -330,6 +340,19 @@ public ref struct CompactBinaryReader
         return taken;
     }
 
+    // As ToArray, but from 16 KB without zeroing the array before the copy. Smaller arrays measured slower that way.
+    private static byte[] Copy(ReadOnlySpan<byte> bytes)
+    {
+        if (bytes.Length < 16 * 1024)
+        {
+            return bytes.ToArray();
+        }
+
+        var array = GC.AllocateUninitializedArray<byte>(bytes.Length);
+        bytes.CopyTo(array);
+        return array;
+    }
+
     private int ReadLength()
     {
         var length = ReadVarUInt32();
@@ -342,11 +365,11 @@ public ref struct CompactBinaryReader
     }
 
     // Every value occupies at least one byte, so a count beyond the remaining data is invalid. This also bounds the
-    // memory preallocated for containers by the size of the payload.
+    // memory preallocated for containers by the size of the payload. Multiplied rather than divided: a division is slow.
     private int ReadCount(int elementBytes)
     {
         var count = ReadVarUInt32();
-        if (count > (uint)(_data.Length - _position) / (uint)elementBytes)
+        if ((ulong)count * (uint)elementBytes > (uint)(_data.Length - _position))
         {
             ThrowEndOfStream();
         }
