@@ -207,6 +207,32 @@ public sealed class CSharpSerializationTests
     }
 
     [Fact]
+    public async Task ReadsInvalidTextExactlyAsUpstreamDoes()
+    {
+        // Compared as strings: writing a value again replaces invalid text, so Agree would not see a difference.
+        // Field headers: 0x09 string text, 0x32 wstring wide (its length counts UTF-16 code units).
+        RunScenario(await Generate("""
+            namespace Models
+            struct Texts { 0: string text; 1: wstring wide; }
+            """, Options), """
+            static byte[] Hex(string hex) => Convert.FromHexString(hex.Replace(" ", ""));
+
+            string[] payloads =
+            {
+                "32 01 00 D8 00", "32 03 61 00 00 DC 62 00 00", "32 02 3D D8 00 DE 00", "32 02 00 DC 3D D8 00",
+                "32 02 61 00 3D D8 00", "32 02 FF D7 00 E0 00", "32 03 FF FE FE FF FF FF 00",
+                "09 01 FF 00", "09 02 C3 28 00", "09 03 ED A0 80 00", "09 02 C0 AF 00", "09 03 F0 9F 98 00"
+            };
+            foreach (string hex in payloads)
+            {
+                var ours = Models.Texts.Deserialize(Hex(hex));
+                var theirs = Upstream.Read<Models.Texts>(Hex(hex));
+                Require(ours.text == theirs.text && ours.wide == theirs.wide, "the runtimes read different text from " + hex);
+            }
+            """, Upstream);
+    }
+
+    [Fact]
     public async Task ReadsMutatedPayloadsExactlyAsUpstreamDoes()
     {
         RunScenario(await Generate(ValuesSchema, Options), """
@@ -248,7 +274,7 @@ public sealed class CSharpSerializationTests
                 "", "a", new string('x', 42), new string('x', 43), new string('x', 127), new string('x', 128),
                 new string('x', 5461), new string('x', 5462), new string('x', 20000), "é", new string('é', 42),
                 new string('é', 43), new string('é', 64), "漢字", new string('漢', 2000), "😀", "a😀b", "\uD800", "a\uDC00b",
-                "\uD83D", "ascii then é", new string('x', 31) + "é"
+                "\uD83D", "ascii then é", new string('x', 31) + "é", "\uD7FF\uE000", "\uFEFF\uFFFE\uFFFF"
             };
             long[] numbers =
             {
@@ -586,6 +612,13 @@ public sealed class CSharpSerializationTests
             Require(again.payload.Convert<Models.Rich>().Deserialize().extra.Single() == 6, "converted");
             Require(Upstream.Read<Models.Envelope>(envelope.Serialize()).payload.Deserialize<Models.Rich>().extra.Single() == 6,
                 "unknown fields lost for upstream");
+
+            // A payload of 16 KB or more is copied into an array that is not zeroed first.
+            envelope.payload = new Bond.Bonded<Models.Payload>(new Models.Payload { id = 7, text = new string('x', 20000) });
+            byte[] large = Upstream.Write(envelope);
+            var largeRead = Models.Envelope.Deserialize(large);
+            Require(largeRead.payload.Deserialize().text == new string('x', 20000), "large payload");
+            Require(largeRead.Serialize().SequenceEqual(large), "large payload written back differently");
             """, Upstream);
     }
 

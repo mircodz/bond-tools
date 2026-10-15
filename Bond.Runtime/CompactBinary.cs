@@ -8,11 +8,22 @@ namespace BondTools.Runtime;
 /// <remarks>The generated <c>Serialize</c> and <c>Deserialize</c> methods of every struct call these.</remarks>
 public static class CompactBinary
 {
+    // One buffer per thread for the overloads that copy the bytes out, so a call allocates only its result.
+    [ThreadStatic]
+    private static ArrayBufferWriter<byte>? t_buffer;
+
     public static byte[] Serialize<T>(T value, BondCodec<T> codec)
     {
-        var output = new ArrayBufferWriter<byte>();
-        Serialize(value, output, codec);
-        return output.WrittenSpan.ToArray();
+        var buffer = RentBuffer();
+        try
+        {
+            Serialize(value, buffer, codec);
+            return buffer.WrittenSpan.ToArray();
+        }
+        finally
+        {
+            ReturnBuffer(buffer);
+        }
     }
 
     public static void Serialize<T>(T value, IBufferWriter<byte> output, BondCodec<T> codec)
@@ -28,9 +39,33 @@ public static class CompactBinary
     public static void Serialize<T>(T value, Stream output, BondCodec<T> codec)
     {
         ArgumentNullException.ThrowIfNull(output);
-        var buffer = new ArrayBufferWriter<byte>();
-        Serialize(value, buffer, codec);
-        output.Write(buffer.WrittenSpan);
+        var buffer = RentBuffer();
+        try
+        {
+            Serialize(value, buffer, codec);
+            output.Write(buffer.WrittenSpan);
+        }
+        finally
+        {
+            ReturnBuffer(buffer);
+        }
+    }
+
+    // Taken out while in use, so a serialization nested in another (from a converter, say) gets its own.
+    private static ArrayBufferWriter<byte> RentBuffer()
+    {
+        var buffer = t_buffer ?? new ArrayBufferWriter<byte>(1024);
+        t_buffer = null;
+        return buffer;
+    }
+
+    private static void ReturnBuffer(ArrayBufferWriter<byte> buffer)
+    {
+        if (buffer.Capacity <= 1024 * 1024)
+        {
+            buffer.ResetWrittenCount();
+            t_buffer = buffer;
+        }
     }
 
     /// <exception cref="InvalidDataException">The data is not a valid payload.</exception>

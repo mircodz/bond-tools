@@ -393,17 +393,23 @@ public static partial class CSharpGenerator
                         Line(indent, assign(result));
                         break;
                     }
-                case BondType.Vector or BondType.List or BondType.Set:
+                case BondType.Vector vector:
+                    {
+                        var items = Fresh("items");
+                        EmitReadVector(wire, vector.ElementType, MapType(type, location).Name, items, into, location, indent);
+                        if (into == null)
+                        {
+                            Line(indent, assign(items));
+                        }
+
+                        break;
+                    }
+                case BondType.List or BondType.Set:
                     {
                         var collection = MapType(type, location).Name;
                         var items = Fresh("items");
                         var element = ElementType(unwrapped);
-                        var (wireKind, add) = unwrapped switch
-                        {
-                            BondType.Vector => ("List", "Add"),
-                            BondType.List => ("List", "AddLast"),
-                            _ => ("Set", "Add")
-                        };
+                        var (wireKind, add) = unwrapped is BondType.List ? ("List", "AddLast") : ("Set", "Add");
 
                         // LinkedList has no capacity; the others are sized from the element count.
                         var sized = unwrapped is not BondType.List;
@@ -493,6 +499,30 @@ public static partial class CSharpGenerator
             }
 
             Line(indent, $"{variable}.EnsureCapacity({variable}.Count + {capacity});");
+        }
+
+        // A vector's elements are read straight into its list's storage, after one count change: no Add per element.
+        private void EmitReadVector(string wire, BondType element, string collection, string items, string? into,
+            SourceLocation location, int indent)
+        {
+            var count = Fresh("count");
+            var elementWire = Fresh("element");
+            var start = Fresh("start");
+            var span = Fresh("span");
+            var index = Fresh("i");
+            Line(indent, $"int {count} = reader.ReadContainerBegin({wire}, {Runtime}WireType.List, out {Runtime}WireType {elementWire});");
+            var elementChecked = EmitElementCheck(element, elementWire, location, indent);
+            Line(indent, into == null
+                ? $"{collection} {items} = new {collection}({count});"
+                : $"{collection} {items} = {into} ??= new {collection}({count});");
+            Line(indent, $"int {start} = {items}.Count;");
+            Line(indent, $"global::System.Runtime.InteropServices.CollectionsMarshal.SetCount({items}, {start} + {count});");
+            Line(indent, $"global::System.Span<{MapType(element, location).Name}> {span} = " +
+                $"global::System.Runtime.InteropServices.CollectionsMarshal.AsSpan({items}).Slice({start});");
+            Line(indent, $"for (int {index} = 0; {index} < {span}.Length; {index}++)");
+            Line(indent, "{");
+            EmitReadValue(element, elementWire, item => $"{span}[{index}] = {item};", location, indent + 1, wireChecked: elementChecked);
+            Line(indent, "}");
         }
 
         private void EmitReadItems(string wire, string wireKind, BondType element, Func<string, string> add,
