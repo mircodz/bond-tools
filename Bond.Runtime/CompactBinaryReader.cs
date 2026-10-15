@@ -312,14 +312,18 @@ public ref struct CompactBinaryReader
         };
     }
 
+    // Compared unsigned, so that the JIT drops the indexer's own bounds check.
     private byte ReadByte()
     {
-        if (_position >= _data.Length)
+        var position = _position;
+        var data = _data;
+        if ((uint)position >= (uint)data.Length)
         {
             ThrowEndOfStream();
         }
 
-        return _data[_position++];
+        _position = position + 1;
+        return data[position];
     }
 
     // The next count elements of elementSize bytes, after checking that they are in the data.
@@ -361,11 +365,11 @@ public ref struct CompactBinaryReader
     }
 
     // Every value occupies at least one byte, so a count beyond the remaining data is invalid. This also bounds the
-    // memory preallocated for containers by the size of the payload.
+    // memory preallocated for containers by the size of the payload. Multiplied rather than divided: a division is slow.
     private int ReadCount(int elementBytes)
     {
         var count = ReadVarUInt32();
-        if (count > (uint)(_data.Length - _position) / (uint)elementBytes)
+        if ((ulong)count * (uint)elementBytes > (uint)(_data.Length - _position))
         {
             ThrowEndOfStream();
         }
