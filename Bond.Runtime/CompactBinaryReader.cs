@@ -167,7 +167,7 @@ public ref struct CompactBinaryReader
     {
         var count = ReadContainerBegin(type, WireType.List, out var elementType);
         Expect(elementType, WireType.Int8);
-        return new ArraySegment<byte>(Take(count).ToArray());
+        return new ArraySegment<byte>(Copy(Take(count)));
     }
 
     /// <summary>Reads the encoding of a struct without deserializing it.</summary>
@@ -175,7 +175,7 @@ public ref struct CompactBinaryReader
     {
         var start = _position;
         Skip(WireType.Struct);
-        return _data[start.._position].ToArray();
+        return Copy(_data[start.._position]);
     }
 
     /// <summary>Skips a value of the given wire type, such as a field unknown to the reader's schema.</summary>
@@ -334,6 +334,19 @@ public ref struct CompactBinaryReader
         var taken = _data.Slice(_position, (int)size);
         _position += (int)size;
         return taken;
+    }
+
+    // As ToArray, but from 16 KB without zeroing the array before the copy. Smaller arrays measured slower that way.
+    private static byte[] Copy(ReadOnlySpan<byte> bytes)
+    {
+        if (bytes.Length < 16 * 1024)
+        {
+            return bytes.ToArray();
+        }
+
+        var array = GC.AllocateUninitializedArray<byte>(bytes.Length);
+        bytes.CopyTo(array);
+        return array;
     }
 
     private int ReadLength()

@@ -612,6 +612,13 @@ public sealed class CSharpSerializationTests
             Require(again.payload.Convert<Models.Rich>().Deserialize().extra.Single() == 6, "converted");
             Require(Upstream.Read<Models.Envelope>(envelope.Serialize()).payload.Deserialize<Models.Rich>().extra.Single() == 6,
                 "unknown fields lost for upstream");
+
+            // A payload of 16 KB or more is copied into an array that is not zeroed first.
+            envelope.payload = new Bond.Bonded<Models.Payload>(new Models.Payload { id = 7, text = new string('x', 20000) });
+            byte[] large = Upstream.Write(envelope);
+            var largeRead = Models.Envelope.Deserialize(large);
+            Require(largeRead.payload.Deserialize().text == new string('x', 20000), "large payload");
+            Require(largeRead.Serialize().SequenceEqual(large), "large payload written back differently");
             """, Upstream);
     }
 
