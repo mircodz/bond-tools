@@ -143,7 +143,14 @@ public static class Program
             {
                 if (args.Has("--check"))
                 {
-                    Console.Error.WriteLine($"{input} would be reformatted");
+                    if (format == "json")
+                    {
+                        errors.Add(new ParseError($"{input} would be reformatted", path, 0, 0));
+                    }
+                    else
+                    {
+                        Console.Error.WriteLine($"{input} would be reformatted");
+                    }
                     unformatted = true;
                 }
                 else
