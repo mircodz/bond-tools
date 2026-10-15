@@ -17,7 +17,7 @@ public static class Program
         Usage:
           bond check <schema.bond> [options]
           bond breaking <schema.bond> --against <reference> [options]
-          bond format <schema.bond> [--check]
+          bond format <schema.bond>... [--check]
           bond generate csharp <schema.bond>... -o <dir> [options]
 
         Common options:
@@ -116,33 +116,44 @@ public static class Program
         }
 
         var format = args.ErrorFormat();
-        var input = args.Positional("schema file");
-        var path = Path.GetFullPath(input);
-        if (!File.Exists(path))
+        if (args.Positionals.Count == 0)
         {
-            return Diagnostics.Report([new ParseError($"File not found: {path}", path, 0, 0)], format, exitCode: 1);
+            throw new UsageException("A schema file is required.");
         }
 
-        var content = await File.ReadAllTextAsync(path);
-        var result = BondFormatter.Format(content, path);
-        if (!result.Success)
+        // Each file is formatted on its own: one that fails to parse doesn't stop the others.
+        var errors = new List<ParseError>();
+        var unformatted = false;
+        var files = args.Positionals.Select(input => (Input: input, FullPath: Path.GetFullPath(input)));
+        foreach (var (input, path) in files.DistinctBy(file => file.FullPath))
         {
-            return Diagnostics.Report(result.Errors, format, exitCode: 1);
+            if (!File.Exists(path))
+            {
+                errors.Add(new ParseError($"File not found: {path}", path, 0, 0));
+                continue;
+            }
+
+            var content = await File.ReadAllTextAsync(path);
+            var result = BondFormatter.Format(content, path);
+            if (!result.Success)
+            {
+                errors.AddRange(result.Errors);
+            }
+            else if (result.FormattedText != content)
+            {
+                if (args.Has("--check"))
+                {
+                    Console.Error.WriteLine($"{input} would be reformatted");
+                    unformatted = true;
+                }
+                else
+                {
+                    await File.WriteAllTextAsync(path, result.FormattedText);
+                }
+            }
         }
 
-        if (result.FormattedText == content)
-        {
-            return 0;
-        }
-
-        if (args.Has("--check"))
-        {
-            Console.Error.WriteLine($"{input} would be reformatted");
-            return 1;
-        }
-
-        await File.WriteAllTextAsync(path, result.FormattedText);
-        return 0;
+        return errors.Count != 0 ? Diagnostics.Report(errors, format, exitCode: 1) : unformatted ? 1 : 0;
     }
 
     private static async Task<int> Generate(string[] rest)
