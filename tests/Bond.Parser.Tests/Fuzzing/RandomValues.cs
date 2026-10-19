@@ -11,21 +11,42 @@ namespace Bond.Parser.Tests.Fuzzing;
 /// Fills generated objects with random values, biased towards the edges of the wire format: defaults, varint
 /// boundaries, -0.0 and NaN, empty, long and invalid text, undefined enum values, blobs in the middle of an array.
 /// Nulls only go where the schema allows them: nullable types, which upstream's [Bond.Type] attributes mark, and
-/// defaults of nothing, which the constructor leaves null.
+/// defaults of nothing, which the constructor leaves null. Large values have more elements, text and blobs long enough
+/// to take the writer's and reader's other paths, and recursive structs nested up to 160 levels deep.
 /// </summary>
-internal sealed class RandomValues(Random random)
+internal sealed class RandomValues(Random random, bool large = false)
 {
     private static readonly int[] Powers = [0, 1, 6, 7, 8, 13, 14, 15, 16, 20, 21, 27, 28, 31, 32, 34, 35, 48, 49, 55, 56, 62, 63];
 
-    public T Create<T>() => (T)Struct(typeof(T), depth: 0);
+    // Values and elements each Create() may fill, a long text or blob counting as many, so payloads stay within a few
+    // hundred kilobytes; the rest keep their defaults.
+    private const int Budget = 4_000;
+    private int _remaining;
+
+    // Structs being filled: a value of one of their types recurses, and mostly stops, unless it is to go _deep levels.
+    private readonly List<Type> _filling = [];
+    private int _deep;
+
+    public T Create<T>()
+    {
+        _remaining = Budget;
+        _deep = large && random.Next(3) == 0 ? random.Next(20, 160) : 0;
+        return (T)Struct(typeof(T), depth: 0);
+    }
 
     private object Struct(Type type, int depth)
     {
         var instance = Activator.CreateInstance(type)!;
+        if (_remaining <= 0)
+        {
+            return instance;
+        }
+
+        _filling.Add(type);
         foreach (var property in type.GetProperties(BindingFlags.Public | BindingFlags.Instance))
         {
             // A quarter of the fields keep their default, which optional fields don't write.
-            if (property.GetCustomAttribute<global::Bond.IdAttribute>() == null || random.Next(4) == 0)
+            if (property.GetCustomAttribute<global::Bond.IdAttribute>() == null || depth >= _deep && random.Next(4) == 0)
             {
                 continue;
             }
@@ -34,17 +55,23 @@ internal sealed class RandomValues(Random random)
                 .FirstOrDefault(data => data.AttributeType == typeof(global::Bond.TypeAttribute))?
                 .ConstructorArguments[0].Value as Type ?? property.PropertyType;
             var maybe = !property.PropertyType.IsValueType && property.GetValue(instance) == null;
-            property.SetValue(instance, maybe && random.Next(3) == 0 ? null : Value(property.PropertyType, schema, depth + 1));
+            property.SetValue(instance, maybe && Absent(property.PropertyType, depth) ? null : Value(property.PropertyType, schema, depth + 1));
         }
 
+        _filling.RemoveAt(_filling.Count - 1);
         return instance;
     }
 
+    // Whether a value that may be null is: a third of the time, or mostly for a recursive struct, unless going deep.
+    private bool Absent(Type type, int depth) =>
+        depth >= _deep && (_filling.Contains(type) ? random.Next(4) != 0 : random.Next(3) == 0);
+
     private object? Value(Type clr, Type schema, int depth, bool key = false)
     {
+        _remaining--;
         if (schema.IsGenericType && schema.GetGenericTypeDefinition() == typeof(global::Bond.Tag.nullable<>))
         {
-            if (random.Next(3) == 0)
+            if (Absent(clr, depth))
             {
                 // A null nullable<blob> is a default segment, as a dictionary of them can't hold null.
                 return clr.IsValueType && Nullable.GetUnderlyingType(clr) == null ? Activator.CreateInstance(clr) : null;
@@ -55,7 +82,7 @@ internal sealed class RandomValues(Random random)
 
         if (Nullable.GetUnderlyingType(clr) is { } underlying)
         {
-            if (random.Next(3) == 0)
+            if (Absent(clr, depth))
             {
                 return null;
             }
@@ -116,13 +143,21 @@ internal sealed class RandomValues(Random random)
         return Struct(clr, depth);
     }
 
-    // Mostly a few elements; sometimes none, or many numbers, which vector reads and writes treat in bulk.
-    private int Count(Type element, int depth) => random.Next(12) switch
+    // Mostly a few elements; sometimes none, or many numbers, which vector reads and writes treat in bulk. Recursive
+    // structs get one element on the way down to _deep, and otherwise mostly none, so they stop.
+    private int Count(Type element, int depth)
     {
-        0 => 0,
-        1 when depth < 4 && (element.IsPrimitive || element.IsEnum) => random.Next(20, 300),
-        _ => random.Next(1, depth < 6 ? 4 : 2)
-    };
+        var count = _remaining <= 0 ? 0
+            : _filling.Contains(element) ? (depth < _deep || random.Next(3) == 0 ? 1 : 0)
+            : random.Next(12) switch
+            {
+                0 => 0,
+                1 when depth < 4 && (element.IsPrimitive || element.IsEnum) => random.Next(20, large ? 3000 : 300),
+                _ => random.Next(1, depth < 6 ? (large ? 7 : 4) : 2)
+            };
+        _remaining -= count;
+        return count;
+    }
 
     // A power of two, or one either side of it, where varints change length; or random bits of a random length.
     private ulong Unsigned()
@@ -172,12 +207,15 @@ internal sealed class RandomValues(Random random)
     private string Text(bool valid)
     {
         var builder = new StringBuilder();
+        // Over 5,461 characters a string is written in two passes, and 16,384 bytes take a three-byte length.
         var length = random.Next(10) switch
         {
             0 => 0,
             1 => random.Next(100, 400),
+            2 when large && random.Next(4) == 0 => random.Next(5000, 24000),
             _ => random.Next(1, 16)
         };
+        _remaining -= length / 16;
         while (builder.Length < length)
         {
             builder.Append(random.Next(30) switch
@@ -197,7 +235,8 @@ internal sealed class RandomValues(Random random)
     // Sometimes 16 KB or more, which reads copy differently, and sometimes in the middle of a larger array.
     private ArraySegment<byte> Blob()
     {
-        var length = random.Next(50) == 0 ? random.Next(16 * 1024, 20 * 1024) : random.Next(40);
+        var length = random.Next(50) == 0 ? random.Next(16 * 1024, large ? 80 * 1024 : 20 * 1024) : random.Next(40);
+        _remaining -= length / 64;
         var offset = random.Next(3) == 0 ? random.Next(1, 5) : 0;
         var array = new byte[offset + length + random.Next(3)];
         random.NextBytes(array);

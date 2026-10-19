@@ -8,11 +8,17 @@ namespace Bond.Parser.Tests.Fuzzing;
 
 /// <summary>
 /// A random schema that Bond accepts: enums, aliases, and generic, derived and view structs whose fields nest every
-/// Bond type, with random ordinals, modifiers and defaults. The same seed always gives the same schema.
+/// Bond type, with random ordinals, modifiers and defaults. The same seed always gives the same schema. A large schema
+/// draws its own size, up to 16 structs of 32 fields nested 6 deep, and has recursive structs.
 /// </summary>
 internal sealed class RandomSchema
 {
-    private const int MaxDepth = 3;
+    // Upstream compiles a serializer per struct with every struct it nests inlined, in time and stack that grow faster
+    // than its size, so a large struct takes minutes. Sizes count each type in a struct's tree, nested structs and type
+    // arguments included: a struct is within SizeBudget when its type arguments are within ArgumentSize. That also bounds
+    // the objects its constructor creates.
+    private const long SizeBudget = 300;
+    private const long ArgumentSize = 30;
 
     private static readonly string[] Scalars =
         ["bool", "int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64", "float", "double"];
@@ -36,23 +42,41 @@ internal sealed class RandomSchema
     // and nullable there, as Bond.Runtime/README.md says, so neither is generated, nor an alias that may hide them.
     private bool _plain;
 
-    public RandomSchema(int seed)
+    private readonly bool _large;
+    private readonly int _maxDepth = 3;
+    private readonly int _maxFields = 8;
+    private readonly int _maxParams = 2;
+    private readonly int _genericOdds = 4;
+    private readonly int _baseOdds = 5;
+
+    public RandomSchema(int seed, bool large = false)
     {
         _random = new Random(seed);
-        Namespace = $"Fuzz.N{seed}";
+        Namespace = large ? $"Fuzz.L{seed}" : $"Fuzz.N{seed}";
         _text.Append($"namespace {Namespace}\n\n");
 
-        for (var i = _random.Next(3); i > 0; i--)
+        var (enums, aliases, structs) = (3, 3, 6);
+        _large = large;
+        if (large)
+        {
+            (enums, aliases, structs) = (_random.Next(1, 6), _random.Next(1, 6), _random.Next(2, 18));
+            _maxDepth = _random.Next(3, 7);
+            _maxFields = _random.Next(4, 33);
+            _maxParams = 3;
+            (_genericOdds, _baseOdds) = (3, 3);
+        }
+
+        for (var i = _random.Next(enums); i > 0; i--)
         {
             AddEnum();
         }
 
-        for (var i = _random.Next(3); i > 0; i--)
+        for (var i = _random.Next(aliases); i > 0; i--)
         {
             AddAlias();
         }
 
-        var count = _random.Next(1, 6);
+        var count = _random.Next(1, structs);
         for (var i = 0; i < count; i++)
         {
             AddStruct(last: i == count - 1);
@@ -72,19 +96,28 @@ internal sealed class RandomSchema
     // containers. Each kind is only used where all its instantiations are valid: as a key, in bonded<T>, with nothing.
     private enum ParamKind { Value, Struct, Other }
 
-    private sealed record TypeRef(string Text, Shape Shape, string? Scalar = null, EnumInfo? Enum = null)
+    // Size is the type's size given the sizes of the enclosing struct's type arguments.
+    private sealed record TypeRef(string Text, Shape Shape, string? Scalar = null, EnumInfo? Enum = null,
+        Func<long[], long>? Size = null)
     {
         public bool IsKey => Shape is Shape.Scalar or Shape.Enum or Shape.Text or Shape.ValueParam;
+
+        public long SizeOf(long[] arguments) => Size?.Invoke(arguments) ?? 1;
+
+        public long MostSize(Param[] scope) => SizeOf(scope.Select(_ => ArgumentSize).ToArray());
     }
 
-    private sealed record Param(string Name, ParamKind Kind);
+    private sealed record Param(string Name, ParamKind Kind, int Index);
 
     private sealed record EnumInfo(string Name, string[] Constants);
 
     // A generic alias has one parameter, used as a key when KeyParam is set.
     private sealed record AliasInfo(string Name, TypeRef? Target, string? Template, bool KeyParam);
 
-    private sealed record StructInfo(string Name, Param[] Params, List<string> FieldNames);
+    private sealed record StructInfo(string Name, Param[] Params, List<string> FieldNames)
+    {
+        public Func<long[], long> Size { get; set; } = _ => 1;
+    }
 
     private void AddEnum()
     {
@@ -127,7 +160,7 @@ internal sealed class RandomSchema
         {
             var target = Pick(plain);
             var fields = target.FieldNames.Where(_ => _random.Next(2) == 0).DefaultIfEmpty(target.FieldNames[0]).ToList();
-            _structs.Add(new StructInfo(name, [], fields));
+            _structs.Add(new StructInfo(name, [], fields) { Size = target.Size });
             _text.Append($"struct {name} view_of {target.Name} {{ {string.Join("; ", fields)} }}\n\n");
             return;
         }
@@ -138,9 +171,9 @@ internal sealed class RandomSchema
             kinds.Add(ParamKind.Struct);
         }
 
-        var parameters = last || _random.Next(4) != 0
+        var parameters = last || _random.Next(_genericOdds) != 0
             ? []
-            : Enumerable.Range(0, _random.Next(1, 3)).Select(i => new Param($"T{i}", Pick(kinds))).ToArray();
+            : Enumerable.Range(0, _random.Next(1, _maxParams + 1)).Select(i => new Param($"T{i}", Pick(kinds), i)).ToArray();
         var info = new StructInfo(name, parameters, []);
 
         var header = new StringBuilder($"struct {name}");
@@ -151,15 +184,25 @@ internal sealed class RandomSchema
                 .Append('>');
         }
 
-        if (_structs.Count > 0 && _random.Next(5) == 0)
+        TypeRef? baseType = null;
+        if (_structs.Count > 0 && _random.Next(_baseOdds) == 0)
         {
-            header.Append(" : ").Append(Plain(() => Instantiate(Pick(_structs), parameters, depth: 1)).Text);
+            baseType = Plain(() => Instantiate(Pick(_structs), parameters, depth: 1));
+            if (baseType.MostSize(parameters) <= SizeBudget)
+            {
+                header.Append(" : ").Append(baseType.Text);
+            }
+            else
+            {
+                baseType = null;
+            }
         }
 
+        var sizes = new List<TypeRef> { baseType ?? new TypeRef(name, Shape.Struct) };
         var lines = new List<string>();
         var ordinals = new HashSet<int>();
         var names = new HashSet<string>();
-        for (var i = _random.Next(9); i > 0; i--)
+        for (var i = _random.Next(_maxFields + 1); i > 0; i--)
         {
             var ordinal = Ordinal(ordinals);
             var fieldName = _random.Next(20) == 0 ? Pick(Keywords) : $"f{ordinal}";
@@ -175,7 +218,15 @@ internal sealed class RandomSchema
             }
             else
             {
-                var type = Type(parameters, depth: 0);
+                // A type that keeps the struct within SizeBudget, after a few tries a scalar, which always does.
+                var type = _large && _random.Next(8) == 0 ? SelfType(name, parameters) : Type(parameters, depth: 0);
+                var most = sizes.Sum(size => size.MostSize(parameters));
+                for (var retry = 0; type.Shape != Shape.Scalar && most + type.MostSize(parameters) > SizeBudget; retry++)
+                {
+                    type = retry < 3 ? Type(parameters, depth: 0) : ScalarType();
+                }
+
+                sizes.Add(type);
                 var modifier = Pick(["", "", "", "", "", "", "optional ", "required ", "required_optional "]);
                 var defaultValue = Default(type, modifier.Trim());
                 lines.Add($"    {ordinal}: {modifier}{type.Text} {fieldName}{(defaultValue == null ? "" : " = " + defaultValue)};");
@@ -184,6 +235,7 @@ internal sealed class RandomSchema
             info.FieldNames.Add(fieldName);
         }
 
+        info.Size = arguments => sizes.Sum(size => size.SizeOf(arguments));
         _structs.Add(info);
         _text.Append(header).Append(" {\n");
         foreach (var line in lines.OrderBy(_ => _random.Next()))
@@ -227,7 +279,7 @@ internal sealed class RandomSchema
 
         if (_structs.Count > 0)
         {
-            options.Add((12, () => Instantiate(Pick(_structs), scope, depth + 1)));
+            options.Add((12, () => StructType(scope, depth + 1)));
         }
 
         if (scope.Length > 0)
@@ -240,12 +292,12 @@ internal sealed class RandomSchema
             options.Add((5, () => AliasType(scope, depth)));
         }
 
-        if (depth < MaxDepth)
+        if (depth < _maxDepth)
         {
             options.Add((6, () => Container("vector", Type(scope, depth + 1))));
             options.Add((4, () => Container("list", Type(scope, depth + 1))));
-            options.Add((4, () => new TypeRef($"set<{Key(scope).Text}>", Shape.Container)));
-            options.Add((6, () => new TypeRef($"map<{Key(scope).Text}, {Type(scope, depth + 1).Text}>", Shape.Container)));
+            options.Add((4, () => Container("set", Key(scope))));
+            options.Add((6, () => Map(Key(scope), Type(scope, depth + 1))));
             if (!_plain)
             {
                 options.Add((6, () => Nullable(scope, depth)));
@@ -288,16 +340,36 @@ internal sealed class RandomSchema
         ParamKind.Value => Shape.ValueParam,
         ParamKind.Struct => Shape.StructParam,
         _ => Shape.OtherParam
-    });
+    }, Size: arguments => arguments[param.Index]);
 
-    private static TypeRef Container(string kind, TypeRef element) => new($"{kind}<{element.Text}>", Shape.Container);
+    private static TypeRef Container(string kind, TypeRef element) =>
+        new($"{kind}<{element.Text}>", Shape.Container, Size: arguments => 1 + element.SizeOf(arguments));
+
+    private static TypeRef Map(TypeRef key, TypeRef value) =>
+        new($"map<{key.Text}, {value.Text}>", Shape.Container, Size: arguments => 1 + key.SizeOf(arguments) + value.SizeOf(arguments));
+
+    // A field of the struct's own type, which values nest as deep as they like. Never bonded<T>: upstream can't write a
+    // struct that contains a bonded<T> of itself.
+    private TypeRef SelfType(string self, Param[] scope)
+    {
+        var name = scope.Length == 0 ? self : $"{self}<{string.Join(", ", scope.Select(p => p.Name))}>";
+        var element = new TypeRef(name, Shape.Struct);
+        return _random.Next(5) switch
+        {
+            0 => Container("list", element),
+            1 => Map(Key(scope), element),
+            2 => new TypeRef($"nullable<{name}>", Shape.Nullable, Size: _ => 2),
+            3 => Container("vector", new TypeRef($"nullable<{name}>", Shape.Nullable, Size: _ => 2)),
+            _ => Container("vector", element)
+        };
+    }
 
     private TypeRef Nullable(Param[] scope, int depth)
     {
         var element = Type(scope, depth + 1);
         return element.Shape is Shape.Nullable or Shape.Bonded
             ? Container("vector", element)
-            : new TypeRef($"nullable<{element.Text}>", Shape.Nullable);
+            : new TypeRef($"nullable<{element.Text}>", Shape.Nullable, Size: arguments => 1 + element.SizeOf(arguments));
     }
 
     private TypeRef Key(Param[] scope)
@@ -332,15 +404,35 @@ internal sealed class RandomSchema
         }
 
         var argument = alias.KeyParam ? Key(scope) : Type(scope, depth + 1);
-        return new TypeRef($"{alias.Name}<{argument.Text}>", Shape.Container);
+        return new TypeRef($"{alias.Name}<{argument.Text}>", Shape.Container, Size: arguments => 2 + argument.SizeOf(arguments));
     }
 
-    private TypeRef Instantiate(StructInfo structure, Param[] scope, int depth) =>
-        structure.Params.Length == 0
-            ? new TypeRef(structure.Name, Shape.Struct)
-            : new TypeRef(
-                $"{structure.Name}<{string.Join(", ", structure.Params.Select(p => Argument(p.Kind, scope, depth).Text))}>",
-                Shape.Struct);
+    private TypeRef Instantiate(StructInfo structure, Param[] scope, int depth)
+    {
+        if (structure.Params.Length == 0)
+        {
+            return new TypeRef(structure.Name, Shape.Struct, Size: structure.Size);
+        }
+
+        var arguments = structure.Params.Select(p => Argument(p.Kind, scope, depth)).ToArray();
+        return new TypeRef($"{structure.Name}<{string.Join(", ", arguments.Select(argument => argument.Text))}>", Shape.Struct,
+            Size: sizes => structure.Size(arguments.Select(argument => argument.SizeOf(sizes)).ToArray()));
+    }
+
+    // A struct within the size budget, or a scalar when a few tries find none.
+    private TypeRef StructType(Param[] scope, int depth)
+    {
+        for (var attempt = 0; attempt < 4; attempt++)
+        {
+            var type = Instantiate(Pick(_structs), scope, depth);
+            if (type.MostSize(scope) <= SizeBudget)
+            {
+                return type;
+            }
+        }
+
+        return ScalarType();
+    }
 
     private TypeRef Argument(ParamKind kind, Param[] scope, int depth)
     {
@@ -356,7 +448,7 @@ internal sealed class RandomSchema
             ParamKind.Struct => StructArgument([], depth),
             _ => _random.Next(3) == 0
                 ? TextType()
-                : Container(Pick(["vector", "list"]), depth < MaxDepth ? Type([], depth + 1) : ScalarType())
+                : Container(Pick(["vector", "list"]), depth < _maxDepth ? Type([], depth + 1) : ScalarType())
         };
     }
 
@@ -369,8 +461,21 @@ internal sealed class RandomSchema
             return ParamType(Pick(own));
         }
 
-        var candidates = _structs.Where(s => s.Params.Length == 0 || depth < MaxDepth).ToList();
-        return Plain(() => Instantiate(Pick(candidates.Count > 0 ? candidates : _structs), [], depth + 1));
+        // Within ArgumentSize if a few tries allow, or else the smallest struct that isn't generic.
+        var candidates = _structs.Where(s => s.Params.Length == 0 || depth < _maxDepth).ToList();
+        for (var attempt = 0; attempt < 4; attempt++)
+        {
+            var type = Plain(() => Instantiate(Pick(candidates.Count > 0 ? candidates : _structs), [], depth + 1));
+            if (type.MostSize([]) <= ArgumentSize)
+            {
+                return type;
+            }
+        }
+
+        var plain = _structs.Where(s => s.Params.Length == 0).ToList();
+        return plain.Count > 0
+            ? Instantiate(plain.MinBy(s => s.Size([]))!, [], depth + 1)
+            : Plain(() => Instantiate(Pick(_structs), [], depth + 1));
     }
 
     private TypeRef Plain(Func<TypeRef> make)
