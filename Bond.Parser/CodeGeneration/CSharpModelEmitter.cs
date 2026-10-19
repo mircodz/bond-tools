@@ -56,7 +56,7 @@ public static partial class CSharpGenerator
 
             if (options.GenerateClear)
             {
-                EmitClear(fields, isDerived: structure.BaseType != null);
+                EmitClear(structure, fields);
             }
         }
 
@@ -245,16 +245,19 @@ public static partial class CSharpGenerator
 
         // Resets every field to its default, as the constructor sets it. Collections are emptied and structs generated
         // alongside this one cleared in place, so a cleared instance keeps its storage for the next read.
-        private void EmitClear(IReadOnlyList<ModelField> fields, bool isDerived)
+        private void EmitClear(StructDeclaration structure, IReadOnlyList<ModelField> fields)
         {
             Line(0);
-            Line(2, $"public {(isDerived ? "new " : "")}void Clear()");
+            Line(2, $"public {(structure.BaseType != null ? "new " : "")}void Clear()");
             Line(2, "{");
             foreach (var field in fields)
             {
                 var type = UnwrapAlias(field.Type, field.Location);
                 if (IsMetaType(type))
                 {
+                    // The constructor names inherited metadata fields after this struct too; reads overwrite them.
+                    var name = type is BondType.MetaName ? structure.Name : IdlFullName(structure);
+                    Line(3, $"{field.On("this")} = {Literal(name)};");
                     continue;
                 }
 

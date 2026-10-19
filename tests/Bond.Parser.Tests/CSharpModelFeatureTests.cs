@@ -209,7 +209,7 @@ public sealed class CSharpModelFeatureTests
             namespace Models
             enum Color { Red, Green = 5 }
             struct Address { 0: string street = "Main"; 1: vector<string> lines; }
-            struct Base { 0: int32 id = 7; 1: string name; 2: Address home; }
+            struct Base { 0: int32 id = 7; 1: string name; 2: Address home; 3: bond_meta::name kind; }
             struct Item : Base {
                 0: list<int64> numbers;
                 1: set<string> tags;
@@ -221,12 +221,15 @@ public sealed class CSharpModelFeatureTests
                 7: vector<int32> missing = nothing;
                 8: string name;
                 9: vector<int32> values;
+                10: bond_meta::full_name full;
             }
             struct Page<T> { 0: vector<T> items; 1: T first; }
             struct Holder { 0: Page<Address> page; 1: wstring title = "t"; }
             """, """
             var item = new Models.Item { id = 1, color = Models.Color.Red, ratio = 2, name = "derived" };
             ((Models.Base)item).name = "base";
+            item.kind = "read from a payload";
+            item.full = "read from a payload";
             item.home.street = "Elm";
             item.home.lines.Add("x");
             item.numbers.AddLast(1);
@@ -246,6 +249,7 @@ public sealed class CSharpModelFeatureTests
             Require(item.id == 7 && item.color == Models.Color.Green && item.ratio == 1.5 && item.home.street == "Main",
                 "schema defaults");
             Require(((Models.Base)item).name == "" && item.name == "", "hidden base field");
+            Require(item.kind == "Item" && item.full == "Models.Item", "metadata names");
             Require(item.extra == null && item.missing == null && item.data.Array == null, "nullable, nothing or blob");
             Require(ReferenceEquals(item.home, home) && ReferenceEquals(item.home.lines, lines), "nested struct replaced");
             Require(ReferenceEquals(item.values, values) && values.Capacity == capacity, "vector replaced");
