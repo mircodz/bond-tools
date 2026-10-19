@@ -5,7 +5,6 @@
       <Usings>$(BondUsings)</Usings>
       <NamespaceMappings>$(BondNamespaceMappings)</NamespaceMappings>
       <TypeMappings>$(BondTypeMappings)</TypeMappings>
-      <Clone>$(BondClone)</Clone>
       <Equality>$(BondEquality)</Equality>
       <ToString>$(BondToString)</ToString>
       <Clear>$(BondClear)</Clear>

@@ -27,8 +27,9 @@ public sealed class MsBuildGenerationTests(MsBuildPackageFixture packages) : ICl
             using Bond.Protocols;
             var item = new Item { id = 42 };
             item.values.Add(3);
-            var copy = item.Clone();
-            if (ReferenceEquals(item.values, copy.values) || !item.Equals(copy) || item.ToString() != "Item { id = 42, values = [3] }")
+            var copy = new Item { id = 42 };
+            copy.values.Add(3);
+            if (!item.Equals(copy) || item.GetHashCode() != copy.GetHashCode() || item.ToString() != "Item { id = 42, values = [3] }")
             {
                 throw new Exception("Model members are wrong.");
             }
@@ -47,8 +48,7 @@ public sealed class MsBuildGenerationTests(MsBuildPackageFixture packages) : ICl
             """);
         project.Configure(
             new XElement("PropertyGroup",
-                new XElement("BondClone", "true"), new XElement("BondEquality", "true"), new XElement("BondToString", "true"),
-                new XElement("BondClear", "true"), new XElement("BondUsings", "System.Collections.Generic"),
+                new XElement("BondEquality", "true"), new XElement("BondToString", "true"), new XElement("BondClear", "true"), new XElement("BondUsings", "System.Collections.Generic"),
                 new XElement("BondNamespaceMappings", "Contracts=Application")),
             new XElement("ItemGroup", new XElement("Bond", new XAttribute("Include", "Schemas/item.bond"))));
 
@@ -154,11 +154,15 @@ public sealed class MsBuildGenerationTests(MsBuildPackageFixture packages) : ICl
     public async Task MultiTargetedProjectsGenerateForEachFramework()
     {
         var project = packages.CreateConsumer();
-        project.Write("item.bond", "namespace Contracts struct Item { 0: int32 id; 1: map<string, vector<blob>> data; }");
+        project.Write("item.bond", """
+            namespace Contracts
+            struct Item { 0: int32 id; 1: map<string, vector<blob>> data; }
+            struct Box<T> { 0: T value; 1: vector<T> values; }
+            """);
         project.Configure(
             new XElement("PropertyGroup", new XElement("TargetFramework", ""), new XElement("TargetFrameworks", "net8.0;netstandard2.1"),
                 new XElement("ImplicitUsings", "disable"),
-                new XElement("BondClone", "true"), new XElement("BondEquality", "true"), new XElement("BondToString", "true")),
+                new XElement("BondEquality", "true"), new XElement("BondToString", "true")),
             new XElement("ItemGroup", new XElement("Bond", new XAttribute("Include", "item.bond"))));
 
         (await project.Build()).AssertSuccess();

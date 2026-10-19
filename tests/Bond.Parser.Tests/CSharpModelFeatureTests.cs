@@ -11,49 +11,6 @@ namespace Bond.Parser.Tests;
 public sealed class CSharpModelFeatureTests
 {
     [Fact]
-    public async Task CloneCopiesMutableDataAndKeepsTheRuntimeType()
-    {
-        await Run("""
-            namespace Models
-            struct Leaf { 0: int32 value; 1: vector<int32> items; }
-            struct Tree {
-                0: vector<Leaf> leaves;
-                1: list<string> names;
-                2: set<int64> ids;
-                3: map<string, vector<Leaf>> groups;
-                4: nullable<Leaf> single;
-                5: blob bytes;
-                6: vector<blob> chunks;
-                7: nullable<vector<int32>> absent;
-            }
-            """, """
-            var leaf = new Models.Leaf { value = 1 };
-            leaf.items.Add(1);
-            var tree = new Models.Tree { single = leaf, bytes = new ArraySegment<byte>(new byte[] { 9, 1, 2, 9 }, 1, 2) };
-            tree.leaves.Add(leaf);
-            tree.names.AddLast("a");
-            tree.ids.Add(7);
-            tree.groups["g"] = new List<Models.Leaf> { leaf };
-            tree.chunks.Add(new ArraySegment<byte>(new byte[] { 3 }));
-
-            var copy = tree.Clone();
-            Require(copy.Equals(tree), "clone differs");
-            Require(!ReferenceEquals(copy.leaves, tree.leaves) && !ReferenceEquals(copy.leaves[0], leaf), "vector shared");
-            Require(!ReferenceEquals(copy.leaves[0].items, leaf.items), "nested vector shared");
-            Require(!ReferenceEquals(copy.names, tree.names) && !ReferenceEquals(copy.ids, tree.ids), "list or set shared");
-            Require(!ReferenceEquals(copy.groups["g"], tree.groups["g"]) && !ReferenceEquals(copy.groups["g"][0], leaf), "map shared");
-            Require(!ReferenceEquals(copy.single, leaf), "nullable struct shared");
-            Require(copy.bytes.Array != tree.bytes.Array && copy.bytes.SequenceEqual(new byte[] { 1, 2 }), "blob shared");
-            Require(copy.chunks[0].Array != tree.chunks[0].Array, "nested blob shared");
-            Require(copy.absent == null, "null container was materialized");
-
-            leaf.items.Add(2);
-            Require(!copy.Equals(tree), "clone observed a mutation");
-            Require(((ICloneable)new Derived()).Clone() is Derived, "runtime type lost");
-            """, extra: "class Derived : Models.Leaf { }");
-    }
-
-    [Fact]
     public async Task EqualityAndHashFollowValueSemantics()
     {
         await Run("""
@@ -124,28 +81,70 @@ public sealed class CSharpModelFeatureTests
             struct Base<T> { 0: string id; 1: vector<T> values; }
             struct Derived : Base<Item> { 0: string id; 1: nullable<Item> item; }
             """, """
-            var value = new Models.Derived { id = "derived" };
-            ((Models.Base<Models.Item>)value).id = "base";
-            value.values.Add(new Models.Item { id = 1 });
+            Models.Derived Create()
+            {
+                var created = new Models.Derived { id = "derived" };
+                ((Models.Base<Models.Item>)created).id = "base";
+                created.values.Add(new Models.Item { id = 1 });
+                return created;
+            }
 
-            var copy = value.Clone();
-            Require(((Models.Base<Models.Item>)copy).id == "base" && copy.id == "derived", "hidden fields not copied");
-            Require(!ReferenceEquals(copy.values[0], value.values[0]), "generic struct values were shared");
-            Require(copy.Equals(value) && copy.GetHashCode() == value.GetHashCode(), "copy differs");
+            var value = Create();
+            var other = Create();
+            Require(other.Equals(value) && other.GetHashCode() == value.GetHashCode(), "equal values differ");
 
-            ((Models.Base<Models.Item>)copy).id = "other";
-            Require(!copy.Equals(value), "hidden base field was ignored");
+            ((Models.Base<Models.Item>)other).id = "other";
+            Require(!other.Equals(value), "hidden base field was ignored");
             Require(value.ToString() == "Derived { Base.id = \"base\", values = [Item { id = 1 }], Derived.id = \"derived\", item = null }",
                 value.ToString());
-
-            value.item = new Models.Item { id = 2 };
-            var viaBase = ((Models.Base<Models.Item>)value).Clone() as Models.Derived;
-            Require(viaBase != null && viaBase.Equals(value) && !ReferenceEquals(viaBase.item, value.item), "base Clone() shared derived fields");
             """);
     }
 
     [Fact]
-    public async Task BondedPayloadsAreSharedByCloneAndComparedByValue()
+    public async Task TypeArgumentContainersAreComparedByValue()
+    {
+        await Run("""
+            namespace Models
+            struct Item { 0: int32 id; }
+            struct Box<T> { 0: T value; 1: vector<T> values; 2: map<string, T> lookup; }
+            """, """
+            void Same<T>(Models.Box<T> left, Models.Box<T> right, string message) =>
+                Require(left.Equals(right) && right.Equals(left) && left.GetHashCode() == right.GetHashCode(), message);
+            void Different<T>(Models.Box<T> left, Models.Box<T> right, string message) =>
+                Require(!left.Equals(right) && !right.Equals(left), message);
+            Models.Box<T> Box<T>(T value)
+            {
+                var box = new Models.Box<T> { value = value };
+                box.values.Add(value);
+                box.lookup["k"] = value;
+                return box;
+            }
+
+            Same(Box(new List<long> { 1, 2 }), Box(new List<long> { 1, 2 }), "lists compared by reference");
+            Different(Box(new List<long> { 1, 2 }), Box(new List<long> { 2, 1 }), "list order ignored");
+            Different(Box(new LinkedList<long>(new long[] { 1, 2 })), Box(new LinkedList<long>(new long[] { 2, 1 })), "linked list order ignored");
+            Same(Box(new HashSet<string> { "a", "b" }), Box(new HashSet<string> { "b", "a" }), "set order mattered");
+            Different(Box(new HashSet<string> { "a" }), Box(new HashSet<string> { "a", "b" }), "set members ignored");
+            Same(Box(new Dictionary<int, List<double>> { [1] = new List<double> { double.NaN }, [2] = new List<double>() }),
+                Box(new Dictionary<int, List<double>> { [2] = new List<double>(), [1] = new List<double> { double.NaN } }), "maps differ");
+            Different(Box(new Dictionary<int, List<double>> { [1] = new List<double>() }),
+                Box(new Dictionary<int, List<double>> { [1] = new List<double> { 0 } }), "map values ignored");
+            Different(Box(new Dictionary<int, List<double>> { [1] = new List<double>() }),
+                Box(new Dictionary<int, List<double>> { [2] = new List<double>() }), "map keys ignored");
+            Same(Box(new ArraySegment<byte>(new byte[] { 9, 1, 2 }, 1, 2)), Box(new ArraySegment<byte>(new byte[] { 1, 2 })), "blobs differ");
+            Different(Box(new ArraySegment<byte>(Array.Empty<byte>())), Box(default(ArraySegment<byte>)), "empty blob equaled default");
+            Same(Box<Bond.IBonded<Models.Item>>(new Bond.Bonded<Models.Item>(new Models.Item { id = 1 })),
+                Box<Bond.IBonded<Models.Item>>(new Bond.Bonded<Models.Item>(new Models.Item { id = 1 })), "bonded values differ");
+            Different(Box<Bond.IBonded<Models.Item>>(new Bond.Bonded<Models.Item>(new Models.Item { id = 1 })),
+                Box<Bond.IBonded<Models.Item>>(new Bond.Bonded<Models.Item>(new Models.Item { id = 2 })), "bonded contents ignored");
+            Same(Box(new Models.Item { id = 1 }), Box(new Models.Item { id = 1 }), "structs differ");
+            Different(Box<string>(null), Box(""), "null equaled empty");
+            Different(Box<List<long>>(null), Box(new List<long>()), "null list equaled empty");
+            """);
+    }
+
+    [Fact]
+    public async Task BondedPayloadsAreComparedByValue()
     {
         await Run("""
             namespace Models
@@ -161,7 +160,6 @@ public sealed class CSharpModelFeatureTests
                 new Bond.Protocols.CompactBinaryReader<Bond.IO.Safe.InputBuffer>(new Bond.IO.Safe.InputBuffer(output.Data)));
 
             Require(envelope.Equals(restored) && envelope.GetHashCode() == restored.GetHashCode(), "bonded payloads differed");
-            Require(ReferenceEquals(envelope.Clone().payload, envelope.payload), "bonded payload was not shared");
             Require(envelope.ToString() == "Envelope { payload = bonded }", envelope.ToString());
             """);
     }
@@ -209,7 +207,7 @@ public sealed class CSharpModelFeatureTests
             namespace Models
             enum Color { Red, Green = 5 }
             struct Address { 0: string street = "Main"; 1: vector<string> lines; }
-            struct Base { 0: int32 id = 7; 1: string name; 2: Address home; }
+            struct Base { 0: int32 id = 7; 1: string name; 2: Address home; 3: bond_meta::name kind; }
             struct Item : Base {
                 0: list<int64> numbers;
                 1: set<string> tags;
@@ -221,12 +219,15 @@ public sealed class CSharpModelFeatureTests
                 7: vector<int32> missing = nothing;
                 8: string name;
                 9: vector<int32> values;
+                10: bond_meta::full_name full;
             }
             struct Page<T> { 0: vector<T> items; 1: T first; }
             struct Holder { 0: Page<Address> page; 1: wstring title = "t"; }
             """, """
             var item = new Models.Item { id = 1, color = Models.Color.Red, ratio = 2, name = "derived" };
             ((Models.Base)item).name = "base";
+            item.kind = "read from a payload";
+            item.full = "read from a payload";
             item.home.street = "Elm";
             item.home.lines.Add("x");
             item.numbers.AddLast(1);
@@ -246,6 +247,7 @@ public sealed class CSharpModelFeatureTests
             Require(item.id == 7 && item.color == Models.Color.Green && item.ratio == 1.5 && item.home.street == "Main",
                 "schema defaults");
             Require(((Models.Base)item).name == "" && item.name == "", "hidden base field");
+            Require(item.kind == "Item" && item.full == "Models.Item", "metadata names");
             Require(item.extra == null && item.missing == null && item.data.Array == null, "nullable, nothing or blob");
             Require(ReferenceEquals(item.home, home) && ReferenceEquals(item.home.lines, lines), "nested struct replaced");
             Require(ReferenceEquals(item.values, values) && values.Capacity == capacity, "vector replaced");
@@ -292,16 +294,15 @@ public sealed class CSharpModelFeatureTests
                 { public override bool Equals(object obj) => obj is Empty; public override int GetHashCode() => 0; } }
             """;
         foreach (var type in Compile(result.Code!, external).GetTypes().Where(type =>
-            typeof(ICloneable).IsAssignableFrom(type) && !type.IsGenericTypeDefinition))
+            type.GetMethod("Clear", Type.EmptyTypes) != null && !type.IsGenericTypeDefinition))
         {
             var value = Activator.CreateInstance(type)!;
-            var copy = ((ICloneable)value).Clone();
-            Assert.NotSame(value, copy);
-            Assert.True(value.Equals(copy), type.FullName);
-            Assert.Equal(value.GetHashCode(), copy.GetHashCode());
+            var other = Activator.CreateInstance(type)!;
+            Assert.True(value.Equals(other), type.FullName);
+            Assert.Equal(value.GetHashCode(), other.GetHashCode());
             Assert.StartsWith(type.Name, value.ToString());
-            type.GetMethod("Clear", Type.EmptyTypes)!.Invoke(copy, null);
-            Assert.True(value.Equals(copy), type.FullName + " after Clear()");
+            type.GetMethod("Clear", Type.EmptyTypes)!.Invoke(other, null);
+            Assert.True(value.Equals(other), type.FullName + " after Clear()");
         }
     }
 
@@ -313,11 +314,9 @@ public sealed class CSharpModelFeatureTests
         .Order(StringComparer.Ordinal));
 
     [Theory]
-    [InlineData(CSharpModelFeatures.Cloning, "Clone", "struct Base { 0: int32 Clone; } struct Item : Base {}")]
     [InlineData(CSharpModelFeatures.Equality, "Equals", "struct Base { 0: int32 Equals; } struct Item : Base {}")]
     [InlineData(CSharpModelFeatures.Equality, "GetHashCode", "struct Item { 0: int32 GetHashCode; }")]
     [InlineData(CSharpModelFeatures.StringRepresentation, "ToString", "struct Item { 0: int32 ToString; }")]
-    [InlineData(CSharpModelFeatures.Cloning, "Clone", "struct Clone { 0: int32 value; }")]
     [InlineData(CSharpModelFeatures.StringRepresentation, "ToString", "struct Item<ToString> { 0: int32 value; }")]
     [InlineData(CSharpModelFeatures.Clearing, "Clear", "struct Item { 0: int32 Clear; }")]
     [InlineData(CSharpModelFeatures.Clearing, "Clear", "struct Base { 0: int32 Clear; } struct Item : Base {}")]

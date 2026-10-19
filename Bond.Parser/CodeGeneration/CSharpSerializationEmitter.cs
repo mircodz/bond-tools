@@ -279,7 +279,8 @@ public static partial class CSharpGenerator
                     Line(indent, $"{Codec(parameter)}.Write(ref writer, {value});");
                     break;
                 case BondType.Bonded bonded:
-                    Line(indent, $"{Runtime}BondedPayload<{MapType(bonded.StructType, location).Name}>.Write(ref writer, {value});");
+                    Line(indent, $"{Runtime}BondedPayload<{MapType(bonded.StructType, location).Name}>.Write(ref writer, {value}, " +
+                        $"{CodecFor(bonded.StructType, location)});");
                     break;
                 case BondType.TypeReference { Declaration: EnumDeclaration }:
                     Line(indent, $"writer.WriteInt32((int){value});");
