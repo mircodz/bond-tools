@@ -426,7 +426,7 @@ public static class BondCodec
         public override WireType WireType => WireType.Struct;
 
         public override void Write(ref CompactBinaryWriter writer, global::Bond.IBonded<T> value) =>
-            BondedPayload<T>.Write(ref writer, value);
+            BondedPayload<T>.Write(ref writer, value, element);
 
         public override global::Bond.IBonded<T> Read(ref CompactBinaryReader reader, WireType type) =>
             BondedPayload<T>.Read(ref reader, type, element);

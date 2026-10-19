@@ -613,12 +613,77 @@ public sealed class CSharpSerializationTests
             Require(Upstream.Read<Models.Envelope>(envelope.Serialize()).payload.Deserialize<Models.Rich>().extra.Single() == 6,
                 "unknown fields lost for upstream");
 
+            // A list's bonded elements must be structs (0x10 is int32).
+            Require(!Upstream.Agree<Models.Envelope>(Convert.FromHexString("2B10010000")), "bonded list element of another wire type");
+
             // A payload of 16 KB or more is copied into an array that is not zeroed first.
             envelope.payload = new Bond.Bonded<Models.Payload>(new Models.Payload { id = 7, text = new string('x', 20000) });
             byte[] large = Upstream.Write(envelope);
             var largeRead = Models.Envelope.Deserialize(large);
             Require(largeRead.payload.Deserialize().text == new string('x', 20000), "large payload");
             Require(largeRead.Serialize().SequenceEqual(large), "large payload written back differently");
+            """, Upstream);
+    }
+
+    [Fact]
+    public async Task FollowsTheSchemaWhereUpstreamDoesNot()
+    {
+        // The differences Bond.Runtime/README.md lists. Field headers are type | id << 5: 0x12 wstring, 0x09 string,
+        // 0x10 and 0x30 int32; 0xD0 0x09 is int32 field 9.
+        RunScenario(await Generate("""
+            namespace Models
+            struct Box<T> { 0: T value; }
+            struct Narrow : Box<wstring> {}
+            struct Holes : Box<vector<nullable<int32>>> {}
+            struct Wide { 0: bonded<Box<wstring>> payload; 1: vector<bonded<Box<wstring>>> many; }
+            struct Strict { 1: int32 a; 5: required int32 b; 9: int32 c; }
+            """, Options), """
+            static byte[] Hex(string hex) => Convert.FromHexString(hex.Replace(" ", ""));
+            static void Rejects(Action read, string message)
+            {
+                try
+                {
+                    read();
+                }
+                catch (System.IO.InvalidDataException)
+                {
+                    return;
+                }
+
+                throw new Exception(message);
+            }
+
+            // A base type's arguments keep wstring, which upstream writes as string, and nullable, which it can't write.
+            var narrow = new Models.Narrow { value = "hi" };
+            Require(narrow.Serialize()[0] == 0x12 && Upstream.Write(narrow)[0] == 0x09, "base type wstring argument");
+            Require(Models.Narrow.Deserialize(narrow.Serialize()).value == "hi", "base type wstring read");
+            var holes = new Models.Holes { value = new List<int?> { null, 1 } };
+            Require(Models.Holes.Deserialize(holes.Serialize()).value.SequenceEqual(holes.value), "base type nullable argument");
+            try
+            {
+                Upstream.Write(holes);
+                throw new Exception("upstream wrote a null element");
+            }
+            catch (InvalidOperationException)
+            {
+            }
+
+            // Upstream writes a Bonded<T> as its CLR type, with the same loss.
+            var wide = new Models.Wide { payload = new Bond.Bonded<Models.Box<string>>(new Models.Box<string> { value = "wide" }) };
+            wide.many.Add(wide.payload);
+            var read = Models.Wide.Deserialize(wide.Serialize());
+            Require(read.payload.Deserialize().value == "wide" && read.many[0].Deserialize().value == "wide", "bonded wstring argument");
+            Require(((BondTools.Runtime.BondedPayload<Models.Box<string>>)read.payload).Payload.Span[0] == 0x12, "bonded string");
+            Require(!Upstream.Write(wide).SequenceEqual(wide.Serialize()), "upstream wrote the schema's wstring");
+
+            // Upstream reads a bonded field of any wire type as a struct, here an int32 followed by a stop.
+            Require(Upstream.Read<Models.Wide>(Hex("10 00 00")) != null, "upstream rejected a bonded int32");
+            Rejects(() => Models.Wide.Deserialize(Hex("10 00 00")), "a bonded int32 was accepted");
+
+            // Upstream misses required field 5 when the field before the gap is one it skipped, here unknown field 3.
+            Require(Upstream.Read<Models.Strict>(Hex("30 02 70 02 D0 09 02 00")).c == 1, "upstream noticed the gap");
+            Rejects(() => Models.Strict.Deserialize(Hex("30 02 70 02 D0 09 02 00")), "a missing required field was accepted");
+            Require(!Upstream.Agree<Models.Strict>(Hex("30 02 D0 09 02 00")), "a plain gap");
             """, Upstream);
     }
 

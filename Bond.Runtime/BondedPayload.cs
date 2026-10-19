@@ -34,14 +34,24 @@ public sealed class BondedPayload<T> : IBonded<T>
 
     private UpstreamReader UpstreamReader() => new(new InputBuffer(_payload));
 
-    /// <summary>Writes a <c>bonded&lt;T&gt;</c> value; a payload is written as it was read.</summary>
-    public static void Write(ref CompactBinaryWriter writer, IBonded<T> value)
+    /// <summary>Writes a <c>bonded&lt;T&gt;</c> value: a payload as it was read, a <c>Bonded&lt;T&gt;</c> with
+    /// <paramref name="codec"/>, and any other value, such as a <c>Bonded&lt;Derived&gt;</c>, as upstream writes it.</summary>
+    /// <remarks>
+    /// Upstream writes a <c>Bonded&lt;T&gt;</c> by reflecting over T, which loses <c>wstring</c> and <c>nullable</c> in
+    /// T's type arguments, so the codec writes what the schema says.
+    /// </remarks>
+    public static void Write(ref CompactBinaryWriter writer, IBonded<T> value, BondCodec<T> codec)
     {
         ArgumentNullException.ThrowIfNull(value);
-        if (value is BondedPayload<T> payload)
+        switch (value)
         {
-            writer.WriteBytes(payload._payload);
-            return;
+            case BondedPayload<T> payload:
+                writer.WriteBytes(payload._payload);
+                return;
+            case Bonded<T>:
+                // A copy: Bonded<T> keeps its instance private.
+                codec.Write(ref writer, value.Deserialize());
+                return;
         }
 
         var output = new OutputBuffer();
