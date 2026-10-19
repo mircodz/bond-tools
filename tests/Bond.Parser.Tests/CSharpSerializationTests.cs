@@ -626,7 +626,7 @@ public sealed class CSharpSerializationTests
     }
 
     [Fact]
-    public async Task FollowsTheSchemaWhereUpstreamDoesNot()
+    public async Task DiffersFromUpstreamAsDocumented()
     {
         // The differences Bond.Runtime/README.md lists. Field headers are type | id << 5: 0x12 wstring, 0x09 string,
         // 0x10 and 0x30 int32; 0xD0 0x09 is int32 field 9.
@@ -637,6 +637,7 @@ public sealed class CSharpSerializationTests
             struct Holes : Box<vector<nullable<int32>>> {}
             struct Wide { 0: bonded<Box<wstring>> payload; 1: vector<bonded<Box<wstring>>> many; }
             struct Strict { 1: int32 a; 5: required int32 b; 9: int32 c; }
+            struct Chain { 0: vector<Chain> next; }
             """, Options), """
             static byte[] Hex(string hex) => Convert.FromHexString(hex.Replace(" ", ""));
             static void Rejects(Action read, string message)
@@ -684,6 +685,23 @@ public sealed class CSharpSerializationTests
             Require(Upstream.Read<Models.Strict>(Hex("30 02 70 02 D0 09 02 00")).c == 1, "upstream noticed the gap");
             Rejects(() => Models.Strict.Deserialize(Hex("30 02 70 02 D0 09 02 00")), "a missing required field was accepted");
             Require(!Upstream.Agree<Models.Strict>(Hex("30 02 D0 09 02 00")), "a plain gap");
+
+            // Both limit nesting to 64 levels, but upstream counts the vectors too: 40 structs are 79 levels to it.
+            static byte[] Chain(int length)
+            {
+                var root = new Models.Chain();
+                for (var (node, i) = (root, 1); i < length; i++)
+                {
+                    node.next.Add(new Models.Chain());
+                    node = node.next[0];
+                }
+
+                return root.Serialize();
+            }
+
+            Require(Models.Chain.Deserialize(Chain(40)) != null, "40 nested structs rejected");
+            Rejects(() => Upstream.Read<Models.Chain>(Chain(40)), "upstream read 40 nested structs");
+            Rejects(() => Models.Chain.Deserialize(Chain(65)), "65 nested structs read");
             """, Upstream);
     }
 
