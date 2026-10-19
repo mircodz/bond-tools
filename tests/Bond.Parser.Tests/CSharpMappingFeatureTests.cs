@@ -21,27 +21,16 @@ public sealed class CSharpMappingFeatureTests
             new CSharpGenerationOptions { ModelFeatures = features });
         Assert.True(result.Success, Messages(result));
         var type = Compile(result.Code!).GetType("Example.Item", true)!;
-        Assert.Equal(features.HasFlag(CSharpModelFeatures.Cloning), typeof(ICloneable).IsAssignableFrom(type));
-        Assert.Equal(features.HasFlag(CSharpModelFeatures.Cloning), type.GetMethod("Clone", Type.EmptyTypes) != null);
         Assert.Equal(features.HasFlag(CSharpModelFeatures.StringRepresentation),
             type.GetMethod("ToString", Type.EmptyTypes)!.DeclaringType == type);
         Assert.Equal(features.HasFlag(CSharpModelFeatures.Equality),
             type.GetMethod("Equals", [typeof(object)])!.DeclaringType == type);
         Assert.Equal(features.HasFlag(CSharpModelFeatures.Equality),
             type.GetMethod("GetHashCode", Type.EmptyTypes)!.DeclaringType == type);
-
-        var value = Activator.CreateInstance(type)!;
-        type.GetProperty("id")!.SetValue(value, 42);
-        if (features.HasFlag(CSharpModelFeatures.Cloning))
-        {
-            var copy = ((ICloneable)value).Clone();
-            Assert.NotSame(value, copy);
-            Assert.Equal(42, type.GetProperty("id")!.GetValue(copy));
-        }
+        Assert.Equal(features.HasFlag(CSharpModelFeatures.Clearing), type.GetMethod("Clear", Type.EmptyTypes) != null);
     }
 
     [Theory]
-    [InlineData(CSharpModelFeatures.Cloning)]
     [InlineData(CSharpModelFeatures.Equality)]
     [InlineData(CSharpModelFeatures.StringRepresentation)]
     public async Task IncompleteBaseDefinitionsCannotSilentlyProducePartialOperations(CSharpModelFeatures feature)
@@ -184,9 +173,9 @@ public sealed class CSharpMappingFeatureTests
         Assert.Null(mapped.GetProperty("updated")!.GetValue(value));
         Assert.Equal(Write(reference, Activator.CreateInstance(reference)!, "compact", 2, false),
             Write(mapped, value, "compact", 2, false));
-        var clone = ((ICloneable)value).Clone();
-        Assert.True(value.Equals(clone));
-        Assert.Equal(value.GetHashCode(), clone.GetHashCode());
+        var other = Activator.CreateInstance(mapped)!;
+        Assert.True(value.Equals(other));
+        Assert.Equal(value.GetHashCode(), other.GetHashCode());
     }
 
     [Theory]
@@ -277,8 +266,9 @@ public sealed class CSharpMappingFeatureTests
         });
         Assert.True(result.Success, Messages(result));
         var type = Compile(result.Code!).GetType("Example.Bag`1", true)!.MakeGenericType(typeof(int));
-        var value = (ICloneable)Activator.CreateInstance(type)!;
-        Assert.IsType<List<int>>(type.GetProperty("values")!.GetValue(value.Clone()));
+        var value = Activator.CreateInstance(type)!;
+        Assert.IsType<List<int>>(type.GetProperty("values")!.GetValue(value));
+        Assert.True(value.Equals(Activator.CreateInstance(type)));
     }
 
     [Theory]

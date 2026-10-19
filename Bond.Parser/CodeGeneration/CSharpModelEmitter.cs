@@ -38,11 +38,6 @@ public static partial class CSharpGenerator
                 }
             }
 
-            if (options.GenerateCloning)
-            {
-                EmitClone(self, fields, isDerived: structure.BaseType != null);
-            }
-
             if (options.GenerateEquality)
             {
                 EmitEquals(self, fields);
@@ -62,11 +57,6 @@ public static partial class CSharpGenerator
 
         private IEnumerable<string> ModelMemberNames()
         {
-            if (options.GenerateCloning)
-            {
-                yield return "Clone";
-            }
-
             if (options.GenerateEquality)
             {
                 yield return "Equals";
@@ -126,37 +116,6 @@ public static partial class CSharpGenerator
             }
 
             return fields;
-        }
-
-        private void EmitClone(string self, IReadOnlyList<ModelField> fields, bool isDerived)
-        {
-            _modelVariables = 0;
-            var copies = fields
-                .Select(field => (Field: field, Value: CloneValue(field.Type, field.On("this"), field.Location)))
-                .Where(copy => copy.Value != null)
-                .ToList();
-            var hiding = isDerived ? "new " : "";
-
-            // Each struct re-implements ICloneable, so cloning through a base reference still copies derived fields.
-            Line(0);
-            Line(2, $"public {hiding}{self} Clone() => ({self})((global::System.ICloneable)this).Clone();");
-            Line(0);
-            if (copies.Count == 0)
-            {
-                Line(2, "object global::System.ICloneable.Clone() => MemberwiseClone();");
-                return;
-            }
-
-            Line(2, "object global::System.ICloneable.Clone()");
-            Line(2, "{");
-            Line(3, $"{self} clone = ({self})MemberwiseClone();");
-            foreach (var (field, value) in copies)
-            {
-                Line(3, $"{field.On("clone")} = {value};");
-            }
-
-            Line(3, "return clone;");
-            Line(2, "}");
         }
 
         private void EmitEquals(string self, IReadOnlyList<ModelField> fields)
@@ -293,9 +252,9 @@ public static partial class CSharpGenerator
             _ => false
         };
 
-        // Returns the type that determines how a value is copied, compared, hashed and formatted: aliases, nullable and
-        // nothing wrappers removed. Null means a value whose type is unknown to the generator (custom-mapped CLR types
-        // and type parameters): it is cloned through ICloneable and compared structurally.
+        // Returns the type that determines how a value is compared, hashed and formatted: aliases, nullable and nothing
+        // wrappers removed. Null means a value whose type is unknown to the generator (custom-mapped CLR types and type
+        // parameters): it is compared structurally.
         private BondType? ModelType(BondType type, SourceLocation location)
         {
             if (MapType(type, location).IsCustom)
@@ -319,54 +278,6 @@ public static partial class CSharpGenerator
                         return unwrapped;
                 }
             }
-        }
-
-        // Null means the value is immutable or copied by MemberwiseClone. Bonded payloads are shared.
-        private string? CloneValue(BondType type, string value, SourceLocation location)
-        {
-            var name = MapType(type, location).Name;
-            switch (ModelType(type, location))
-            {
-                // ICloneable dispatches on the runtime type, so derived structs are copied completely.
-                case null or BondType.TypeReference { Declaration: StructDeclaration or ForwardDeclaration }:
-                    {
-                        var cloneable = Fresh("cloneable");
-                        return $"(object){value} is global::System.ICloneable {cloneable} ? ({name}){cloneable}.Clone() : {value}";
-                    }
-                case BondType.Vector vector:
-                    {
-                        var item = Fresh("item");
-                        var copy = CloneValue(vector.ElementType, item, location);
-                        return copy == null
-                            ? $"{value} == null ? null : new {name}({value})"
-                            : $"{value}?.ConvertAll({item} => {copy})";
-                    }
-                case BondType.List list:
-                    return $"{value} == null ? null : new {name}({CloneItems(value, list.ElementType, location)})";
-                case BondType.Set set:
-                    return $"{value} == null ? null : new {name}({CloneItems(value, set.KeyType, location)}, {value}.Comparer)";
-                case BondType.Map map:
-                    {
-                        var entry = Fresh("entry");
-                        var key = CloneValue(map.KeyType, $"{entry}.Key", location);
-                        var item = CloneValue(map.ValueType, $"{entry}.Value", location);
-                        return key == null && item == null
-                            ? $"{value} == null ? null : new {name}({value}, {value}.Comparer)"
-                            : $"{value} == null ? null : {Enumerable}ToDictionary({value}, {entry} => {key ?? entry + ".Key"}, " +
-                                $"{entry} => {item ?? entry + ".Value"}, {value}.Comparer)";
-                    }
-                case BondType.Blob:
-                    return $"{value}.Array == null ? {value} : new global::System.ArraySegment<byte>({Enumerable}ToArray({value}))";
-                default:
-                    return null;
-            }
-        }
-
-        private string CloneItems(string value, BondType element, SourceLocation location)
-        {
-            var item = Fresh("item");
-            var copy = CloneValue(element, item, location);
-            return copy == null ? value : $"{Enumerable}Select({value}, {item} => {copy})";
         }
 
         private string EqualsValue(BondType type, string left, string right, SourceLocation location)

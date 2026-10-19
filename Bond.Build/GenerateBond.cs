@@ -66,8 +66,7 @@ public sealed class GenerateBond : Microsoft.Build.Utilities.Task
             UsingNamespaces = List(source, "Usings"),
             NamespaceMappings = List(source, "NamespaceMappings"),
             TypeMappings = List(source, "TypeMappings"),
-            ModelFeatures = (IsEnabled(source, "Clone") ? CSharpModelFeatures.Cloning : 0)
-                | (IsEnabled(source, "Equality") ? CSharpModelFeatures.Equality : 0)
+            ModelFeatures = (IsEnabled(source, "Equality") ? CSharpModelFeatures.Equality : 0)
                 | (IsEnabled(source, "ToString") ? CSharpModelFeatures.StringRepresentation : 0)
                 | (IsEnabled(source, "Clear") ? CSharpModelFeatures.Clearing : 0),
             Serialization = IsEnabled(source, "Serialization")

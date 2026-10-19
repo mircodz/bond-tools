@@ -41,7 +41,6 @@ public static class Program
           -n, --namespace <from=to>   Map a C# namespace (repeatable)
           -u, --using <namespace>     Add a using directive (repeatable)
           --type-map <alias=type>     Map a Bond alias to a CLR type; converters are user-supplied (repeatable)
-          --clone                     Generate deep Clone()
           --equality                  Generate structural Equals() and GetHashCode()
           --to-string                 Generate ToString()
           --clear                     Generate Clear(), which resets fields and keeps containers for reuse
@@ -165,7 +164,7 @@ public static class Program
 
     private static async Task<int> Generate(string[] rest)
     {
-        var args = Arguments.Parse(rest, ["--clone", "--equality", "--to-string", "--clear", "--serialization"],
+        var args = Arguments.Parse(rest, ["--equality", "--to-string", "--clear", "--serialization"],
             ["--output-dir", "--import-dir", "--namespace", "--using", "--type-map", "--error-format"]);
         if (args.Has("--help"))
         {
@@ -189,8 +188,7 @@ public static class Program
             UsingNamespaces = args.All("--using"),
             NamespaceMappings = args.All("--namespace"),
             TypeMappings = args.All("--type-map"),
-            ModelFeatures = (args.Has("--clone") ? CSharpModelFeatures.Cloning : 0)
-                | (args.Has("--equality") ? CSharpModelFeatures.Equality : 0)
+            ModelFeatures = (args.Has("--equality") ? CSharpModelFeatures.Equality : 0)
                 | (args.Has("--to-string") ? CSharpModelFeatures.StringRepresentation : 0)
                 | (args.Has("--clear") ? CSharpModelFeatures.Clearing : 0),
             Serialization = args.Has("--serialization")

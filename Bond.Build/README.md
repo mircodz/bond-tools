@@ -4,7 +4,6 @@ Generates C# for `Bond` items during `dotnet build` (.NET 8+ SDK).
 
 ```xml
 <PropertyGroup>
-  <BondClone>true</BondClone>
   <BondEquality>true</BondEquality>
   <BondToString>true</BondToString>
   <BondClear>true</BondClear>

@@ -161,10 +161,6 @@ public static partial class CSharpGenerator
                 Identifier(parameter.Name, structure.Location, typeName: true)));
             var baseType = structure.BaseType == null ? "" :
                 " : " + MapType(structure.BaseType, structure.Location).Name;
-            if (options.GenerateCloning)
-            {
-                baseType += (baseType.Length == 0 ? " : " : ", ") + "global::System.ICloneable";
-            }
 
             // A generic struct's serialization takes a codec for each type parameter, so it has no IBondStruct methods.
             if (options.Serialization && structure.TypeParameters.Length == 0)
