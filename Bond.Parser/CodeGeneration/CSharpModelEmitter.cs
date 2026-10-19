@@ -15,6 +15,9 @@ public static partial class CSharpGenerator
 
         private int _modelVariables;
 
+        // Set when an emitted comparison or hash takes a type parameter's value, which needs the Same or Hash helper.
+        private bool _usesTypeArgumentHelper;
+
         /// <summary>A field of a struct or of one of its bases, typed with the struct's base type arguments.</summary>
         private sealed record ModelField(string Label, string Name, BondType Type, SourceLocation Location, string? Owner,
             Field Declaration, StructDeclaration Declarer)
@@ -121,6 +124,7 @@ public static partial class CSharpGenerator
         private void EmitEquals(string self, IReadOnlyList<ModelField> fields)
         {
             _modelVariables = 0;
+            _usesTypeArgumentHelper = false;
             Line(0);
             Line(2, "public override bool Equals(object obj)");
             Line(2, "{");
@@ -149,12 +153,68 @@ public static partial class CSharpGenerator
                 }
             }
 
+            if (_usesTypeArgumentHelper)
+            {
+                EmitSame();
+            }
+
             Line(2, "}");
+        }
+
+        // A type argument is only known at run time, so its containers are compared through the non-generic interfaces:
+        // maps by key, sets (which have none) as sets, the other collections in order.
+        private void EmitSame()
+        {
+            Line(0);
+            Line(3, "bool Same(object left, object right)");
+            Line(3, "{");
+            Line(4, "if (left is global::System.ArraySegment<byte> blob && right is global::System.ArraySegment<byte> otherBlob)");
+            Line(4, "{");
+            Line(5, $"return blob.Array == null ? otherBlob.Array == null : otherBlob.Array != null && {Enumerable}SequenceEqual(blob, otherBlob);");
+            Line(4, "}");
+            Line(0);
+            Line(4, "if (left is global::Bond.IBonded<object> bonded && right is global::Bond.IBonded<object> otherBonded)");
+            Line(4, "{");
+            Line(5, "return Same(bonded.Deserialize(), otherBonded.Deserialize());");
+            Line(4, "}");
+            Line(0);
+            Line(4, "if (left is global::System.Collections.IDictionary map && right is global::System.Collections.IDictionary otherMap)");
+            Line(4, "{");
+            Line(5, "if (map.Count != otherMap.Count)");
+            Line(5, "{");
+            Line(6, "return false;");
+            Line(5, "}");
+            Line(0);
+            Line(5, "foreach (global::System.Collections.DictionaryEntry entry in map)");
+            Line(5, "{");
+            Line(6, "if (!otherMap.Contains(entry.Key) || !Same(entry.Value, otherMap[entry.Key]))");
+            Line(6, "{");
+            Line(7, "return false;");
+            Line(6, "}");
+            Line(5, "}");
+            Line(0);
+            Line(5, "return true;");
+            Line(4, "}");
+            Line(0);
+            Line(4, "if (left is global::System.Collections.ICollection items && right is global::System.Collections.ICollection otherItems)");
+            Line(4, "{");
+            Line(5, $"return items.Count == otherItems.Count && {Enumerable}All({Enumerable}Zip({Enumerable}Cast<object>(items),");
+            Line(6, $"{Enumerable}Cast<object>(otherItems), Same), equal => equal);");
+            Line(4, "}");
+            Line(0);
+            Line(4, "if (left is global::System.Collections.IEnumerable set && !(left is string) && right is global::System.Collections.IEnumerable otherSet)");
+            Line(4, "{");
+            Line(5, $"return new global::System.Collections.Generic.HashSet<object>({Enumerable}Cast<object>(set)).SetEquals({Enumerable}Cast<object>(otherSet));");
+            Line(4, "}");
+            Line(0);
+            Line(4, "return object.Equals(left, right);");
+            Line(3, "}");
         }
 
         private void EmitGetHashCode(IReadOnlyList<ModelField> fields)
         {
             _modelVariables = 0;
+            _usesTypeArgumentHelper = false;
             var hashes = fields
                 .Select(field => HashValue(field.Type, field.On("this"), field.Location))
                 .OfType<string>()
@@ -172,8 +232,54 @@ public static partial class CSharpGenerator
             }
 
             Line(4, "return hash;");
+            if (_usesTypeArgumentHelper)
+            {
+                EmitHash();
+            }
+
             Line(3, "}");
             Line(2, "}");
+        }
+
+        // Hashes what Same compares; bonded payloads, which it deserializes, do not contribute.
+        private void EmitHash()
+        {
+            Line(0);
+            Line(4, "int Hash(object value)");
+            Line(4, "{");
+            Line(5, "if (value is global::System.ArraySegment<byte> blob)");
+            Line(5, "{");
+            Line(6, "return blob.Count;");
+            Line(5, "}");
+            Line(0);
+            Line(5, "if (value == null || value is global::Bond.IBonded)");
+            Line(5, "{");
+            Line(6, "return 0;");
+            Line(5, "}");
+            Line(0);
+            Line(5, "if (value is global::System.Collections.IDictionary map)");
+            Line(5, "{");
+            Line(6, "int sum = 0;");
+            Line(6, "foreach (global::System.Collections.DictionaryEntry entry in map)");
+            Line(6, "{");
+            Line(7, "sum += Hash(entry.Key) * 31 + Hash(entry.Value);");
+            Line(6, "}");
+            Line(0);
+            Line(6, "return sum;");
+            Line(5, "}");
+            Line(0);
+            Line(5, "if (value is global::System.Collections.ICollection items)");
+            Line(5, "{");
+            Line(6, $"return {Enumerable}Aggregate({Enumerable}Cast<object>(items), 17, (sum, item) => sum * 31 + Hash(item));");
+            Line(5, "}");
+            Line(0);
+            Line(5, "if (value is global::System.Collections.IEnumerable set && !(value is string))");
+            Line(5, "{");
+            Line(6, $"return {Enumerable}Aggregate({Enumerable}Cast<object>(set), 0, (sum, item) => sum + Hash(item));");
+            Line(5, "}");
+            Line(0);
+            Line(5, "return value.GetHashCode();");
+            Line(4, "}");
         }
 
         private void EmitToString(string name, IReadOnlyList<ModelField> fields)
@@ -253,8 +359,7 @@ public static partial class CSharpGenerator
         };
 
         // Returns the type that determines how a value is compared, hashed and formatted: aliases, nullable and nothing
-        // wrappers removed. Null means a value whose type is unknown to the generator (custom-mapped CLR types and type
-        // parameters): it is compared structurally.
+        // wrappers removed. Null means a custom-mapped CLR type, compared structurally.
         private BondType? ModelType(BondType type, SourceLocation location)
         {
             if (MapType(type, location).IsCustom)
@@ -272,8 +377,6 @@ public static partial class CSharpGenerator
                     case BondType.Maybe maybe:
                         type = maybe.ElementType;
                         break;
-                    case BondType.TypeParameter:
-                        return null;
                     case var unwrapped:
                         return unwrapped;
                 }
@@ -286,6 +389,9 @@ public static partial class CSharpGenerator
             {
                 case null:
                     return $"{StructuralComparer}.Equals({left}, {right})";
+                case BondType.TypeParameter:
+                    _usesTypeArgumentHelper = true;
+                    return $"Same({left}, {right})";
                 case BondType.Vector vector:
                     return SequenceEquals(left, right, vector.ElementType, location);
                 case BondType.List list:
@@ -314,8 +420,8 @@ public static partial class CSharpGenerator
         private string SequenceEquals(string left, string right, BondType element, SourceLocation location)
         {
             string items;
-            if (ModelType(element, location) is not (null or BondType.Vector or BondType.List or BondType.Set
-                or BondType.Map or BondType.Blob or BondType.Bonded))
+            if (ModelType(element, location) is not (null or BondType.TypeParameter or BondType.Vector or BondType.List
+                or BondType.Set or BondType.Map or BondType.Blob or BondType.Bonded))
             {
                 // EqualityComparer<T>.Default matches the generated equality for values and generated structs.
                 items = $"{Enumerable}SequenceEqual({left}, {right})";
@@ -339,6 +445,9 @@ public static partial class CSharpGenerator
             {
                 case null:
                     return $"{StructuralComparer}.GetHashCode({value})";
+                case BondType.TypeParameter:
+                    _usesTypeArgumentHelper = true;
+                    return $"Hash({value})";
                 case BondType.Vector vector:
                     return HashItems(value, vector.ElementType, ordered: true, location);
                 case BondType.List list:

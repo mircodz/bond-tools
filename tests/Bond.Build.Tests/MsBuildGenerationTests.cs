@@ -154,7 +154,11 @@ public sealed class MsBuildGenerationTests(MsBuildPackageFixture packages) : ICl
     public async Task MultiTargetedProjectsGenerateForEachFramework()
     {
         var project = packages.CreateConsumer();
-        project.Write("item.bond", "namespace Contracts struct Item { 0: int32 id; 1: map<string, vector<blob>> data; }");
+        project.Write("item.bond", """
+            namespace Contracts
+            struct Item { 0: int32 id; 1: map<string, vector<blob>> data; }
+            struct Box<T> { 0: T value; 1: vector<T> values; }
+            """);
         project.Configure(
             new XElement("PropertyGroup", new XElement("TargetFramework", ""), new XElement("TargetFrameworks", "net8.0;netstandard2.1"),
                 new XElement("ImplicitUsings", "disable"),

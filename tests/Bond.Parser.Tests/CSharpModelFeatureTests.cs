@@ -101,6 +101,49 @@ public sealed class CSharpModelFeatureTests
     }
 
     [Fact]
+    public async Task TypeArgumentContainersAreComparedByValue()
+    {
+        await Run("""
+            namespace Models
+            struct Item { 0: int32 id; }
+            struct Box<T> { 0: T value; 1: vector<T> values; 2: map<string, T> lookup; }
+            """, """
+            void Same<T>(Models.Box<T> left, Models.Box<T> right, string message) =>
+                Require(left.Equals(right) && right.Equals(left) && left.GetHashCode() == right.GetHashCode(), message);
+            void Different<T>(Models.Box<T> left, Models.Box<T> right, string message) =>
+                Require(!left.Equals(right) && !right.Equals(left), message);
+            Models.Box<T> Box<T>(T value)
+            {
+                var box = new Models.Box<T> { value = value };
+                box.values.Add(value);
+                box.lookup["k"] = value;
+                return box;
+            }
+
+            Same(Box(new List<long> { 1, 2 }), Box(new List<long> { 1, 2 }), "lists compared by reference");
+            Different(Box(new List<long> { 1, 2 }), Box(new List<long> { 2, 1 }), "list order ignored");
+            Different(Box(new LinkedList<long>(new long[] { 1, 2 })), Box(new LinkedList<long>(new long[] { 2, 1 })), "linked list order ignored");
+            Same(Box(new HashSet<string> { "a", "b" }), Box(new HashSet<string> { "b", "a" }), "set order mattered");
+            Different(Box(new HashSet<string> { "a" }), Box(new HashSet<string> { "a", "b" }), "set members ignored");
+            Same(Box(new Dictionary<int, List<double>> { [1] = new List<double> { double.NaN }, [2] = new List<double>() }),
+                Box(new Dictionary<int, List<double>> { [2] = new List<double>(), [1] = new List<double> { double.NaN } }), "maps differ");
+            Different(Box(new Dictionary<int, List<double>> { [1] = new List<double>() }),
+                Box(new Dictionary<int, List<double>> { [1] = new List<double> { 0 } }), "map values ignored");
+            Different(Box(new Dictionary<int, List<double>> { [1] = new List<double>() }),
+                Box(new Dictionary<int, List<double>> { [2] = new List<double>() }), "map keys ignored");
+            Same(Box(new ArraySegment<byte>(new byte[] { 9, 1, 2 }, 1, 2)), Box(new ArraySegment<byte>(new byte[] { 1, 2 })), "blobs differ");
+            Different(Box(new ArraySegment<byte>(Array.Empty<byte>())), Box(default(ArraySegment<byte>)), "empty blob equaled default");
+            Same(Box<Bond.IBonded<Models.Item>>(new Bond.Bonded<Models.Item>(new Models.Item { id = 1 })),
+                Box<Bond.IBonded<Models.Item>>(new Bond.Bonded<Models.Item>(new Models.Item { id = 1 })), "bonded values differ");
+            Different(Box<Bond.IBonded<Models.Item>>(new Bond.Bonded<Models.Item>(new Models.Item { id = 1 })),
+                Box<Bond.IBonded<Models.Item>>(new Bond.Bonded<Models.Item>(new Models.Item { id = 2 })), "bonded contents ignored");
+            Same(Box(new Models.Item { id = 1 }), Box(new Models.Item { id = 1 }), "structs differ");
+            Different(Box<string>(null), Box(""), "null equaled empty");
+            Different(Box<List<long>>(null), Box(new List<long>()), "null list equaled empty");
+            """);
+    }
+
+    [Fact]
     public async Task BondedPayloadsAreComparedByValue()
     {
         await Run("""
