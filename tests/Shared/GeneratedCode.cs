@@ -64,6 +64,14 @@ internal static class GeneratedCode
 
     public static Assembly Compile(params string[] sources)
     {
+        var assembly = TryCompile(sources, out var diagnostics);
+        Assert.True(assembly != null, diagnostics);
+        return assembly;
+    }
+
+    /// <summary>Compiles and loads sources, or returns null and the compiler's diagnostics.</summary>
+    public static Assembly? TryCompile(string[] sources, out string diagnostics)
+    {
         var paths = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!).Split(Path.PathSeparator)
             .Concat([
                 typeof(global::Bond.SchemaAttribute).Assembly.Location,
@@ -80,7 +88,11 @@ internal static class GeneratedCode
 
         using var output = new MemoryStream();
         var result = compilation.Emit(output);
-        Assert.True(result.Success, string.Join("\n", result.Diagnostics));
+        diagnostics = string.Join("\n", result.Diagnostics);
+        if (!result.Success)
+        {
+            return null;
+        }
 
         // Bond resolves alias converters by assembly-qualified name in the default context.
         output.Position = 0;
