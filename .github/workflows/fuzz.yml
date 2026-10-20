@@ -9,9 +9,9 @@ on:
         description: First seed
         required: false
       schemas:
-        description: Schemas per shard
+        description: Number of schemas, at most 100,000
         required: false
-        default: '6250'
+        default: '25000'
 
 permissions:
   contents: read
@@ -19,11 +19,7 @@ permissions:
 jobs:
   fuzz:
     runs-on: ubuntu-latest
-    timeout-minutes: 150
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+    timeout-minutes: 330
 
     steps:
     - uses: actions/checkout@v4
@@ -42,20 +38,21 @@ jobs:
       env:
         BOND_FUZZ_PROFILE: large
         FIRST: ${{ inputs.first }}
-        SCHEMAS: ${{ inputs.schemas || '6250' }}
+        SCHEMAS: ${{ inputs.schemas || '25000' }}
         RUN: ${{ github.run_number }}
-        SHARD: ${{ matrix.shard }}
         CHUNK: 500
       run: |
-        start=$(( ${FIRST:-$(( RUN * 8 * SCHEMAS ))} + SHARD * SCHEMAS ))
+        start=${FIRST:-$(( RUN * 100000 ))}
         end=$(( start + SCHEMAS ))
         echo "Seeds $start to $(( end - 1 ))" >> "$GITHUB_STEP_SUMMARY"
         status=0
         for (( seed = start; seed < end; seed += CHUNK )); do
           count=$(( end - seed < CHUNK ? end - seed : CHUNK ))
           log="fuzz-$seed.log"
-          if ! BOND_FUZZ_SEED=$seed BOND_FUZZ_SCHEMAS=$count dotnet test --project tests/Bond.Parser.Tests \
+          if BOND_FUZZ_SEED=$seed BOND_FUZZ_SCHEMAS=$count dotnet test --project tests/Bond.Parser.Tests \
               --configuration Release --no-build --filter-class Bond.Parser.Tests.SchemaFuzzTests > "$log" 2>&1; then
+            rm "$log"
+          else
             status=1
             summary=$(sed -n '/failures:$/,/The first of each kind/p' "$log" | head -40)
             {
@@ -69,9 +66,9 @@ jobs:
         exit $status
 
     - name: Upload logs
-      if: failure()
+      if: failure() || cancelled()
       uses: actions/upload-artifact@v4
       with:
-        name: fuzz-logs-${{ matrix.shard }}
+        name: fuzz-logs
         path: fuzz-*.log
         retention-days: 14
