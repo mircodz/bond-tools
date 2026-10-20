@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: write   # to push the release tag and create the GitHub release
   id-token: write
   packages: write
 
@@ -13,15 +13,19 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  tag-and-publish:
+  check:
+    name: check branch and version
     if: github.actor == 'mircodz'
-    environment: publish
     runs-on: ubuntu-latest
-    env:
-      VERSION_FILE: version
-      OUT_DIR: out/package/release
-      OWNER: ${{ github.repository_owner }}
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
+      - name: Ensure main
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "Releases are published from main; this run is on ${GITHUB_REF}." >&2
+          exit 1
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
@@ -30,17 +34,38 @@ jobs:
       - name: Read version
         id: version
         run: |
-          bash scripts/validate-version.sh
-          version="$(tr -d '[:space:]' < "$VERSION_FILE")"
-          printf 'VERSION=%s\n' "$version" >> "$GITHUB_OUTPUT"
-          printf 'VERSION=%s\n' "$version" >> "$GITHUB_ENV"
-
-      - name: Ensure tag does not already exist
-        run: |
-          if git show-ref --verify --quiet "refs/tags/$VERSION"; then
-            echo "Tag $VERSION already exists. Bump the version file." >&2
+          version="$(tr -d '[:space:]' < version)"
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid version '$version'. Expected MAJOR.MINOR.PATCH." >&2
             exit 1
           fi
+          if git show-ref --verify --quiet "refs/tags/$version"; then
+            echo "Tag $version already exists. Bump the version file." >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: check
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+      pull-requests: write
+
+  publish:
+    name: publish, tag and release
+    needs: [check, build]
+    environment: publish
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
+      OUT_DIR: out/package/release
+      OWNER: ${{ github.repository_owner }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
@@ -49,23 +74,19 @@ jobs:
             8.0.x
             10.0.x
 
-      - name: Restore
-        run: dotnet restore
-
-      - name: Build and test
-        run: |
-          dotnet build Bond.sln -c Release --no-restore
-          dotnet test --solution Bond.sln -c Release --no-build --no-restore
-
-      - name: Pack
-        run: dotnet pack Bond.sln -c Release --no-build --no-restore /p:Version="$VERSION"
-
-      - name: Upload packages
-        uses: actions/upload-artifact@v4
+      - name: Download packages
+        uses: actions/download-artifact@v4
         with:
           name: nuget-packages
-          path: out/package/release/
-          if-no-files-found: error
+          path: ${{ env.OUT_DIR }}
+
+      - name: Verify packages
+        run: |
+          for package in bond-tools BondTools.Parser BondTools.Runtime BondTools.Build; do
+            test -f "$OUT_DIR/$package.$VERSION.nupkg"
+          done
+          dotnet tool install --tool-path out/tool --add-source "$OUT_DIR" bond-tools --version "$VERSION"
+          test "$(out/tool/bond --version)" = "$VERSION"
 
       - name: NuGet login
         id: nuget_login
@@ -97,3 +118,15 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git tag -a "$VERSION" -m "Release $VERSION"
           git push origin "refs/tags/$VERSION"
+
+      # Notes list the pull requests merged since the previous tag, which isn't always a GitHub release.
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          previous="$(git tag --list | grep -vx "$VERSION" | sort -V | tail -n1)"
+          gh release create "$VERSION" "$OUT_DIR"/*.nupkg \
+            --verify-tag \
+            --title "bond-tools $VERSION" \
+            --generate-notes \
+            ${previous:+--notes-start-tag "$previous"}

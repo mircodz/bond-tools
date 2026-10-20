@@ -5,6 +5,8 @@ on:
     branches: [ main ]
   pull_request:
     branches: [ main ]
+  workflow_dispatch:
+  workflow_call:
 
 jobs:
   version-check:
@@ -14,15 +16,20 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Fail if version was not bumped
+      - name: Fail if the version is already released
         run: |
-          VERSION=$(cat version)
+          VERSION="$(tr -d '[:space:]' < version)"
           git fetch --tags --force
-          if git rev-parse "$VERSION" >/dev/null 2>&1; then
+          if git rev-parse --verify --quiet "refs/tags/$VERSION" >/dev/null; then
             echo "::error file=version::Version $VERSION is already tagged. Bump the version file before merging." >&2
             exit 1
           fi
-          echo "Version $VERSION has no existing tag."
+          LATEST="$(git tag --list | sort -V | tail -n1)"
+          if [ -n "$LATEST" ] && [ "$(printf '%s\n%s\n' "$LATEST" "$VERSION" | sort -V | tail -n1)" != "$VERSION" ]; then
+            echo "::error file=version::Version $VERSION must be greater than the latest release, $LATEST." >&2
+            exit 1
+          fi
+          echo "Version $VERSION has no tag yet (latest release: ${LATEST:-none})."
 
   build-and-test:
     runs-on: ubuntu-latest
@@ -46,6 +53,18 @@ jobs:
 
     - name: Build
       run: dotnet build --no-restore --configuration Release
+
+    # Packed before the tests, whose coverage instruments the assemblies; Release publishes these packages.
+    - name: Pack
+      run: dotnet pack Bond.sln --no-build --configuration Release
+
+    - name: Upload packages
+      uses: actions/upload-artifact@v4
+      with:
+        name: nuget-packages
+        path: out/package/release/
+        if-no-files-found: error
+        retention-days: 7
 
     - name: Test with coverage
       run: |
