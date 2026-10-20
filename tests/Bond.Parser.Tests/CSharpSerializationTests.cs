@@ -203,6 +203,13 @@ public sealed class CSharpSerializationTests
 
             // An end marker's long id is consumed like any field's.
             Require(Upstream.Agree<Models.Outer>(Hex("0A C0 05 30 04 00")), "end marker with a long id");
+
+            // Skipped values count toward the 64 levels as upstream counts them: here an unknown field (0x6A) nests 63
+            // structs in Small, then a list (0x8B) of doubles, skipped without a level, or of int32s, which add one.
+            static byte[] Nested(string list) =>
+                Hex(string.Concat(Enumerable.Repeat("6A ", 63)) + list + string.Concat(Enumerable.Repeat(" 00", 64)));
+            Require(Upstream.Agree<Models.Small>(Nested("8B 08 01 00 00 00 00 00 00 F0 3F")), "a list of doubles at the limit");
+            Require(!Upstream.Agree<Models.Small>(Nested("8B 10 01 02")), "a list of int32s past the limit");
             """, Upstream);
     }
 
