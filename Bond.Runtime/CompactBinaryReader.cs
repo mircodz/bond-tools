@@ -209,7 +209,21 @@ public ref struct CompactBinaryReader
                 break;
             case WireType.List or WireType.Set:
                 {
+                    // Lists of bytes, floats and doubles are skipped in one go, which upstream doesn't count as a level.
                     var count = ReadContainerBegin(type, type, out var elementType);
+                    var size = elementType switch
+                    {
+                        WireType.UInt8 or WireType.Int8 => 1,
+                        WireType.Float => 4,
+                        WireType.Double => 8,
+                        _ => 0
+                    };
+                    if (size != 0)
+                    {
+                        Take(count, size);
+                        break;
+                    }
+
                     Enter();
                     for (var i = 0; i < count; i++)
                     {
