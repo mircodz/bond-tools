@@ -20,4 +20,4 @@ Generates C# for `Bond` items during `dotnet build` (.NET 8+ SDK).
 </ItemGroup>
 ```
 
-Lists are separated by `;`. Generated files live in the intermediate output directory. `<BondStructs>true</BondStructs>` generates C# structs instead of classes, as [`--structs`](../Bond.Runtime/README.md#structs) does.
+Lists are separated by `;`. Generated files live in the intermediate output directory.
