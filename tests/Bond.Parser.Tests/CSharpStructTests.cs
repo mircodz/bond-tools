@@ -119,27 +119,16 @@ public sealed class CSharpStructTests
             Require(ReferenceEquals(target.points, points) && ReferenceEquals(target.home.lines, lines) && lines.Count == 0,
                 "storage was replaced");
 
-            // Unoptimized code boxes values to check them for null, so allocations are measured when the runtime is
-            // optimized, as in Release, once its methods have tiered up.
-            var debuggable = (System.Diagnostics.DebuggableAttribute)Attribute.GetCustomAttribute(
-                typeof(BondTools.Runtime.CompactBinary).Assembly, typeof(System.Diagnostics.DebuggableAttribute));
-            bool optimized = debuggable == null || !debuggable.IsJITOptimizerDisabled;
-            long allocated = -1;
-            var watch = System.Diagnostics.Stopwatch.StartNew();
-            while (optimized && allocated != 0 && watch.Elapsed < TimeSpan.FromSeconds(20))
+            // Nothing is boxed, so this holds whether or not the JIT has optimized the code yet.
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            for (int i = 0; i < 1000; i++)
             {
-                long before = GC.GetAllocatedBytesForCurrentThread();
-                for (int i = 0; i < 1000; i++)
-                {
-                    target.Clear();
-                    target = Models.Shape.Deserialize(bytes, target);
-                }
-
-                allocated = GC.GetAllocatedBytesForCurrentThread() - before;
-                System.Threading.Thread.Sleep(50);
+                target.Clear();
+                target = Models.Shape.Deserialize(bytes, target);
             }
 
-            Require(!optimized || allocated == 0, "reading into a cleared struct allocated " + allocated + " bytes");
+            long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+            Require(allocated == 0, "reading into a cleared struct allocated " + allocated + " bytes");
             Require(target.Equals(polygon) && ReferenceEquals(target.points, points), "reused read differs");
             """);
     }
