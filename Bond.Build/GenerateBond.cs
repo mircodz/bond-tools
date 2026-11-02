@@ -69,7 +69,8 @@ public sealed class GenerateBond : Microsoft.Build.Utilities.Task
             ModelFeatures = (IsEnabled(source, "Equality") ? CSharpModelFeatures.Equality : 0)
                 | (IsEnabled(source, "ToString") ? CSharpModelFeatures.StringRepresentation : 0)
                 | (IsEnabled(source, "Clear") ? CSharpModelFeatures.Clearing : 0),
-            Serialization = IsEnabled(source, "Serialization")
+            Serialization = IsEnabled(source, "Serialization"),
+            Structs = IsEnabled(source, "Structs")
         };
         var imports = List(source, "ImportDirectories").Select(directory => Path.GetFullPath(directory, ProjectDirectory));
         var parsed = ParserFacade.ParseFileAsync(path, DefaultImportResolver.Create(imports)).GetAwaiter().GetResult();

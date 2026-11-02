@@ -126,6 +126,11 @@ public static partial class CSharpGenerator
 
         private void EmitStruct(StructDeclaration structure)
         {
+            if (options.Structs && structure.BaseType != null)
+            {
+                Fail($"'{structure.Name}' has a base struct, which C# structs cannot have.", structure.Location);
+            }
+
             ValidateTypeParameters(structure);
             var bases = BaseStructures(structure).ToArray();
             var inheritedNames = bases.SelectMany(declaration => declaration.Fields)
@@ -173,7 +178,7 @@ public static partial class CSharpGenerator
             EmitAttributes(structure.Attributes, 1);
             EmitNamespaceAttribute(structure);
             Line(1, "[global::Bond.Schema]");
-            Line(1, $"public partial class {name}{parameters}{baseType}");
+            Line(1, $"public partial {(options.Structs ? "struct" : "class")} {name}{parameters}{baseType}");
             foreach (var parameter in structure.TypeParameters)
             {
                 if (parameter.Constraint == TypeConstraint.Value)
@@ -259,7 +264,7 @@ public static partial class CSharpGenerator
             Line(2, "}");
             Line(0);
 
-            Line(2, $"protected {name}(string fullName, string name)");
+            Line(2, $"{Protected} {name}(string fullName, string name)");
             if (callBaseConstructor)
             {
                 Line(3, ": base(fullName, name)");
@@ -399,8 +404,12 @@ public static partial class CSharpGenerator
                         }
 
                         var element = MapType(bonded.StructType, location, mode);
-                        return new($"global::Bond.IBonded<{element.Name}>", $"global::Bond.IBonded<{element.SchemaType}>",
-                            $"global::Bond.Bonded<{element.Name}>.Empty");
+
+                        // Bonded<T>.Empty holds default(T), which for a C# struct skips its constructor.
+                        var empty = options.Structs && underlying is BondType.TypeReference && element.InitialValue != null
+                            ? $"new global::Bond.Bonded<{element.Name}>({element.InitialValue})"
+                            : $"global::Bond.Bonded<{element.Name}>.Empty";
+                        return new($"global::Bond.IBonded<{element.Name}>", $"global::Bond.IBonded<{element.SchemaType}>", empty);
                     }
                 case BondType.TypeReference reference:
                     return MapReferencedType(reference, location, mode);
@@ -451,10 +460,14 @@ public static partial class CSharpGenerator
             return declaration switch
             {
                 EnumDeclaration => new(name, name, IsScalar: true, IsValueType: true, IsSchemaValueType: true),
-                StructDeclaration or ForwardDeclaration => new(name, schema, $"new {name}()"),
+                StructDeclaration or ForwardDeclaration => new(name, schema, $"new {name}()",
+                    IsScalar: options.Structs, IsValueType: options.Structs, IsSchemaValueType: options.Structs),
                 _ => throw new GenerationException("Only structs and enums can be used as generated C# model types.", location)
             };
         }
+
+        // Members for derived structs, which C# structs cannot have.
+        private string Protected => options.Structs ? "private" : "protected";
 
         private MappedType Collection(string name, SourceLocation location, TypeMode mode, params BondType[] arguments)
         {

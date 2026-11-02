@@ -135,9 +135,17 @@ public static partial class CSharpGenerator
             Line(3, $"public override {self} Read(ref {Runtime}CompactBinaryReader reader, {Runtime}WireType type, {self} into)");
             Line(3, "{");
             Line(4, $"{Runtime}CompactBinaryReader.Expect(type, {Runtime}WireType.Struct);");
-            Line(4, $"return into == null");
-            Line(5, $"? {self}.Read(ref reader{_codecArguments})");
-            Line(5, $": {self}.Read(ref reader, into{_codecArguments});");
+            if (options.Structs)
+            {
+                Line(4, $"return {self}.Read(ref reader, into{_codecArguments});");
+            }
+            else
+            {
+                Line(4, $"return into == null");
+                Line(5, $"? {self}.Read(ref reader{_codecArguments})");
+                Line(5, $": {self}.Read(ref reader, into{_codecArguments});");
+            }
+
             Line(3, "}");
             Line(0);
             Line(3, $"public override bool IsDefault({self} value) => false;");
@@ -154,7 +162,7 @@ public static partial class CSharpGenerator
             Line(3, "writer.WriteStructEnd();");
             Line(2, "}");
             Line(0);
-            Line(2, $"protected static void WriteFields(ref {Runtime}CompactBinaryWriter writer, {self} value{_codecParameters})");
+            Line(2, $"{Protected} static void WriteFields(ref {Runtime}CompactBinaryWriter writer, {self} value{_codecParameters})");
             Line(2, "{");
             if (baseName != null)
             {
@@ -295,6 +303,8 @@ public static partial class CSharpGenerator
             Field[] fields)
         {
             _modelVariables = 0;
+            // A struct's fields are read into the caller's value, not into a copy of it.
+            var byRef = options.Structs ? "ref " : "";
             Line(0);
             Line(2, $"public static {(hides ? "new " : "")}{self} Read(ref {Runtime}CompactBinaryReader reader{_codecParameters}) =>");
             Line(3, $"Read(ref reader, new {self}(){_codecArguments});");
@@ -302,12 +312,12 @@ public static partial class CSharpGenerator
             Line(2, $"public static {self} Read(ref {Runtime}CompactBinaryReader reader, {self} value{_codecParameters})");
             Line(2, "{");
             Line(3, "reader.ReadStructBegin();");
-            Line(3, $"ReadFields(ref reader, value{_codecArguments});");
+            Line(3, $"ReadFields(ref reader, {byRef}value{_codecArguments});");
             Line(3, "reader.ReadStructEnd();");
             Line(3, "return value;");
             Line(2, "}");
             Line(0);
-            Line(2, $"protected static void ReadFields(ref {Runtime}CompactBinaryReader reader, {self} value{_codecParameters})");
+            Line(2, $"{Protected} static void ReadFields(ref {Runtime}CompactBinaryReader reader, {byRef}{self} value{_codecParameters})");
             Line(2, "{");
             if (baseName != null)
             {
@@ -463,11 +473,14 @@ public static partial class CSharpGenerator
 
                         Line(indent, into == null
                             ? assign($"{name}.Read(ref reader{codecs})")
-                            : $"{name}.Read(ref reader, {into} ??= new {name}(){codecs});");
+                            : options.Structs
+                                ? $"{into} = {name}.Read(ref reader, {into}{codecs});"
+                                : $"{name}.Read(ref reader, {into} ??= new {name}(){codecs});");
                         break;
                     }
                 case BondType.TypeParameter parameter:
-                    Line(indent, assign(into == null
+                    // A struct argument is read as a new value: the field holds default(T), not one with schema defaults.
+                    Line(indent, assign(into == null || options.Structs
                         ? $"{Codec(parameter)}.Read(ref reader, {wire})"
                         : $"{Codec(parameter)}.Read(ref reader, {wire}, {into})"));
                     break;

@@ -128,12 +128,20 @@ public static partial class CSharpGenerator
             Line(0);
             Line(2, "public override bool Equals(object obj)");
             Line(2, "{");
-            Line(3, "if (object.ReferenceEquals(this, obj))");
-            Line(3, "{");
-            Line(4, "return true;");
-            Line(3, "}");
-            Line(0);
-            Line(3, "if (obj == null || ((object)this).GetType() != obj.GetType())");
+            if (options.Structs)
+            {
+                Line(3, $"if (!(obj is {self}))");
+            }
+            else
+            {
+                Line(3, "if (object.ReferenceEquals(this, obj))");
+                Line(3, "{");
+                Line(4, "return true;");
+                Line(3, "}");
+                Line(0);
+                Line(3, "if (obj == null || ((object)this).GetType() != obj.GetType())");
+            }
+
             Line(3, "{");
             Line(4, "return false;");
             Line(3, "}");
@@ -312,6 +320,7 @@ public static partial class CSharpGenerator
         // alongside this one cleared in place, so a cleared instance keeps its storage for the next read.
         private void EmitClear(StructDeclaration structure, IReadOnlyList<ModelField> fields)
         {
+            _modelVariables = 0;
             Line(0);
             Line(2, $"public {(structure.BaseType != null ? "new " : "")}void Clear()");
             Line(2, "{");
@@ -329,7 +338,16 @@ public static partial class CSharpGenerator
                 var mapped = MapType(field.Type, field.Location);
                 var value = FieldDefaultValue(field.Declaration with { Type = field.Type }, mapped, field.Declarer) ?? "default";
                 var target = field.On("this");
-                if (value != "default" && !mapped.IsCustom && ClearsInPlace(type))
+                var inPlace = value != "default" && !mapped.IsCustom && ClearsInPlace(type);
+                if (inPlace && options.Structs && type is BondType.TypeReference)
+                {
+                    // A struct property returns a copy, which is cleared and stored back.
+                    var copy = Fresh("cleared");
+                    Line(3, $"{mapped.Name} {copy} = {target};");
+                    Line(3, $"{copy}.Clear();");
+                    Line(3, $"{target} = {copy};");
+                }
+                else if (inPlace)
                 {
                     Line(3, $"if ({target} != null)");
                     Line(3, "{");
