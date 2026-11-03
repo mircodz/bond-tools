@@ -42,34 +42,14 @@ public class Benchmarks
     [GlobalSetup]
     public void Setup()
     {
-        _order = new Order { id = 42, paid = true };
-        _order.customer.name = "Ada Lovelace";
-        _order.customer.address.street = "1 Main St";
-        _order.customer.address.city = "London";
-        _order.customer.address.zip = "N1";
-        _order.customer.emails.Add("ada@example.com");
-        _order.customer.emails.Add("ada@work.example.com");
-        _order.customer.attributes["tier"] = "gold";
-        _order.customer.attributes["lang"] = "en";
-        for (var i = 0; i < 10; i++)
-        {
-            _order.lines.Add(new Line { sku = "SKU-" + i, quantity = (uint)i + 1, price = 9.99 * i });
-            _order.codes.Add(i * 7);
-        }
-
-        _order.properties["channel"] = "web";
-        _order.properties["coupon"] = "NONE";
-        _order.labels.Add("priority");
-        _order.labels.Add("gift");
-
-        _items = new Items();
+        _order = CreateOrder();
+        _items = CreateItems();
         _ints = new Int32s();
         _doubles = new Doubles();
         _stringMap = new StringMap();
         _intDoubleMap = new IntDoubleMap();
         for (var i = 0; i < 100; i++)
         {
-            _items.values.Add(new Item { id = i, value = i * 1000L, name = "item-" + i });
             _ints.values.Add(i * 37 - 1000);
             _stringMap.values["key-" + i] = "value-" + i;
             _intDoubleMap.values[i * 37] = i * 9.99;
@@ -104,6 +84,41 @@ public class Benchmarks
         _bigBytes = Bytes(_big);
         (_orderInput, _itemInput, _intInput, _doubleInput) = (new(_orderBytes), new(_itemBytes), new(_intBytes), new(_doubleBytes));
         (_stringMapInput, _intDoubleMapInput, _bigInput) = (new(_stringMapBytes), new(_intDoubleMapBytes), new(_bigBytes));
+    }
+
+    internal static Order CreateOrder()
+    {
+        var order = new Order { id = 42, paid = true };
+        order.customer.name = "Ada Lovelace";
+        order.customer.address.street = "1 Main St";
+        order.customer.address.city = "London";
+        order.customer.address.zip = "N1";
+        order.customer.emails.Add("ada@example.com");
+        order.customer.emails.Add("ada@work.example.com");
+        order.customer.attributes["tier"] = "gold";
+        order.customer.attributes["lang"] = "en";
+        for (var i = 0; i < 10; i++)
+        {
+            order.lines.Add(new Line { sku = "SKU-" + i, quantity = (uint)i + 1, price = 9.99 * i });
+            order.codes.Add(i * 7);
+        }
+
+        order.properties["channel"] = "web";
+        order.properties["coupon"] = "NONE";
+        order.labels.Add("priority");
+        order.labels.Add("gift");
+        return order;
+    }
+
+    internal static Items CreateItems()
+    {
+        var items = new Items();
+        for (var i = 0; i < 100; i++)
+        {
+            items.values.Add(new Item { id = i, value = i * 1000L, name = "item-" + i });
+        }
+
+        return items;
     }
 
     // Both runtimes must write the same bytes, or the comparison means nothing.

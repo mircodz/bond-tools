@@ -7,6 +7,8 @@ struct Item {
 }
 
 struct Items { 0: vector<Item> values; }
+struct Point { 0: double x; 1: double y; }
+struct Points { 0: vector<Point> values; }
 struct Int32s { 0: vector<int32> values; }
 struct Doubles { 0: vector<double> values; }
 struct StringMap { 0: map<string, string> values; }
