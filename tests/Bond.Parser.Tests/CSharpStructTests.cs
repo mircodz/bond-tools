@@ -139,6 +139,77 @@ public sealed class CSharpStructTests
             """);
     }
 
+    [Fact]
+    public async Task BondedFieldsOfStructsThatContainThemDefaultToEmpty()
+    {
+        var code = await Generate("""
+            namespace Models
+            struct Point { 0: string name; }
+            struct Node { 0: int32 id; 1: bonded<Node> next; }
+            struct Left { 0: bonded<Right> right; }
+            struct Right { 0: Middle middle; }
+            struct Middle { 0: bonded<Left> left; }
+            struct Holder { 0: bonded<Point> point; }
+            """, Options);
+        Assert.Contains("this.point = new global::Bond.Bonded<global::Models.Point>(new global::Models.Point());", code);
+        Assert.Contains("this.next = global::Bond.Bonded<global::Models.Node>.Empty;", code);
+        RunScenario(code, """
+            // Constructing or reading one used to construct another without end.
+            Require(new Models.Node().next != null && new Models.Left().right != null && new Models.Middle().left != null,
+                "no default");
+            Require(Models.Node.Deserialize(Convert.FromHexString("100A00")).id == 5, "read");
+            Require(new Models.Holder().point.Deserialize().name == "", "a default that doesn't contain itself isn't a new struct");
+            """);
+    }
+
+    [Fact]
+    public async Task StructsMappedToOtherTypesAreNullableAsWithClasses()
+    {
+        var code = await Generate("""
+            namespace Models
+            struct Point { 0: double x; }
+            using Alias = Point;
+            struct Holder { 0: nullable<Alias> point; }
+            """, Options with { TypeMappings = ["Alias=global::Models.Wrapper"] });
+        RunScenario(code, """
+            var holder = new Models.Holder();
+            Require(Models.Holder.Deserialize(holder.Serialize()).point == null, "absent");
+            holder.point = new Models.Wrapper { Point = new Models.Point { x = 2 } };
+            Require(Models.Holder.Deserialize(holder.Serialize()).point.Point.x == 2, "present");
+            """, """
+            namespace Models
+            {
+                public sealed class Wrapper { public Point Point; }
+
+                public static class BondTypeAliasConverter
+                {
+                    public static Point Convert(Wrapper value, Point unused) => value.Point;
+                    public static Wrapper Convert(Point value, Wrapper unused) => new Wrapper { Point = value };
+                }
+            }
+            """);
+    }
+
+    [Theory]
+    [InlineData("struct Box<T> { 0: nullable<T> item; } struct Holder { 0: Box<Point> box; }", "Box", "T")]
+    [InlineData("struct Box<T> { 0: T item = nothing; } struct Holder { 0: vector<Box<Point>> boxes; }", "Box", "T")]
+    [InlineData("struct Box<T> { 0: map<string, nullable<T>> items; } struct Outer<U> { 0: Box<U> box; } " +
+        "struct Holder { 0: Outer<Point> outer; }", "Outer", "U")]
+    public async Task StructsCannotBeNullableTypeArguments(string declarations, string generic, string parameter)
+    {
+        var parsed = await ParserFacade.ParseStringAsync("namespace Models struct Point { 0: double x; } " + declarations);
+        Assert.True(parsed.Success, string.Join("\n", parsed.Errors.Select(error => error.Message)));
+
+        var result = CSharpGenerator.Generate(parsed.Ast!, "input.bond", Options);
+        Assert.False(result.Success);
+        Assert.Contains(result.Errors, error =>
+            error.Message == $"'{generic}' takes '{parameter}' as nullable, which a C# struct such as 'Point' can't be.");
+        Assert.True(CSharpGenerator.Generate(parsed.Ast!, "input.bond", Options with { Structs = false }).Success);
+        Assert.True(CSharpGenerator.Generate(
+            (await ParserFacade.ParseStringAsync("namespace Models " + declarations.Replace("<Point>", "<string>"))).Ast!,
+            "input.bond", Options).Success);
+    }
+
     [Theory]
     [MemberData(nameof(Fixtures))]
     public async Task EveryFixtureWithoutBasesCompilesAsStructs(string fixture)
@@ -166,9 +237,12 @@ public sealed class CSharpStructTests
             namespace tests { [Bond.Schema] public partial struct Bar { public void Clear() { } } }
             namespace empty { [Bond.Schema] public partial struct Empty { public void Clear() { } } }
             """;
-        foreach (var type in Compile(result.Code!, standIns).GetTypes().Where(type =>
+        var types = Compile(result.Code!, standIns).GetTypes().Where(type =>
             type.IsValueType && type.GetMethod("Clear", Type.EmptyTypes) != null && !type.IsGenericTypeDefinition &&
-            type.Namespace is not ("tests" or "empty")))
+            type.FullName is not ("tests.Bar" or "empty.Empty")).ToList();
+        Assert.Equal(parsed.Ast.Declarations.OfType<StructDeclaration>().Count(structure => structure.TypeParameters.Length == 0),
+            types.Count);
+        foreach (var type in types)
         {
             var value = Activator.CreateInstance(type)!;
             var other = Activator.CreateInstance(type)!;

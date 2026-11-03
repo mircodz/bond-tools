@@ -186,6 +186,15 @@ public static partial class CSharpGenerator
             Line(5, "return Same(bonded.Deserialize(), otherBonded.Deserialize());");
             Line(4, "}");
             Line(0);
+            if (options.Structs)
+            {
+                // A bonded C# struct isn't an IBonded<object>, so it's compared by its encoding.
+                Line(4, "if (left is global::Bond.IBonded encoded && right is global::Bond.IBonded otherEncoded)");
+                Line(4, "{");
+                Line(5, $"return {Enumerable}SequenceEqual(Encode(encoded), Encode(otherEncoded));");
+                Line(4, "}");
+                Line(0);
+            }
             Line(4, "if (left is global::System.Collections.IDictionary map && right is global::System.Collections.IDictionary otherMap)");
             Line(4, "{");
             Line(5, "if (map.Count != otherMap.Count)");
@@ -217,6 +226,16 @@ public static partial class CSharpGenerator
             Line(0);
             Line(4, "return object.Equals(left, right);");
             Line(3, "}");
+            if (options.Structs)
+            {
+                Line(0);
+                Line(3, "global::System.ArraySegment<byte> Encode(global::Bond.IBonded value)");
+                Line(3, "{");
+                Line(4, "global::Bond.IO.Safe.OutputBuffer output = new global::Bond.IO.Safe.OutputBuffer();");
+                Line(4, "value.Serialize(new global::Bond.Protocols.CompactBinaryWriter<global::Bond.IO.Safe.OutputBuffer>(output));");
+                Line(4, "return output.Data;");
+                Line(3, "}");
+            }
         }
 
         private void EmitGetHashCode(IReadOnlyList<ModelField> fields)

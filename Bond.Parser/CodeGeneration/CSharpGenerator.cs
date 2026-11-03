@@ -67,6 +67,7 @@ public static partial class CSharpGenerator
         private readonly Dictionary<string, Declaration> _declarations = CanonicalDeclarations(ast);
         private readonly HashSet<AliasDeclaration> _validatedAliases = new(ReferenceEqualityComparer.Instance);
         private readonly HashSet<string> _emittedTypes = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, bool> _constructsItself = new(StringComparer.Ordinal);
 
         public CSharpGenerationResult Generate()
         {
@@ -408,8 +409,10 @@ public static partial class CSharpGenerator
 
                         var element = MapType(bonded.StructType, location, mode);
 
-                        // Bonded<T>.Empty holds default(T), which for a C# struct skips its constructor.
-                        var empty = options.Structs && underlying is BondType.TypeReference && element.InitialValue != null
+                        // Bonded<T>.Empty holds default(T), which for a C# struct skips its constructor, so a new T is
+                        // held instead, unless constructing a T would construct another without end.
+                        var empty = options.Structs && underlying is BondType.TypeReference target && element.InitialValue != null
+                            && !ConstructsItself(target.Declaration)
                             ? $"new global::Bond.Bonded<{element.Name}>({element.InitialValue})"
                             : $"global::Bond.Bonded<{element.Name}>.Empty";
                         return new($"global::Bond.IBonded<{element.Name}>", $"global::Bond.IBonded<{element.SchemaType}>", empty);
@@ -678,6 +681,94 @@ public static partial class CSharpGenerator
                 {
                     var kind = annotated ? "schema annotation" : "type argument";
                     Fail($"The C# {kind} for '{declaration.TypeParameters[index].Name}' must be a non-nullable value type.", location);
+                }
+            }
+
+            if (!options.Structs || Canonical(declaration) is not StructDeclaration generic)
+            {
+                return;
+            }
+
+            for (var index = 0; index < arguments.Length; index++)
+            {
+                if (MappedWireType(arguments[index], location) == null
+                    && UnwrapAlias(arguments[index], location) is BondType.TypeReference { Declaration: StructDeclaration or ForwardDeclaration } argument
+                    && TakesNullable(generic, generic.TypeParameters[index], []))
+                {
+                    Fail($"'{generic.Name}' takes '{generic.TypeParameters[index].Name}' as nullable, which a C# struct such as " +
+                        $"'{argument.Declaration.Name}' can't be.", location);
+                }
+            }
+        }
+
+        // Whether a generic struct needs values of a type parameter to be null, in nullable<T> or as nothing: a C# struct
+        // can't be, and Nullable<T> can't stand for an unconstrained T.
+        private bool TakesNullable(StructDeclaration generic, TypeParam parameter, HashSet<(string, string)> visited)
+        {
+            return visited.Add((generic.QualifiedName, parameter.Name)) && generic.Fields.Any(field => Uses(field.Type, field.Location));
+
+            bool Uses(BondType type, SourceLocation location) => UnwrapAlias(type, location) switch
+            {
+                BondType.Nullable nullable => IsParameter(nullable.ElementType, location) || Uses(nullable.ElementType, location),
+                BondType.Maybe maybe => IsParameter(maybe.ElementType, location) || Uses(maybe.ElementType, location),
+                BondType.TypeReference { Declaration: var target } reference => reference.TypeArguments.Where((argument, index) =>
+                    IsParameter(argument, location) && Canonical(target) is StructDeclaration nested
+                        ? TakesNullable(nested, nested.TypeParameters[index], visited)
+                        : Uses(argument, location)).Any(),
+                var other => Children(other).Any(child => Uses(child, location))
+            };
+
+            bool IsParameter(BondType type, SourceLocation location) =>
+                UnwrapAlias(type, location) is BondType.TypeParameter { Param.Name: var name } && name == parameter.Name;
+        }
+
+        // Whether constructing a struct can construct another of it, through the structs its fields hold and its
+        // bonded<T> fields' defaults, which are then Bonded<T>.Empty.
+        private bool ConstructsItself(Declaration declaration)
+        {
+            var start = Canonical(declaration).QualifiedName;
+            if (_constructsItself.TryGetValue(start, out var known))
+            {
+                return known;
+            }
+
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            var pending = new Stack<string>(Constructs(start));
+            var result = false;
+            while (!result && pending.TryPop(out var next))
+            {
+                result = next == start;
+                if (seen.Add(next))
+                {
+                    foreach (var target in Constructs(next))
+                    {
+                        pending.Push(target);
+                    }
+                }
+            }
+
+            _constructsItself[start] = result;
+            return result;
+        }
+
+        private IEnumerable<string> Constructs(string name)
+        {
+            if (_declarations.GetValueOrDefault(name) is not StructDeclaration structure)
+            {
+                yield break;
+            }
+
+            foreach (var field in structure.Fields)
+            {
+                var type = UnwrapAlias(field.Type, field.Location);
+                if (type is BondType.Bonded bonded)
+                {
+                    type = UnwrapAlias(bonded.StructType, field.Location);
+                }
+
+                if (type is BondType.TypeReference { Declaration: StructDeclaration or ForwardDeclaration } reference)
+                {
+                    yield return reference.Declaration.QualifiedName;
                 }
             }
         }

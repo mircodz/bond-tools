@@ -100,14 +100,17 @@ public sealed class CSharpModelFeatureTests
             """);
     }
 
-    [Fact]
-    public async Task TypeArgumentContainersAreComparedByValue()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task TypeArgumentContainersAreComparedByValue(bool structs)
     {
-        await Run("""
+        var options = new CSharpGenerationOptions { ModelFeatures = CSharpModelFeatures.All, Structs = structs };
+        RunScenario(await Generate("""
             namespace Models
             struct Item { 0: int32 id; }
             struct Box<T> { 0: T value; 1: vector<T> values; 2: map<string, T> lookup; }
-            """, """
+            """, options), """
             void Same<T>(Models.Box<T> left, Models.Box<T> right, string message) =>
                 Require(left.Equals(right) && right.Equals(left) && left.GetHashCode() == right.GetHashCode(), message);
             void Different<T>(Models.Box<T> left, Models.Box<T> right, string message) =>

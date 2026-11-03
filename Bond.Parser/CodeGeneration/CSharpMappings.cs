@@ -155,7 +155,12 @@ public static partial class CSharpGenerator
             }
 
             var schema = MapType(substituted, location, TypeMode.Schema);
-            mapped = new MappedType(name, schema.SchemaType, IsScalar: wire.IsScalar,
+
+            // The CLR type is a value type if its Bond type is a scalar, as with classes: --structs only changes
+            // generated structs, not the types they are mapped to.
+            var scalar = wire.IsScalar
+                && UnwrapAlias(substituted, location) is not BondType.TypeReference { Declaration: StructDeclaration or ForwardDeclaration };
+            mapped = new MappedType(name, schema.SchemaType, IsScalar: scalar,
                 IsSchemaValueType: schema.IsSchemaValueType, IsCustom: true);
             return true;
         }

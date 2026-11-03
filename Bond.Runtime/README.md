@@ -25,7 +25,7 @@ order.Clear();
 order = Order.Deserialize(bytes, into: order);
 ```
 
-A field of a type parameter holds `default(T)` until it is assigned or read, as with upstream, so it lacks the constructor's defaults: assign it before writing a value of a generic struct with a struct type argument.
+A field of a type parameter holds `default(T)` until it is assigned or read, as with upstream, so it lacks the constructor's defaults: assign it before writing a value of a generic struct with a struct type argument. So does a `bonded<T>` whose struct can contain it again, as in `struct Node { 0: bonded<Node> next; }`, as with classes. And a struct can't be the type argument of a generic struct that takes it as nullable, as in `nullable<T>`, since a struct can't be null.
 
 ## Generic structs
 
