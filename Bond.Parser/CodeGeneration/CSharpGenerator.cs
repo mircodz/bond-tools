@@ -238,7 +238,10 @@ public static partial class CSharpGenerator
                 }
 
                 var hiding = inheritedNames.Contains(field.Name) ? "new " : "";
-                Line(2, $"public {hiding}{type.Name} {Identifier(field.Name, field.Location)} {{ get; set; }}");
+
+                // A struct's fields are variables, so its nested structs are read, written and assigned in place.
+                var accessors = options.Structs ? ";" : " { get; set; }";
+                Line(2, $"public {hiding}{type.Name} {Identifier(field.Name, field.Location)}{accessors}");
                 Line(0);
 
                 if (initialValue != null)

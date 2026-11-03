@@ -25,7 +25,8 @@ public sealed record CSharpGenerationOptions
 
     /// <summary>
     /// Generates C# structs instead of classes, so nested structs and container elements are stored inline rather than
-    /// allocated one by one. C# structs can't inherit, so schemas with bases fail to generate.
+    /// allocated one by one. Their members are public fields. C# structs can't inherit, so schemas with bases fail to
+    /// generate.
     /// </summary>
     public bool Structs { get; init; }
 

@@ -155,14 +155,32 @@ public static partial class CSharpGenerator
         private void EmitWrite(string self, string? baseName, string baseArguments, Field[] fields)
         {
             _modelVariables = 0;
+
+            // A struct is written through a readonly reference, so that its fields aren't copied at every call.
+            var byIn = options.Structs ? "in " : "";
             Line(0);
-            Line(2, $"public static void Write(ref {Runtime}CompactBinaryWriter writer, {self} value{_codecParameters})");
+            if (options.Structs)
+            {
+                Line(2, $"public static void Write(ref {Runtime}CompactBinaryWriter writer, {self} value{_codecParameters}) =>");
+                Line(3, $"Write(ref writer, in value{_codecArguments});");
+                Line(0);
+            }
+
+            Line(2, $"public static void Write(ref {Runtime}CompactBinaryWriter writer, {byIn}{self} value{_codecParameters})");
             Line(2, "{");
-            Line(3, $"WriteFields(ref writer, value{_codecArguments});");
+            Line(3, $"WriteFields(ref writer, {byIn}value{_codecArguments});");
             Line(3, "writer.WriteStructEnd();");
             Line(2, "}");
             Line(0);
-            Line(2, $"{Protected} static void WriteFields(ref {Runtime}CompactBinaryWriter writer, {self} value{_codecParameters})");
+
+            // Inlined into a large caller, a loop over a vector of structs would call the writer's helpers rather than
+            // inline them; the loops over other containers are never inlined, as their enumerators are disposed.
+            if (fields.Any(field => LoopsInPlace(field.Type, field.Location)))
+            {
+                Line(2, "[global::System.Runtime.CompilerServices.MethodImpl(global::System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]");
+            }
+
+            Line(2, $"{Protected} static void WriteFields(ref {Runtime}CompactBinaryWriter writer, {byIn}{self} value{_codecParameters})");
             Line(2, "{");
             if (baseName != null)
             {
@@ -183,7 +201,7 @@ public static partial class CSharpGenerator
                 }
 
                 Line(indent, $"writer.WriteFieldBegin({Wire(field.Type, field.Location)}, {field.Ordinal});");
-                EmitWriteValue(field.Type, access, field.Location, indent);
+                EmitWriteValue(field.Type, access, field.Location, indent, variable: options.Structs);
                 if (condition != null)
                 {
                     Line(3, "}");
@@ -225,7 +243,8 @@ public static partial class CSharpGenerator
             };
         }
 
-        private void EmitWriteValue(BondType type, string value, SourceLocation location, int indent)
+        // A variable value, such as a struct's field, is passed to a struct's Write by reference.
+        private void EmitWriteValue(BondType type, string value, SourceLocation location, int indent, bool variable = false)
         {
             if (MappedWireType(type, location) is { } wireType)
             {
@@ -257,6 +276,17 @@ public static partial class CSharpGenerator
                         var element = ElementType(UnwrapAlias(type, location));
                         var item = Fresh("item");
                         Line(indent, $"writer.WriteContainerBegin({value}.Count, {Wire(element, location)});");
+                        if (InPlaceElement(type, location) is { } reference)
+                        {
+                            // A vector's structs are written where they are, not copied out of the list one by one.
+                            Line(indent, $"foreach (ref readonly {MapType(element, location).Name} {item} in " +
+                                $"global::System.Runtime.InteropServices.CollectionsMarshal.AsSpan({value}))");
+                            Line(indent, "{");
+                            Line(indent + 1, $"{MapType(reference, location).Name}.Write(ref writer, in {item}{CodecArguments(reference, location)});");
+                            Line(indent, "}");
+                            break;
+                        }
+
                         Line(indent, $"foreach ({MapType(element, location).Name} {item} in {value})");
                         Line(indent, "{");
                         EmitWriteValue(element, item, location, indent + 1);
@@ -281,7 +311,8 @@ public static partial class CSharpGenerator
                     Line(indent, $"writer.WriteBytes({value});");
                     break;
                 case BondType.TypeReference { Declaration: StructDeclaration or ForwardDeclaration } reference:
-                    Line(indent, $"{MapType(reference, location).Name}.Write(ref writer, {value}{CodecArguments(reference, location)});");
+                    Line(indent, $"{MapType(reference, location).Name}.Write(ref writer, {(variable ? "in " : "")}{value}" +
+                        $"{CodecArguments(reference, location)});");
                     break;
                 case BondType.TypeParameter parameter:
                     Line(indent, $"{Codec(parameter)}.Write(ref writer, {value});");
@@ -643,6 +674,33 @@ public static partial class CSharpGenerator
         // Nullable scalars are represented as Nullable<T>; other nullable values are references or blobs.
         private string NonNull(BondType element, string value, SourceLocation location) =>
             MapType(element, location).IsScalar ? value + ".Value" : value;
+
+        // The struct of a vector that --structs writes in place, or null for other types.
+        private BondType.TypeReference? InPlaceElement(BondType type, SourceLocation location) =>
+            options.Structs && UnwrapAlias(type, location) is BondType.Vector vector && MappedWireType(vector.ElementType, location) == null
+                && UnwrapAlias(vector.ElementType, location) is BondType.TypeReference { Declaration: StructDeclaration or ForwardDeclaration } reference
+                ? reference
+                : null;
+
+        // Whether writing a value loops over a vector of structs in place, at any depth of its containers.
+        private bool LoopsInPlace(BondType type, SourceLocation location)
+        {
+            if (MappedWireType(type, location) is { } wireType)
+            {
+                return LoopsInPlace(wireType, location);
+            }
+
+            return InPlaceElement(type, location) != null || UnwrapAlias(type, location) switch
+            {
+                BondType.Vector vector => LoopsInPlace(vector.ElementType, location),
+                BondType.List list => LoopsInPlace(list.ElementType, location),
+                BondType.Set set => LoopsInPlace(set.KeyType, location),
+                BondType.Map map => LoopsInPlace(map.KeyType, location) || LoopsInPlace(map.ValueType, location),
+                BondType.Nullable nullable => LoopsInPlace(nullable.ElementType, location),
+                BondType.Maybe maybe => LoopsInPlace(maybe.ElementType, location),
+                _ => false
+            };
+        }
 
         private static BondType ElementType(BondType container) => container switch
         {

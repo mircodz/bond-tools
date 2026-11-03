@@ -45,7 +45,7 @@ public static class Program
           --to-string                 Generate ToString()
           --clear                     Generate Clear(), which resets fields and keeps containers for reuse
           --serialization             Generate Compact Binary serialization (requires BondTools.Runtime)
-          --structs                   Generate C# structs instead of classes; schemas cannot use inheritance
+          --structs                   Generate C# structs with public fields instead of classes; no inheritance
 
         Exit codes:
           0  success

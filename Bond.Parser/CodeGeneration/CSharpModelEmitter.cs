@@ -341,11 +341,7 @@ public static partial class CSharpGenerator
                 var inPlace = value != "default" && !mapped.IsCustom && ClearsInPlace(type);
                 if (inPlace && options.Structs && type is BondType.TypeReference)
                 {
-                    // A struct property returns a copy, which is cleared and stored back.
-                    var copy = Fresh("cleared");
-                    Line(3, $"{mapped.Name} {copy} = {target};");
-                    Line(3, $"{copy}.Clear();");
-                    Line(3, $"{target} = {copy};");
+                    Line(3, $"{target}.Clear();");
                 }
                 else if (inPlace)
                 {

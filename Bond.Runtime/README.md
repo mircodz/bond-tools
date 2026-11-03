@@ -18,7 +18,7 @@ Order.Deserialize(bytes, into: order);
 
 ## Structs
 
-`--structs` generates C# structs instead of classes, so nested structs and the elements of containers are stored inline rather than allocated one by one: reading `vector<Point>` into a cleared instance allocates nothing. C# structs can't inherit, so schemas with bases fail to generate. Structs are values, so `Deserialize(bytes, into)` returns the instance it read into:
+`--structs` generates C# structs instead of classes, so nested structs and the elements of containers are stored inline rather than allocated one by one: reading `vector<Point>` into a cleared instance allocates nothing. Their members are public fields, so nested structs are assigned in place, as in `order.customer.name = "Ada"`, and written without copies. C# structs can't inherit, so schemas with bases fail to generate, nor contain themselves other than in a container, as in `nullable<Node> next`, which the compiler rejects. Structs are values, so `Deserialize(bytes, into)` returns the instance it read into:
 
 ```csharp
 order.Clear();
