@@ -67,6 +67,7 @@ public static partial class CSharpGenerator
         private readonly Dictionary<string, Declaration> _declarations = CanonicalDeclarations(ast);
         private readonly HashSet<AliasDeclaration> _validatedAliases = new(ReferenceEqualityComparer.Instance);
         private readonly HashSet<string> _emittedTypes = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, bool> _constructsItself = new(StringComparer.Ordinal);
 
         public CSharpGenerationResult Generate()
         {
@@ -126,6 +127,11 @@ public static partial class CSharpGenerator
 
         private void EmitStruct(StructDeclaration structure)
         {
+            if (options.Structs && structure.BaseType != null)
+            {
+                Fail($"'{structure.Name}' has a base struct, which C# structs cannot have.", structure.Location);
+            }
+
             ValidateTypeParameters(structure);
             var bases = BaseStructures(structure).ToArray();
             var inheritedNames = bases.SelectMany(declaration => declaration.Fields)
@@ -173,7 +179,7 @@ public static partial class CSharpGenerator
             EmitAttributes(structure.Attributes, 1);
             EmitNamespaceAttribute(structure);
             Line(1, "[global::Bond.Schema]");
-            Line(1, $"public partial class {name}{parameters}{baseType}");
+            Line(1, $"public partial {(options.Structs ? "struct" : "class")} {name}{parameters}{baseType}");
             foreach (var parameter in structure.TypeParameters)
             {
                 if (parameter.Constraint == TypeConstraint.Value)
@@ -233,7 +239,10 @@ public static partial class CSharpGenerator
                 }
 
                 var hiding = inheritedNames.Contains(field.Name) ? "new " : "";
-                Line(2, $"public {hiding}{type.Name} {Identifier(field.Name, field.Location)} {{ get; set; }}");
+
+                // A struct's fields are variables, so its nested structs are read, written and assigned in place.
+                var accessors = options.Structs ? ";" : " { get; set; }";
+                Line(2, $"public {hiding}{type.Name} {Identifier(field.Name, field.Location)}{accessors}");
                 Line(0);
 
                 if (initialValue != null)
@@ -259,7 +268,7 @@ public static partial class CSharpGenerator
             Line(2, "}");
             Line(0);
 
-            Line(2, $"protected {name}(string fullName, string name)");
+            Line(2, $"{Protected} {name}(string fullName, string name)");
             if (callBaseConstructor)
             {
                 Line(3, ": base(fullName, name)");
@@ -399,8 +408,14 @@ public static partial class CSharpGenerator
                         }
 
                         var element = MapType(bonded.StructType, location, mode);
-                        return new($"global::Bond.IBonded<{element.Name}>", $"global::Bond.IBonded<{element.SchemaType}>",
-                            $"global::Bond.Bonded<{element.Name}>.Empty");
+
+                        // Bonded<T>.Empty holds default(T), which for a C# struct skips its constructor, so a new T is
+                        // held instead, unless constructing a T would construct another without end.
+                        var empty = options.Structs && underlying is BondType.TypeReference target && element.InitialValue != null
+                            && !ConstructsItself(target.Declaration)
+                            ? $"new global::Bond.Bonded<{element.Name}>({element.InitialValue})"
+                            : $"global::Bond.Bonded<{element.Name}>.Empty";
+                        return new($"global::Bond.IBonded<{element.Name}>", $"global::Bond.IBonded<{element.SchemaType}>", empty);
                     }
                 case BondType.TypeReference reference:
                     return MapReferencedType(reference, location, mode);
@@ -451,10 +466,14 @@ public static partial class CSharpGenerator
             return declaration switch
             {
                 EnumDeclaration => new(name, name, IsScalar: true, IsValueType: true, IsSchemaValueType: true),
-                StructDeclaration or ForwardDeclaration => new(name, schema, $"new {name}()"),
+                StructDeclaration or ForwardDeclaration => new(name, schema, $"new {name}()",
+                    IsScalar: options.Structs, IsValueType: options.Structs, IsSchemaValueType: options.Structs),
                 _ => throw new GenerationException("Only structs and enums can be used as generated C# model types.", location)
             };
         }
+
+        // Members for derived structs, which C# structs cannot have.
+        private string Protected => options.Structs ? "private" : "protected";
 
         private MappedType Collection(string name, SourceLocation location, TypeMode mode, params BondType[] arguments)
         {
@@ -662,6 +681,119 @@ public static partial class CSharpGenerator
                 {
                     var kind = annotated ? "schema annotation" : "type argument";
                     Fail($"The C# {kind} for '{declaration.TypeParameters[index].Name}' must be a non-nullable value type.", location);
+                }
+            }
+
+            if (!options.Structs || Canonical(declaration) is not StructDeclaration generic)
+            {
+                return;
+            }
+
+            for (var index = 0; index < arguments.Length; index++)
+            {
+                if (MappedWireType(arguments[index], location) == null
+                    && UnwrapAlias(arguments[index], location) is BondType.TypeReference { Declaration: StructDeclaration or ForwardDeclaration } argument
+                    && TakesNullable(generic, generic.TypeParameters[index], []))
+                {
+                    Fail($"'{generic.Name}' takes '{generic.TypeParameters[index].Name}' as nullable, which a C# struct such as " +
+                        $"'{argument.Declaration.Name}' can't be.", location);
+                }
+
+                if (options.GenerateEquality && BondedStruct(arguments[index], location) is { } bonded)
+                {
+                    Fail($"Equals() can't compare a bonded C# struct as a type argument, as 'bonded<{bonded.Declaration.Name}>' " +
+                        $"for '{generic.Name}'s '{generic.TypeParameters[index].Name}'.", location);
+                }
+            }
+        }
+
+        // The struct of a bonded<T> in a type argument, or in its containers: Equals() compares a type argument's values
+        // as objects, and a bonded C# struct, which isn't an IBonded<object>, can't be deserialized as one.
+        private BondType.TypeReference? BondedStruct(BondType type, SourceLocation location)
+        {
+            if (MappedWireType(type, location) != null)
+            {
+                return null;
+            }
+
+            return UnwrapAlias(type, location) switch
+            {
+                BondType.Bonded bonded => UnwrapAlias(bonded.StructType, location) as BondType.TypeReference,
+                BondType.TypeReference => null,
+                var other => Children(other).Select(child => BondedStruct(child, location)).FirstOrDefault(found => found != null)
+            };
+        }
+
+        // Whether a generic struct needs values of a type parameter to be null, in nullable<T> or as nothing: a C# struct
+        // can't be, and Nullable<T> can't stand for an unconstrained T. A value-constrained T is a Nullable<T> there, but
+        // may be passed on to an unconstrained one.
+        private bool TakesNullable(StructDeclaration generic, TypeParam parameter, HashSet<(string, string)> visited)
+        {
+            var unconstrained = parameter.Constraint != TypeConstraint.Value;
+            return visited.Add((generic.QualifiedName, parameter.Name)) && generic.Fields.Any(field => Uses(field.Type, field.Location));
+
+            bool Uses(BondType type, SourceLocation location) => UnwrapAlias(type, location) switch
+            {
+                BondType.Nullable nullable => unconstrained && IsParameter(nullable.ElementType, location) || Uses(nullable.ElementType, location),
+                BondType.Maybe maybe => unconstrained && IsParameter(maybe.ElementType, location) || Uses(maybe.ElementType, location),
+                BondType.TypeReference { Declaration: var target } reference => reference.TypeArguments.Where((argument, index) =>
+                    IsParameter(argument, location) && Canonical(target) is StructDeclaration nested
+                        ? TakesNullable(nested, nested.TypeParameters[index], visited)
+                        : Uses(argument, location)).Any(),
+                var other => Children(other).Any(child => Uses(child, location))
+            };
+
+            bool IsParameter(BondType type, SourceLocation location) =>
+                UnwrapAlias(type, location) is BondType.TypeParameter { Param.Name: var name } && name == parameter.Name;
+        }
+
+        // Whether constructing a struct can construct another of it, through the structs its fields hold and its
+        // bonded<T> fields' defaults, which are then Bonded<T>.Empty.
+        private bool ConstructsItself(Declaration declaration)
+        {
+            var start = Canonical(declaration).QualifiedName;
+            if (_constructsItself.TryGetValue(start, out var known))
+            {
+                return known;
+            }
+
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            var pending = new Stack<string>(Constructs(start));
+            var result = false;
+            while (!result && pending.TryPop(out var next))
+            {
+                result = next == start;
+                if (seen.Add(next))
+                {
+                    foreach (var target in Constructs(next))
+                    {
+                        pending.Push(target);
+                    }
+                }
+            }
+
+            _constructsItself[start] = result;
+            return result;
+        }
+
+        private IEnumerable<string> Constructs(string name)
+        {
+            if (_declarations.GetValueOrDefault(name) is not StructDeclaration structure)
+            {
+                yield break;
+            }
+
+            foreach (var field in structure.Fields)
+            {
+                var type = UnwrapAlias(field.Type, field.Location);
+                if (type is BondType.Bonded bonded)
+                {
+                    type = UnwrapAlias(bonded.StructType, field.Location);
+                }
+
+                if (type is BondType.TypeReference { Declaration: StructDeclaration or ForwardDeclaration } reference)
+                {
+                    yield return reference.Declaration.QualifiedName;
                 }
             }
         }

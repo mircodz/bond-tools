@@ -16,6 +16,17 @@ order.Clear();
 Order.Deserialize(bytes, into: order);
 ```
 
+## Structs
+
+`--structs` generates C# structs instead of classes, so nested structs and the elements of containers are stored inline rather than allocated one by one: reading `vector<Point>` into a cleared instance allocates nothing. Their members are public fields, so nested structs are assigned in place, as in `order.customer.name = "Ada"`, and written without copies. C# structs can't inherit, so schemas with bases fail to generate, nor contain themselves other than in a container, as in `nullable<Node> next`, which the compiler rejects. Structs are values, so `Deserialize(bytes, into)` returns the instance it read into:
+
+```csharp
+order.Clear();
+order = Order.Deserialize(bytes, into: order);
+```
+
+A field of a type parameter holds `default(T)` until it is assigned or read, as with upstream, so it lacks the constructor's defaults: assign it before writing a value of a generic struct with a struct type argument. So does a `bonded<T>` whose struct can contain it again, as in `struct Node { 0: bonded<Node> next; }`, as with classes. A struct can't be the type argument of a generic struct that takes it as nullable, as in `nullable<T>`, since a struct can't be null, unless its parameter is a `T : value`. With `--equality`, nor can a `bonded<T>` of a struct, which `Equals()` can't deserialize without its type: one passed from C# is compared by reference.
+
 ## Generic structs
 
 A generic struct takes a codec for each type parameter:
@@ -44,6 +55,7 @@ Where upstream Bond breaks the schema, BondTools.Runtime follows it:
 - `new Bond.Bonded<T>(value)` is written as the schema says. Upstream writes it as the CLR type, with the same loss in T's type arguments.
 - A `bonded<T>` field must have the struct wire type. Upstream reads whatever follows as a struct.
 - A missing required field is always rejected. Upstream misses it when the field just before the gap is one it skipped, such as an unknown one.
+- A `nullable<T>` of a struct generated with `--structs` is written and read. Upstream throws on a nullable C# struct.
 
 And it reads deeper payloads. Both reject a payload nested more than 64 levels deep, but upstream counts each container, nullable and bonded value as a level too, so it rejects valid payloads with as few as 33 structs nested in containers.
 

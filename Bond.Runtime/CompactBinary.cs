@@ -1,6 +1,7 @@
 using System;
 using System.Buffers;
 using System.IO;
+using System.Runtime.CompilerServices;
 
 namespace BondTools.Runtime;
 
@@ -28,7 +29,7 @@ public static class CompactBinary
 
     public static void Serialize<T>(T value, IBufferWriter<byte> output, BondCodec<T> codec)
     {
-        ArgumentNullException.ThrowIfNull(value);
+        ThrowIfNull(value);
         ArgumentNullException.ThrowIfNull(output);
         ArgumentNullException.ThrowIfNull(codec);
         var writer = new CompactBinaryWriter(output);
@@ -83,7 +84,7 @@ public static class CompactBinary
     /// <summary>Deserializes into an existing instance, as <see cref="IBondStruct{TSelf}"/> explains.</summary>
     public static T Deserialize<T>(ReadOnlySpan<byte> data, T into, BondCodec<T> codec)
     {
-        ArgumentNullException.ThrowIfNull(into);
+        ThrowIfNull(into);
         ArgumentNullException.ThrowIfNull(codec);
         var reader = new CompactBinaryReader(data);
         return codec.Read(ref reader, codec.WireType, into);
@@ -91,7 +92,7 @@ public static class CompactBinary
 
     public static T Deserialize<T>(ReadOnlySequence<byte> data, T into, BondCodec<T> codec)
     {
-        ArgumentNullException.ThrowIfNull(into);
+        ThrowIfNull(into);
         ArgumentNullException.ThrowIfNull(codec);
         return Deserialize(data.IsSingleSegment ? data.FirstSpan : data.ToArray(), into, codec);
     }
@@ -99,7 +100,7 @@ public static class CompactBinary
     public static T Deserialize<T>(Stream input, T into, BondCodec<T> codec)
     {
         ArgumentNullException.ThrowIfNull(input);
-        ArgumentNullException.ThrowIfNull(into);
+        ThrowIfNull(into);
         ArgumentNullException.ThrowIfNull(codec);
         using var buffer = new MemoryStream();
         input.CopyTo(buffer);
@@ -114,5 +115,14 @@ public static class CompactBinary
         using var buffer = new MemoryStream();
         input.CopyTo(buffer);
         return Deserialize(buffer.GetBuffer().AsSpan(0, (int)buffer.Length), codec);
+    }
+
+    // ArgumentNullException.ThrowIfNull boxes a struct to check it, which only optimized code avoids.
+    private static void ThrowIfNull<T>(T value, [CallerArgumentExpression(nameof(value))] string? name = null)
+    {
+        if (!typeof(T).IsValueType && value is null)
+        {
+            throw new ArgumentNullException(name);
+        }
     }
 }

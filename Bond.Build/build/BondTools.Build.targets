@@ -9,6 +9,7 @@
       <ToString>$(BondToString)</ToString>
       <Clear>$(BondClear)</Clear>
       <Serialization>$(BondSerialization)</Serialization>
+      <Structs>$(BondStructs)</Structs>
     </Bond>
   </ItemDefinitionGroup>
 

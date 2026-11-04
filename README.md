@@ -44,4 +44,21 @@ Mean time per call on an Intel i7-12700KF with .NET 10; upstream is Bond.Runtime
 | `map<int32, double>`, 100 entries | 546 ns | 433 ns | 1.78 µs | -69% | -76% |
 | 4 KB order using most Bond types | 7.72 µs | 7.58 µs | 11.8 µs | -35% | -36% |
 
-`dotnet run -c Release --project benchmarks` runs them. [benchmarks](benchmarks/README.md) has the full results, also for an Apple M4 Pro.
+`--structs` stores nested structs and container elements inline. Against classes, on the same machine and payloads:
+
+| Write | classes | structs | Δ |
+|---|--:|--:|--:|
+| Order with nested structs, strings and maps | 146 ns | 151 ns | +4% |
+| 100 small structs | 787 ns | 788 ns | 0% |
+| 100 points of two `double`s | 301 ns | 286 ns | -5% |
+
+| Read | classes | structs | Δ | allocated |
+|---|--:|--:|--:|--:|
+| Order with nested structs, strings and maps | 530 ns | 517 ns | -2% | 2,432 → 2,032 B |
+| Order, reused | 477 ns | 463 ns | -3% | 1,344 → 944 B |
+| 100 small structs | 1.97 µs | 1.77 µs | -10% | 8,880 → 6,456 B |
+| 100 small structs, reused | 2.11 µs | 1.83 µs | -13% | 8,000 → 4,000 B |
+| 100 points of two `double`s | 877 ns | 649 ns | -26% | 4,080 → 1,656 B |
+| 100 points, reused | 919 ns | 524 ns | -43% | 3,200 → 0 B |
+
+`dotnet run -c Release --project benchmarks -- --filter '*'` runs them. [benchmarks](benchmarks/README.md) has the full results, also for an Apple M4 Pro.

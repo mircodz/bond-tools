@@ -23,6 +23,13 @@ public sealed record CSharpGenerationOptions
     /// <summary>Generates Compact Binary serialization, which requires the BondTools.Runtime package.</summary>
     public bool Serialization { get; init; }
 
+    /// <summary>
+    /// Generates C# structs instead of classes, so nested structs and container elements are stored inline rather than
+    /// allocated one by one. Their members are public fields. C# structs can't inherit, so schemas with bases fail to
+    /// generate.
+    /// </summary>
+    public bool Structs { get; init; }
+
     public bool GenerateModelFeatures => ModelFeatures != CSharpModelFeatures.None;
     public bool GenerateEquality => ModelFeatures.HasFlag(CSharpModelFeatures.Equality);
     public bool GenerateToString => ModelFeatures.HasFlag(CSharpModelFeatures.StringRepresentation);

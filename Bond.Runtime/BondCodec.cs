@@ -220,7 +220,9 @@ public static class BondCodec
         public override T Read(ref CompactBinaryReader reader, WireType type, T into)
         {
             CompactBinaryReader.Expect(type, WireType.Struct);
-            return into is null ? T.Read(ref reader) : T.Read(ref reader, into);
+
+            // A struct can't be null, and checking would box it until the method is optimized.
+            return !typeof(T).IsValueType && into is null ? T.Read(ref reader) : T.Read(ref reader, into);
         }
 
         public override bool IsDefault(T value) => false;
