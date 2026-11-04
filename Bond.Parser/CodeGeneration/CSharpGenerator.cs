@@ -698,19 +698,44 @@ public static partial class CSharpGenerator
                     Fail($"'{generic.Name}' takes '{generic.TypeParameters[index].Name}' as nullable, which a C# struct such as " +
                         $"'{argument.Declaration.Name}' can't be.", location);
                 }
+
+                if (options.GenerateEquality && BondedStruct(arguments[index], location) is { } bonded)
+                {
+                    Fail($"Equals() can't compare a bonded C# struct as a type argument, as 'bonded<{bonded.Declaration.Name}>' " +
+                        $"for '{generic.Name}'s '{generic.TypeParameters[index].Name}'.", location);
+                }
             }
         }
 
+        // The struct of a bonded<T> in a type argument, or in its containers: Equals() compares a type argument's values
+        // as objects, and a bonded C# struct, which isn't an IBonded<object>, can't be deserialized as one.
+        private BondType.TypeReference? BondedStruct(BondType type, SourceLocation location)
+        {
+            if (MappedWireType(type, location) != null)
+            {
+                return null;
+            }
+
+            return UnwrapAlias(type, location) switch
+            {
+                BondType.Bonded bonded => UnwrapAlias(bonded.StructType, location) as BondType.TypeReference,
+                BondType.TypeReference => null,
+                var other => Children(other).Select(child => BondedStruct(child, location)).FirstOrDefault(found => found != null)
+            };
+        }
+
         // Whether a generic struct needs values of a type parameter to be null, in nullable<T> or as nothing: a C# struct
-        // can't be, and Nullable<T> can't stand for an unconstrained T.
+        // can't be, and Nullable<T> can't stand for an unconstrained T. A value-constrained T is a Nullable<T> there, but
+        // may be passed on to an unconstrained one.
         private bool TakesNullable(StructDeclaration generic, TypeParam parameter, HashSet<(string, string)> visited)
         {
+            var unconstrained = parameter.Constraint != TypeConstraint.Value;
             return visited.Add((generic.QualifiedName, parameter.Name)) && generic.Fields.Any(field => Uses(field.Type, field.Location));
 
             bool Uses(BondType type, SourceLocation location) => UnwrapAlias(type, location) switch
             {
-                BondType.Nullable nullable => IsParameter(nullable.ElementType, location) || Uses(nullable.ElementType, location),
-                BondType.Maybe maybe => IsParameter(maybe.ElementType, location) || Uses(maybe.ElementType, location),
+                BondType.Nullable nullable => unconstrained && IsParameter(nullable.ElementType, location) || Uses(nullable.ElementType, location),
+                BondType.Maybe maybe => unconstrained && IsParameter(maybe.ElementType, location) || Uses(maybe.ElementType, location),
                 BondType.TypeReference { Declaration: var target } reference => reference.TypeArguments.Where((argument, index) =>
                     IsParameter(argument, location) && Canonical(target) is StructDeclaration nested
                         ? TakesNullable(nested, nested.TypeParameters[index], visited)

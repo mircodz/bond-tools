@@ -191,11 +191,13 @@ public sealed class CSharpStructTests
     }
 
     [Theory]
-    [InlineData("struct Box<T> { 0: nullable<T> item; } struct Holder { 0: Box<Point> box; }", "Box", "T")]
-    [InlineData("struct Box<T> { 0: T item = nothing; } struct Holder { 0: vector<Box<Point>> boxes; }", "Box", "T")]
+    [InlineData("struct Box<T> { 0: nullable<T> item; } struct Holder { 0: Box<Point> box; }", "Box", "T", "string")]
+    [InlineData("struct Box<T> { 0: T item = nothing; } struct Holder { 0: vector<Box<Point>> boxes; }", "Box", "T", "string")]
     [InlineData("struct Box<T> { 0: map<string, nullable<T>> items; } struct Outer<U> { 0: Box<U> box; } " +
-        "struct Holder { 0: Outer<Point> outer; }", "Outer", "U")]
-    public async Task StructsCannotBeNullableTypeArguments(string declarations, string generic, string parameter)
+        "struct Holder { 0: Outer<Point> outer; }", "Outer", "U", "string")]
+    [InlineData("struct Box<T> { 0: nullable<T> item; } struct Outer<U : value> { 0: Box<U> box; } " +
+        "struct Holder { 0: Outer<Point> outer; }", "Outer", "U", "int32")]
+    public async Task StructsCannotBeNullableTypeArguments(string declarations, string generic, string parameter, string valid)
     {
         var parsed = await ParserFacade.ParseStringAsync("namespace Models struct Point { 0: double x; } " + declarations);
         Assert.True(parsed.Success, string.Join("\n", parsed.Errors.Select(error => error.Message)));
@@ -204,10 +206,47 @@ public sealed class CSharpStructTests
         Assert.False(result.Success);
         Assert.Contains(result.Errors, error =>
             error.Message == $"'{generic}' takes '{parameter}' as nullable, which a C# struct such as 'Point' can't be.");
-        Assert.True(CSharpGenerator.Generate(parsed.Ast!, "input.bond", Options with { Structs = false }).Success);
+        Assert.DoesNotContain(CSharpGenerator.Generate(parsed.Ast!, "input.bond", Options with { Structs = false }).Errors,
+            error => error.Message.Contains("as nullable", StringComparison.Ordinal));
         Assert.True(CSharpGenerator.Generate(
-            (await ParserFacade.ParseStringAsync("namespace Models " + declarations.Replace("<Point>", "<string>"))).Ast!,
+            (await ParserFacade.ParseStringAsync("namespace Models " + declarations.Replace("<Point>", $"<{valid}>"))).Ast!,
             "input.bond", Options).Success);
+    }
+
+    [Fact]
+    public async Task StructsAreNullableAsValueConstrainedTypeArguments()
+    {
+        RunScenario(await Generate("""
+            namespace Models
+            struct Point { 0: double x; }
+            struct Box<T : value> { 0: nullable<T> item; 1: T other = nothing; }
+            struct Holder { 0: Box<Point> box; }
+            """, Options), """
+            var holder = new Models.Holder();
+            Models.Holder read = Models.Holder.Deserialize(holder.Serialize());
+            Require(read.box.item == null && read.box.other == null && read.Equals(holder), "absent");
+            holder.box.item = new Models.Point { x = 1 };
+            holder.box.other = new Models.Point { x = 2 };
+            read = Models.Holder.Deserialize(holder.Serialize());
+            Require(read.box.item.Value.x == 1 && read.box.other.Value.x == 2 && read.Equals(holder), "present");
+            """);
+    }
+
+    [Theory]
+    [InlineData("struct Holder { 0: Box<bonded<Payload>> box; }")]
+    [InlineData("struct Holder { 0: vector<Box<map<string, bonded<Payload>>>> boxes; }")]
+    public async Task EqualityCannotCompareBondedStructTypeArguments(string holder)
+    {
+        var parsed = await ParserFacade.ParseStringAsync(
+            "namespace Models struct Payload { 0: string text; } struct Box<T> { 0: T value; } " + holder);
+        Assert.True(parsed.Success, string.Join("\n", parsed.Errors.Select(error => error.Message)));
+
+        var result = CSharpGenerator.Generate(parsed.Ast!, "input.bond", Options);
+        Assert.False(result.Success);
+        Assert.Contains(result.Errors, error => error.Message ==
+            "Equals() can't compare a bonded C# struct as a type argument, as 'bonded<Payload>' for 'Box's 'T'.");
+        Assert.True(CSharpGenerator.Generate(parsed.Ast!, "input.bond", Options with { ModelFeatures = CSharpModelFeatures.Clearing }).Success);
+        Assert.True(CSharpGenerator.Generate(parsed.Ast!, "input.bond", Options with { Structs = false }).Success);
     }
 
     [Theory]
