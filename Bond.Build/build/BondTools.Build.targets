@@ -17,7 +17,15 @@
     <UpToDateCheckInput Include="@(Bond)" />
   </ItemGroup>
 
-  <UsingTask TaskName="BondTools.Build.GenerateBond" AssemblyFile="$(MSBuildThisFileDirectory)../tasks/net8.0/Bond.Build.dll" />
+  <PropertyGroup>
+    <!-- .NET Framework MSBuild (Visual Studio) can only load the .NET task out of process, from MSBuild 18.0 onwards. -->
+    <_BondUseNetTaskHost Condition="'$(MSBuildRuntimeType)' != 'Core' and $([MSBuild]::VersionGreaterThanOrEquals('$(MSBuildVersion)', '18.0'))">true</_BondUseNetTaskHost>
+  </PropertyGroup>
+
+  <UsingTask TaskName="BondTools.Build.GenerateBond" AssemblyFile="$(MSBuildThisFileDirectory)../tasks/net8.0/Bond.Build.dll"
+             Condition="'$(_BondUseNetTaskHost)' != 'true'" />
+  <UsingTask TaskName="BondTools.Build.GenerateBond" AssemblyFile="$(MSBuildThisFileDirectory)../tasks/net8.0/Bond.Build.dll"
+             Runtime="NET" Condition="'$(_BondUseNetTaskHost)' == 'true'" />
 
   <!-- Runs before the compiler's input cache is computed, so removed schemas also trigger recompilation. -->
   <Target Name="BondGenerateCSharp" BeforeTargets="BeforeCompile;CoreCompile;CompileDesignTime"
@@ -26,8 +34,8 @@
       <_BondOutputDirectory>$([MSBuild]::NormalizeDirectory('$(MSBuildProjectDirectory)', '$(IntermediateOutputPath)', 'bond'))</_BondOutputDirectory>
     </PropertyGroup>
 
-    <Error Condition="'@(Bond)' != '' and '$(MSBuildRuntimeType)' != 'Core'" Code="BOND1000"
-           Text="BondTools.Build requires .NET SDK MSBuild (dotnet build)." />
+    <Error Condition="'@(Bond)' != '' and '$(MSBuildRuntimeType)' != 'Core' and '$(_BondUseNetTaskHost)' != 'true'" Code="BOND1000"
+           Text="BondTools.Build requires .NET SDK MSBuild (dotnet build) or MSBuild 18.0+ (Visual Studio 2026)." />
 
     <GenerateBond Condition="'@(Bond)' != '' or Exists('$(_BondOutputDirectory)')"
                   Sources="@(Bond)" ProjectDirectory="$(MSBuildProjectDirectory)" OutputDirectory="$(_BondOutputDirectory)">
