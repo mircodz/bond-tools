@@ -1,6 +1,6 @@
 # BondTools.Build
 
-Generates C# for `Bond` items during `dotnet build` (.NET 8+ SDK) and in Visual Studio 2026 (MSBuild 18.0+, which runs the task in its .NET task host).
+Generates C# for `Bond` items during `dotnet build` (.NET 8+ SDK).
 
 ```xml
 <PropertyGroup>
