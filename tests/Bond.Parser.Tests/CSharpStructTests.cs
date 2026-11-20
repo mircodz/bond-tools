@@ -125,15 +125,22 @@ public sealed class CSharpStructTests
             Require(ReferenceEquals(target.points, points) && ReferenceEquals(target.home.lines, lines) && lines.Count == 0,
                 "storage was replaced");
 
-            // Nothing is boxed, so this holds whether or not the JIT has optimized the code yet.
-            long before = GC.GetAllocatedBytesForCurrentThread();
-            for (int i = 0; i < 1000; i++)
+            // Nothing is boxed, so this holds whether or not the JIT has optimized the code yet. The runtime can still
+            // allocate once on this thread (e.g. while tiering up under load), so a read that allocates fails every
+            // round, while a one-off allocation only fails one.
+            long allocated = long.MaxValue;
+            for (int round = 0; round < 5 && allocated != 0; round++)
             {
-                target.Clear();
-                target = Models.Shape.Deserialize(bytes, target);
+                long before = GC.GetAllocatedBytesForCurrentThread();
+                for (int i = 0; i < 1000; i++)
+                {
+                    target.Clear();
+                    target = Models.Shape.Deserialize(bytes, target);
+                }
+
+                allocated = GC.GetAllocatedBytesForCurrentThread() - before;
             }
 
-            long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
             Require(allocated == 0, "reading into a cleared struct allocated " + allocated + " bytes");
             Require(target.Equals(polygon) && ReferenceEquals(target.points, points), "reused read differs");
             """);
